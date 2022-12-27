@@ -1,48 +1,60 @@
-
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::io::{self, Error as IOError, ErrorKind};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::TcpStream;
 
 #[derive(Debug)]
-struct StatKV<T> {
+struct RawStat {
     pub key: String,
-    pub val: T,
+    pub val: String,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("connecting...");
     let c = TcpStream::connect(("localhost", 11211)).await.unwrap();
     let (r, mut w) = c.into_split();
     let b = BufReader::new(r);
     let mut lines = b.lines();
 
-
     for i in 0..2 {
         println!("writing...");
         w.write_all("stats\r\n".as_bytes()).await.unwrap();
-        let mut out = Vec::new();
 
         println!("reading {}...", i);
-        loop {
-            let l = lines.next_line().await.unwrap();
-            if let Some(v) = l {
-                if "END" == v {
-                    for i in out.iter() {
-                        println!("{:?}", i)
-                    }
-                    out.clear();
-                    break;
-                } else if v.starts_with("STAT ")  {
-                    let parts: Vec<String> = v.split(' ').map(|v| v.to_string()).collect();
-                    if parts.len() != 3 {
-                        panic!("bad split: {}", v);
-                    }
+        let stats = read_stats(&mut lines).await?;
+        for kv in stats {
+            println!("{:?}", kv);
+        }
+    }
 
-                    out.push(StatKV { key: parts[1].clone(), val: parts[2].clone()})
-                } else {
-                    panic!("bad line: {}", v);
+    Ok(())
+}
+
+async fn read_stats<T>(lines: &mut Lines<T>) -> io::Result<Vec<RawStat>>
+where
+    T: AsyncBufRead + Unpin,
+{
+    let mut out = Vec::new();
+
+    loop {
+        let line = lines.next_line().await?;
+        match line.as_deref() {
+            Some("END") | None => break,
+            Some(v) => {
+                let mut parts = v.split(' ');
+                match (parts.next(), parts.next(), parts.next()) {
+                    (Some("STAT"), Some(key), Some(val)) => out.push(RawStat {
+                        key: key.to_string(),
+                        val: val.to_string(),
+                    }),
+                    _ => {
+                        // TODO: Create our own error type with useful context
+                        return Err(IOError::from(ErrorKind::InvalidData));
+                    }
                 }
             }
         }
     }
+
+    Ok(out)
 }
