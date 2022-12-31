@@ -1,28 +1,46 @@
+use clap::Parser;
 use std::fmt;
 use std::fmt::Formatter;
 use std::io::{self, Error as IOError, ErrorKind};
-use tokio::io::{
-    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
-    Lines,
-};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
 use tokio::net::TcpStream;
+use tracing::{Instrument, Level};
 
-#[derive(Debug)]
-struct RawStat {
-    pub key: String,
-    pub val: String,
+const DEFAULT_LOG_LEVEL: Level = Level::INFO;
+
+/// mtop: top for memcached
+#[derive(Debug, Parser)]
+#[clap(name = "mtop", version = clap::crate_version!())]
+struct MtopApplication {
+    /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
+    /// (case insensitive)
+    #[clap(long, default_value_t = DEFAULT_LOG_LEVEL)]
+    log_level: Level,
+
+    /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least
+    /// once and may be used multiple times (separated by spaces).
+    #[clap(required = true)]
+    hosts: Vec<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("connecting...");
-    let c = TcpStream::connect(("localhost", 11211)).await.unwrap();
-    let (r, mut w) = c.into_split();
+    let opts = MtopApplication::parse();
 
-    let mut rw = StatReader::new(r, w);
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::FmtSubscriber::builder()
+            .with_max_level(opts.log_level)
+            .finish(),
+    )
+    .expect("failed to set tracing subscriber");
 
-    for i in 0..4 {
-        let stats = rw.read_stats(StatsCommand::Items).await?;
+    for addr in opts.hosts.iter() {
+        tracing::info!(message = "connecting", address = ?addr);
+        let c = TcpStream::connect(addr).await?;
+        let (r, w) = c.into_split();
+        let mut rw = StatReader::new(r, w);
+
+        let stats = rw.read_stats(StatsCommand::Default).await?;
         for kv in stats {
             println!("{:?}", kv);
         }
@@ -31,6 +49,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+#[derive(Debug)]
+#[allow(dead_code)]
+struct RawStat {
+    pub key: String,
+    pub val: String,
+}
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+#[allow(dead_code)]
 enum StatsCommand {
     Default,
     Items,
@@ -71,13 +98,14 @@ where
     }
 
     async fn read_stats(&mut self, cmd: StatsCommand) -> io::Result<Vec<RawStat>> {
-        println!("writing...");
         self.write
             .write_all(format!("{}\r\n", cmd).as_bytes())
+            .instrument(tracing::span!(Level::DEBUG, "send_command"))
             .await?;
 
-        println!("reading...");
-        self.parse_stats().await
+        self.parse_stats()
+            .instrument(tracing::span!(Level::DEBUG, "parse_response"))
+            .await
     }
 
     async fn parse_stats(&mut self) -> io::Result<Vec<RawStat>> {
