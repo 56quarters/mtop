@@ -1,12 +1,19 @@
 use clap::Parser;
+use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::Formatter;
 use std::io::{self, Error as IOError, ErrorKind};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio::task;
 use tracing::{Instrument, Level};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
+const DEFAULT_STATS_INTERVAL_MS: u64 = 1000;
+const NUM_MEASUREMENTS: usize = 10;
 
 /// mtop: top for memcached
 #[derive(Debug, Parser)]
@@ -34,30 +41,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .expect("failed to set tracing subscriber");
 
-    for addr in opts.hosts.iter() {
-        tracing::info!(message = "connecting", address = ?addr);
-        let c = TcpStream::connect(addr).await?;
-        let (r, w) = c.into_split();
-        let mut rw = StatReader::new(r, w);
+    let queue = Arc::new(Mutex::new(VecDeque::with_capacity(NUM_MEASUREMENTS)));
+    let queue_ref = queue.clone();
 
-        let stats = rw.read_stats(StatsCommand::Default).await?;
-        for kv in stats {
-            println!("{:?}", kv);
+    task::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS));
+        loop {
+            let _ = interval.tick().await;
+
+            for addr in opts.hosts.iter() {
+                tracing::info!(message = "connecting", address = ?addr);
+                let c = TcpStream::connect(addr).await.unwrap();
+                let (r, w) = c.into_split();
+                let mut rw = StatReader::new(r, w);
+
+                match rw
+                    .read_stats(StatsCommand::Default)
+                    .instrument(tracing::span!(Level::DEBUG, "read_stats"))
+                    .await
+                {
+                    Ok(v) => {
+                        let mut q = queue_ref.lock().await;
+                        q.push_back(v);
+                        if q.len() > NUM_MEASUREMENTS {
+                            q.pop_front();
+                        }
+                    }
+                    Err(e) => tracing::warn!(message = "failed to fetch stats", "err" = %e),
+                }
+            }
+        }
+    });
+
+    let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS * 3));
+    loop {
+        let _ = interval.tick().await;
+        let queue_ref = queue.clone();
+
+        let mut q = queue_ref.lock().await;
+        tracing::info!(message = "queue entries", entries = q.len());
+        for e in q.iter() {
+            tracing::info!(message = "all stats", stats = ?e);
         }
     }
 
     Ok(())
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
+fn parse_stats(raw: Vec<RawStat>) -> io::Result<Vec<ParsedStat>> {
+    unimplemented!()
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum ParsedStat {
+    String(String, String),
+    Float(String, f64),
+    Int(String, u64),
+}
+
+// read raw stats
+// parse into numbers
+// compute interesting facts: reads/s, writes/s, hit rate, evictions, hostname
+
+// read stats every N ms, push to one end of VecDeque and pop from other
+// update display every N ms, read entire contents of VecDeque
+
+#[derive(Debug, Eq, PartialEq, Clone)]
 struct RawStat {
-    pub key: String,
-    pub val: String,
+    key: String,
+    val: String,
 }
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
-#[allow(dead_code)]
 enum StatsCommand {
     Default,
     Items,
