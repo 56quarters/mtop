@@ -1,8 +1,11 @@
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::error::Error;
 use std::fmt;
 use std::fmt::Formatter;
 use std::io::{self, Error as IOError, ErrorKind};
+use std::num::ParseIntError;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
@@ -13,11 +16,11 @@ use tracing::{Instrument, Level};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_STATS_INTERVAL_MS: u64 = 1000;
-const NUM_MEASUREMENTS: usize = 10;
+const NUM_MEASUREMENTS: usize = 3;
 
 /// mtop: top for memcached
 #[derive(Debug, Parser)]
-#[clap(name = "mtop", version = clap::crate_version!())]
+#[clap(name = "mtop", version = clap::crate_version ! ())]
 struct MtopApplication {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
     /// (case insensitive)
@@ -50,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let _ = interval.tick().await;
 
             for addr in opts.hosts.iter() {
+                // TODO: need to somehow handle this failure in main thread
                 tracing::info!(message = "connecting", address = ?addr);
                 let c = TcpStream::connect(addr).await.unwrap();
                 let (r, w) = c.into_split();
@@ -73,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS * 3));
+    let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS));
     loop {
         let _ = interval.tick().await;
         let queue_ref = queue.clone();
@@ -81,22 +85,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut q = queue_ref.lock().await;
         tracing::info!(message = "queue entries", entries = q.len());
         for e in q.iter() {
-            tracing::info!(message = "all stats", stats = ?e);
+            let json = serde_json::to_string(&e)?;
+            println!("{}", json);
+            tracing::info!(message = "raw stats", stats = ?e);
+            tracing::info!(message = "parsed stats", stats = ?parse_stats(e))
         }
     }
 
     Ok(())
 }
 
-fn parse_stats(raw: Vec<RawStat>) -> io::Result<Vec<ParsedStat>> {
-    unimplemented!()
+fn parse_stats(raw: &[RawStat]) -> io::Result<Vec<ParsedStat>> {
+    let mut out = Vec::new();
+    for e in raw {
+        if e.key == "version" || e.key == "libevent" {
+            out.push(ParsedStat::String(e.key.clone(), e.val.clone()));
+        } else if e.key == "rusage_user" || e.key == "rusage_system" {
+            let v = e.val.parse().unwrap();
+            out.push(ParsedStat::Float(e.key.clone(), v));
+        } else {
+            let v = e.val.parse().unwrap();
+            out.push(ParsedStat::Int(e.key.clone(), v));
+        }
+    }
+
+    Ok(out)
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 enum ParsedStat {
     String(String, String),
     Float(String, f64),
-    Int(String, u64),
+    Int(String, i64),
 }
 
 // read raw stats
@@ -106,7 +126,7 @@ enum ParsedStat {
 // read stats every N ms, push to one end of VecDeque and pop from other
 // update display every N ms, read entire contents of VecDeque
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 struct RawStat {
     key: String,
     val: String,
