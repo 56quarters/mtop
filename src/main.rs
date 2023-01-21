@@ -1,9 +1,9 @@
 use clap::Parser;
-use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::error::Error;
+use std::error;
 use std::fmt;
-use std::io::{self, Error as IOError, ErrorKind};
+use std::fmt::Debug;
+use std::io;
 use std::num::{ParseFloatError, ParseIntError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,7 +33,7 @@ struct MtopApplication {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let opts = MtopApplication::parse();
 
     tracing::subscriber::set_global_default(
@@ -84,10 +84,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut q = queue_ref.lock().await;
         tracing::info!(message = "queue entries", entries = q.len());
 
-        for e in q.iter() {
-            let m = Measurement::try_from(e)?;
-            //let json = serde_json::to_string_pretty(&e)?;
-            //println!("{}", json);
+        if let Some(e) = q.pop_front() {
+            let m = Measurement::try_from(&e)?;
             tracing::info!(message = "raw stats", stats = ?e);
             tracing::info!(message = "parsed stats", stats = ?m)
         }
@@ -96,14 +94,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-struct MeasurementDelta {}
-
 #[derive(Debug, Default, PartialEq, Clone)]
 struct Measurement {
     // Server info
     pid: u64,
     uptime: u64,
-    time: u64,
+    time: i64,
     version: String,
 
     // CPU
@@ -173,7 +169,7 @@ fn parse_stats(raw: &[RawStat]) -> Result<Measurement, MtopError> {
         match e.key.as_ref() {
             "pid" => out.pid = parse_u64(&e.key, &e.val)?,
             "uptime" => out.uptime = parse_u64(&e.key, &e.val)?,
-            "time" => out.time = parse_u64(&e.key, &e.val)?,
+            "time" => out.time = parse_i64(&e.key, &e.val)?,
             "version" => out.version = e.val.clone(),
 
             "rusage_user" => out.rusage_user = parse_f64(&e.key, &e.val)?,
@@ -229,6 +225,12 @@ fn parse_u64(key: &str, val: &str) -> Result<u64, MtopError> {
     })
 }
 
+fn parse_i64(key: &str, val: &str) -> Result<i64, MtopError> {
+    val.parse().map_err(|e: ParseIntError| {
+        MtopError::Internal(format!("field {} value {}, {}", key, val, e))
+    })
+}
+
 fn parse_f64(key: &str, val: &str) -> Result<f64, MtopError> {
     val.parse().map_err(|e: ParseFloatError| {
         MtopError::Internal(format!("field {} value {}, {}", key, val, e))
@@ -238,21 +240,32 @@ fn parse_f64(key: &str, val: &str) -> Result<f64, MtopError> {
 #[derive(Debug)]
 enum MtopError {
     Internal(String),
+    Protocol(ProtocolError),
+    IO(io::Error),
 }
 
 impl fmt::Display for MtopError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Internal(msg) => write!(f, "internal error: {}", msg),
+            Self::Protocol(e) => write!(f, "protocol error: {:?}", e),
+            Self::IO(e) => fmt::Display::fmt(e, f),
         }
     }
 }
 
-impl Error for MtopError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl error::Error for MtopError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
+            Self::IO(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+impl From<io::Error> for MtopError {
+    fn from(e: io::Error) -> Self {
+        Self::IO(e)
     }
 }
 
@@ -263,7 +276,7 @@ impl Error for MtopError {
 // read stats every N ms, push to one end of VecDeque and pop from other
 // update display every N ms, read entire contents of VecDeque
 
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 struct RawStat {
     key: String,
     val: String,
@@ -288,6 +301,42 @@ impl fmt::Display for StatsCommand {
     }
 }
 
+#[derive(Debug)]
+struct ProtocolError {
+    kind: ProtocolErrorKind,
+    message: Option<String>,
+}
+
+impl TryFrom<&str> for ProtocolError {
+    type Error = MtopError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let mut values = value.splitn(2, ' ');
+        let (kind, message) = match (values.next(), values.next()) {
+            (Some("ERROR"), None) => (ProtocolErrorKind::Syntax, None),
+            (Some("ERROR"), Some(msg)) => (ProtocolErrorKind::Syntax, Some(msg.to_owned())),
+            (Some("CLIENT_ERROR"), Some(msg)) => (ProtocolErrorKind::Client, Some(msg.to_owned())),
+            (Some("SERVER_ERROR"), Some(msg)) => (ProtocolErrorKind::Server, Some(msg.to_owned())),
+
+            _ => {
+                return Err(MtopError::Internal(format!(
+                    "unable to parse line '{}'",
+                    value
+                )));
+            }
+        };
+
+        Ok(ProtocolError { kind, message })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
+enum ProtocolErrorKind {
+    Syntax,
+    Client,
+    Server,
+}
+
 struct StatReader<R, W>
 where
     R: AsyncRead + Unpin,
@@ -309,18 +358,18 @@ where
         }
     }
 
-    async fn read_stats(&mut self, cmd: StatsCommand) -> io::Result<Vec<RawStat>> {
+    async fn read_stats(&mut self, cmd: StatsCommand) -> Result<Vec<RawStat>, MtopError> {
         self.write
             .write_all(format!("{}\r\n", cmd).as_bytes())
             .instrument(tracing::span!(Level::DEBUG, "send_command"))
             .await?;
 
-        self.parse_stats()
+        self.parse_lines()
             .instrument(tracing::span!(Level::DEBUG, "parse_response"))
             .await
     }
 
-    async fn parse_stats(&mut self) -> io::Result<Vec<RawStat>> {
+    async fn parse_lines(&mut self) -> Result<Vec<RawStat>, MtopError> {
         let mut out = Vec::new();
 
         loop {
@@ -328,15 +377,17 @@ where
             match line.as_deref() {
                 Some("END") | None => break,
                 Some(v) => {
-                    let mut parts = v.split(' ');
+                    let mut parts = v.splitn(3, ' ');
                     match (parts.next(), parts.next(), parts.next()) {
                         (Some("STAT"), Some(key), Some(val)) => out.push(RawStat {
                             key: key.to_string(),
                             val: val.to_string(),
                         }),
                         _ => {
-                            // TODO: Create our own error type with useful context
-                            return Err(IOError::from(ErrorKind::InvalidData));
+                            // If this line doesn't look like a stat, try to parse it as a memcached
+                            // protocol error which will fall back to "internal error" if it can't
+                            // actually be parsed as a protocol error.
+                            return Err(MtopError::Protocol(ProtocolError::try_from(v)?));
                         }
                     }
                 }
