@@ -3,9 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
-use std::fmt::Formatter;
 use std::io::{self, Error as IOError, ErrorKind};
-use std::num::ParseIntError;
+use std::num::{ParseFloatError, ParseIntError};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
@@ -34,7 +33,7 @@ struct MtopApplication {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let opts = MtopApplication::parse();
 
     tracing::subscriber::set_global_default(
@@ -84,39 +83,175 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let mut q = queue_ref.lock().await;
         tracing::info!(message = "queue entries", entries = q.len());
+
         for e in q.iter() {
-            let json = serde_json::to_string(&e)?;
-            println!("{}", json);
+            let m = Measurement::try_from(e)?;
+            //let json = serde_json::to_string_pretty(&e)?;
+            //println!("{}", json);
             tracing::info!(message = "raw stats", stats = ?e);
-            tracing::info!(message = "parsed stats", stats = ?parse_stats(e))
+            tracing::info!(message = "parsed stats", stats = ?m)
         }
     }
 
     Ok(())
 }
 
-fn parse_stats(raw: &[RawStat]) -> io::Result<Vec<ParsedStat>> {
-    let mut out = Vec::new();
+struct MeasurementDelta {}
+
+#[derive(Debug, Default, PartialEq, Clone)]
+struct Measurement {
+    // Server info
+    pid: u64,
+    uptime: u64,
+    time: u64,
+    version: String,
+
+    // CPU
+    rusage_user: f64,
+    rusage_system: f64,
+
+    // Connections
+    max_connections: u64,
+    curr_connections: u64,
+    total_connections: u64,
+    rejected_connections: u64,
+
+    // Commands
+    cmd_get: u64,
+    cmd_set: u64,
+    cmd_flush: u64,
+    cmd_touch: u64,
+    cmd_meta: u64,
+
+    // Gets
+    get_hits: u64,
+    get_misses: u64,
+    get_expired: u64,
+    get_flushed: u64,
+
+    // Sets
+    store_too_large: u64,
+    store_no_memory: u64,
+
+    // Deletes
+    delete_hits: u64,
+    delete_misses: u64,
+
+    // Incr/Decr
+    incr_hits: u64,
+    incr_misses: u64,
+    decr_hits: u64,
+    decr_misses: u64,
+
+    // Touches
+    touch_hits: u64,
+    touch_misses: u64,
+
+    // Bytes
+    bytes_read: u64,
+    bytes_written: u64,
+    bytes: u64,
+
+    // Items
+    curr_items: u64,
+    total_items: u64,
+    evictions: u64,
+}
+
+impl TryFrom<&Vec<RawStat>> for Measurement {
+    type Error = MtopError;
+
+    fn try_from(value: &Vec<RawStat>) -> Result<Self, Self::Error> {
+        parse_stats(value)
+    }
+}
+
+fn parse_stats(raw: &[RawStat]) -> Result<Measurement, MtopError> {
+    let mut out = Measurement::default();
+
     for e in raw {
-        if e.key == "version" || e.key == "libevent" {
-            out.push(ParsedStat::String(e.key.clone(), e.val.clone()));
-        } else if e.key == "rusage_user" || e.key == "rusage_system" {
-            let v = e.val.parse().unwrap();
-            out.push(ParsedStat::Float(e.key.clone(), v));
-        } else {
-            let v = e.val.parse().unwrap();
-            out.push(ParsedStat::Int(e.key.clone(), v));
+        match e.key.as_ref() {
+            "pid" => out.pid = parse_u64(&e.val)?,
+            "uptime" => out.uptime = parse_u64(&e.val)?,
+            "time" => out.time = parse_u64(&e.val)?,
+            "version" => out.version = e.val.clone(),
+
+            "rusage_user" => out.rusage_user = parse_f64(&e.val)?,
+            "rusage_system" => out.rusage_system = parse_f64(&e.val)?,
+
+            "max_connections" => out.max_connections = parse_u64(&e.val)?,
+            "curr_connections" => out.curr_connections = parse_u64(&e.val)?,
+            "total_connections" => out.total_connections = parse_u64(&e.val)?,
+            "rejected_connections" => out.rejected_connections = parse_u64(&e.val)?,
+
+            "cmd_get" => out.cmd_get = parse_u64(&e.val)?,
+            "cmd_set" => out.cmd_set = parse_u64(&e.val)?,
+            "cmd_flush" => out.cmd_flush = parse_u64(&e.val)?,
+            "cmd_touch" => out.cmd_touch = parse_u64(&e.val)?,
+            "cmd_meta" => out.cmd_meta = parse_u64(&e.val)?,
+
+            "get_hits" => out.get_hits = parse_u64(&e.val)?,
+            "get_misses" => out.get_misses = parse_u64(&e.val)?,
+            "get_expired" => out.get_expired = parse_u64(&e.val)?,
+            "get_flushed" => out.get_flushed = parse_u64(&e.val)?,
+
+            "store_too_large" => out.store_too_large = parse_u64(&e.val)?,
+            "store_no_memory" => out.store_no_memory = parse_u64(&e.val)?,
+
+            "delete_hits" => out.delete_hits = parse_u64(&e.val)?,
+            "delete_misses" => out.decr_misses = parse_u64(&e.val)?,
+
+            "incr_hits" => out.incr_hits = parse_u64(&e.val)?,
+            "incr_misses" => out.incr_misses = parse_u64(&e.val)?,
+            "decr_hits" => out.delete_hits = parse_u64(&e.val)?,
+            "decr_misses" => out.decr_misses = parse_u64(&e.val)?,
+
+            "touch_hits" => out.touch_hits = parse_u64(&e.val)?,
+            "touch_misses" => out.touch_misses = parse_u64(&e.val)?,
+
+            "bytes_read" => out.bytes_read = parse_u64(&e.val)?,
+            "bytes_written" => out.bytes_written = parse_u64(&e.val)?,
+            "bytes" => out.bytes = parse_u64(&e.val)?,
+
+            "curr_items" => out.curr_items = parse_u64(&e.val)?,
+            "total_items" => out.total_items = parse_u64(&e.val)?,
+            "evictions" => out.evictions = parse_u64(&e.val)?,
+            _ => {}
         }
     }
 
     Ok(out)
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-enum ParsedStat {
-    String(String, String),
-    Float(String, f64),
-    Int(String, i64),
+fn parse_u64(val: &str) -> Result<u64, MtopError> {
+    val.parse()
+        .map_err(|e: ParseIntError| MtopError::Internal(e.to_string()))
+}
+
+fn parse_f64(val: &str) -> Result<f64, MtopError> {
+    val.parse()
+        .map_err(|e: ParseFloatError| MtopError::Internal(e.to_string()))
+}
+
+#[derive(Debug)]
+enum MtopError {
+    Internal(String),
+}
+
+impl fmt::Display for MtopError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Internal(msg) => write!(f, "internal error: {}", msg),
+        }
+    }
+}
+
+impl Error for MtopError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            _ => None,
+        }
+    }
 }
 
 // read raw stats
@@ -141,7 +276,7 @@ enum StatsCommand {
 }
 
 impl fmt::Display for StatsCommand {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Default => write!(f, "stats"),
             Self::Items => write!(f, "stats items"),
