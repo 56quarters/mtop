@@ -171,51 +171,51 @@ fn parse_stats(raw: &[RawStat]) -> Result<Measurement, MtopError> {
 
     for e in raw {
         match e.key.as_ref() {
-            "pid" => out.pid = parse_u64(&e.val)?,
-            "uptime" => out.uptime = parse_u64(&e.val)?,
-            "time" => out.time = parse_u64(&e.val)?,
+            "pid" => out.pid = parse_u64(&e.key, &e.val)?,
+            "uptime" => out.uptime = parse_u64(&e.key, &e.val)?,
+            "time" => out.time = parse_u64(&e.key, &e.val)?,
             "version" => out.version = e.val.clone(),
 
-            "rusage_user" => out.rusage_user = parse_f64(&e.val)?,
-            "rusage_system" => out.rusage_system = parse_f64(&e.val)?,
+            "rusage_user" => out.rusage_user = parse_f64(&e.key, &e.val)?,
+            "rusage_system" => out.rusage_system = parse_f64(&e.key, &e.val)?,
 
-            "max_connections" => out.max_connections = parse_u64(&e.val)?,
-            "curr_connections" => out.curr_connections = parse_u64(&e.val)?,
-            "total_connections" => out.total_connections = parse_u64(&e.val)?,
-            "rejected_connections" => out.rejected_connections = parse_u64(&e.val)?,
+            "max_connections" => out.max_connections = parse_u64(&e.key, &e.val)?,
+            "curr_connections" => out.curr_connections = parse_u64(&e.key, &e.val)?,
+            "total_connections" => out.total_connections = parse_u64(&e.key, &e.val)?,
+            "rejected_connections" => out.rejected_connections = parse_u64(&e.key, &e.val)?,
 
-            "cmd_get" => out.cmd_get = parse_u64(&e.val)?,
-            "cmd_set" => out.cmd_set = parse_u64(&e.val)?,
-            "cmd_flush" => out.cmd_flush = parse_u64(&e.val)?,
-            "cmd_touch" => out.cmd_touch = parse_u64(&e.val)?,
-            "cmd_meta" => out.cmd_meta = parse_u64(&e.val)?,
+            "cmd_get" => out.cmd_get = parse_u64(&e.key, &e.val)?,
+            "cmd_set" => out.cmd_set = parse_u64(&e.key, &e.val)?,
+            "cmd_flush" => out.cmd_flush = parse_u64(&e.key, &e.val)?,
+            "cmd_touch" => out.cmd_touch = parse_u64(&e.key, &e.val)?,
+            "cmd_meta" => out.cmd_meta = parse_u64(&e.key, &e.val)?,
 
-            "get_hits" => out.get_hits = parse_u64(&e.val)?,
-            "get_misses" => out.get_misses = parse_u64(&e.val)?,
-            "get_expired" => out.get_expired = parse_u64(&e.val)?,
-            "get_flushed" => out.get_flushed = parse_u64(&e.val)?,
+            "get_hits" => out.get_hits = parse_u64(&e.key, &e.val)?,
+            "get_misses" => out.get_misses = parse_u64(&e.key, &e.val)?,
+            "get_expired" => out.get_expired = parse_u64(&e.key, &e.val)?,
+            "get_flushed" => out.get_flushed = parse_u64(&e.key, &e.val)?,
 
-            "store_too_large" => out.store_too_large = parse_u64(&e.val)?,
-            "store_no_memory" => out.store_no_memory = parse_u64(&e.val)?,
+            "store_too_large" => out.store_too_large = parse_u64(&e.key, &e.val)?,
+            "store_no_memory" => out.store_no_memory = parse_u64(&e.key, &e.val)?,
 
-            "delete_hits" => out.delete_hits = parse_u64(&e.val)?,
-            "delete_misses" => out.decr_misses = parse_u64(&e.val)?,
+            "delete_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
+            "delete_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
 
-            "incr_hits" => out.incr_hits = parse_u64(&e.val)?,
-            "incr_misses" => out.incr_misses = parse_u64(&e.val)?,
-            "decr_hits" => out.delete_hits = parse_u64(&e.val)?,
-            "decr_misses" => out.decr_misses = parse_u64(&e.val)?,
+            "incr_hits" => out.incr_hits = parse_u64(&e.key, &e.val)?,
+            "incr_misses" => out.incr_misses = parse_u64(&e.key, &e.val)?,
+            "decr_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
+            "decr_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
 
-            "touch_hits" => out.touch_hits = parse_u64(&e.val)?,
-            "touch_misses" => out.touch_misses = parse_u64(&e.val)?,
+            "touch_hits" => out.touch_hits = parse_u64(&e.key, &e.val)?,
+            "touch_misses" => out.touch_misses = parse_u64(&e.key, &e.val)?,
 
-            "bytes_read" => out.bytes_read = parse_u64(&e.val)?,
-            "bytes_written" => out.bytes_written = parse_u64(&e.val)?,
-            "bytes" => out.bytes = parse_u64(&e.val)?,
+            "bytes_read" => out.bytes_read = parse_u64(&e.key, &e.val)?,
+            "bytes_written" => out.bytes_written = parse_u64(&e.key, &e.val)?,
+            "bytes" => out.bytes = parse_u64(&e.key, &e.val)?,
 
-            "curr_items" => out.curr_items = parse_u64(&e.val)?,
-            "total_items" => out.total_items = parse_u64(&e.val)?,
-            "evictions" => out.evictions = parse_u64(&e.val)?,
+            "curr_items" => out.curr_items = parse_u64(&e.key, &e.val)?,
+            "total_items" => out.total_items = parse_u64(&e.key, &e.val)?,
+            "evictions" => out.evictions = parse_u64(&e.key, &e.val)?,
             _ => {}
         }
     }
@@ -223,14 +223,16 @@ fn parse_stats(raw: &[RawStat]) -> Result<Measurement, MtopError> {
     Ok(out)
 }
 
-fn parse_u64(val: &str) -> Result<u64, MtopError> {
-    val.parse()
-        .map_err(|e: ParseIntError| MtopError::Internal(e.to_string()))
+fn parse_u64(key: &str, val: &str) -> Result<u64, MtopError> {
+    val.parse().map_err(|e: ParseIntError| {
+        MtopError::Internal(format!("field {} value {}, {}", key, val, e))
+    })
 }
 
-fn parse_f64(val: &str) -> Result<f64, MtopError> {
-    val.parse()
-        .map_err(|e: ParseFloatError| MtopError::Internal(e.to_string()))
+fn parse_f64(key: &str, val: &str) -> Result<f64, MtopError> {
+    val.parse().map_err(|e: ParseFloatError| {
+        MtopError::Internal(format!("field {} value {}, {}", key, val, e))
+    })
 }
 
 #[derive(Debug)]
