@@ -2,7 +2,6 @@ use clap::Parser;
 use std::collections::VecDeque;
 use std::error;
 use std::fmt;
-use std::fmt::Debug;
 use std::io;
 use std::num::{ParseFloatError, ParseIntError};
 use std::sync::Arc;
@@ -248,7 +247,7 @@ impl fmt::Display for MtopError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Internal(msg) => write!(f, "internal error: {}", msg),
-            Self::Protocol(e) => write!(f, "protocol error: {:?}", e),
+            Self::Protocol(e) => write!(f, "protocol error: {}", e),
             Self::IO(e) => fmt::Display::fmt(e, f),
         }
     }
@@ -269,12 +268,62 @@ impl From<io::Error> for MtopError {
     }
 }
 
-// read raw stats
-// parse into numbers
-// compute interesting facts: reads/s, writes/s, hit rate, evictions, hostname
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
+enum ProtocolErrorKind {
+    Syntax,
+    Client,
+    Server,
+}
 
-// read stats every N ms, push to one end of VecDeque and pop from other
-// update display every N ms, read entire contents of VecDeque
+impl fmt::Display for ProtocolErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Syntax => "ERROR".fmt(f),
+            Self::Client => "CLIENT_ERROR".fmt(f),
+            Self::Server => "SERVER_ERROR".fmt(f),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProtocolError {
+    kind: ProtocolErrorKind,
+    message: Option<String>,
+}
+
+impl TryFrom<&str> for ProtocolError {
+    type Error = MtopError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let mut values = value.splitn(2, ' ');
+        let (kind, message) = match (values.next(), values.next()) {
+            (Some("ERROR"), None) => (ProtocolErrorKind::Syntax, None),
+            (Some("ERROR"), Some(msg)) => (ProtocolErrorKind::Syntax, Some(msg.to_owned())),
+            (Some("CLIENT_ERROR"), Some(msg)) => (ProtocolErrorKind::Client, Some(msg.to_owned())),
+            (Some("SERVER_ERROR"), Some(msg)) => (ProtocolErrorKind::Server, Some(msg.to_owned())),
+            _ => {
+                return Err(MtopError::Internal(format!(
+                    "unable to parse line '{}'",
+                    value
+                )));
+            }
+        };
+
+        Ok(ProtocolError { kind, message })
+    }
+}
+
+impl fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(msg) = &self.message {
+            write!(f, "{} {}", self.kind, msg)
+        } else {
+            write!(f, "{}", self.kind)
+        }
+    }
+}
+
+impl error::Error for ProtocolError {}
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 struct RawStat {
@@ -299,42 +348,6 @@ impl fmt::Display for StatsCommand {
             Self::Sizes => write!(f, "stats sizes"),
         }
     }
-}
-
-#[derive(Debug)]
-struct ProtocolError {
-    kind: ProtocolErrorKind,
-    message: Option<String>,
-}
-
-impl TryFrom<&str> for ProtocolError {
-    type Error = MtopError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let mut values = value.splitn(2, ' ');
-        let (kind, message) = match (values.next(), values.next()) {
-            (Some("ERROR"), None) => (ProtocolErrorKind::Syntax, None),
-            (Some("ERROR"), Some(msg)) => (ProtocolErrorKind::Syntax, Some(msg.to_owned())),
-            (Some("CLIENT_ERROR"), Some(msg)) => (ProtocolErrorKind::Client, Some(msg.to_owned())),
-            (Some("SERVER_ERROR"), Some(msg)) => (ProtocolErrorKind::Server, Some(msg.to_owned())),
-
-            _ => {
-                return Err(MtopError::Internal(format!(
-                    "unable to parse line '{}'",
-                    value
-                )));
-            }
-        };
-
-        Ok(ProtocolError { kind, message })
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
-enum ProtocolErrorKind {
-    Syntax,
-    Client,
-    Server,
 }
 
 struct StatReader<R, W>
