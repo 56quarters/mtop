@@ -10,3 +10,7 @@ tokio = { version = "1.14.0", features = ["full"] }
 tracing = "0.1.11"
 tracing-subscriber = "0.3.16"
 tui = "0.19.0"
+
+[lib]
+name = "mtop"
+path = "src/mtop/lib.rs"
