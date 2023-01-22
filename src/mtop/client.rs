@@ -65,69 +65,64 @@ pub struct Measurement {
     pub evictions: u64,
 }
 
-impl TryFrom<&Vec<RawStat>> for Measurement {
+impl TryFrom<Vec<RawStat>> for Measurement {
     type Error = MtopError;
 
-    fn try_from(value: &Vec<RawStat>) -> Result<Self, Self::Error> {
-        parse_stats(value)
-    }
-}
+    fn try_from(value: Vec<RawStat>) -> Result<Self, Self::Error> {
+        let mut out = Measurement::default();
+        for e in value {
+            match e.key.as_ref() {
+                "pid" => out.pid = parse_u64(&e.key, &e.val)?,
+                "uptime" => out.uptime = parse_u64(&e.key, &e.val)?,
+                "time" => out.time = parse_i64(&e.key, &e.val)?,
+                "version" => out.version = e.val.clone(),
 
-fn parse_stats(raw: &[RawStat]) -> Result<Measurement, MtopError> {
-    let mut out = Measurement::default();
+                "rusage_user" => out.rusage_user = parse_f64(&e.key, &e.val)?,
+                "rusage_system" => out.rusage_system = parse_f64(&e.key, &e.val)?,
 
-    for e in raw {
-        match e.key.as_ref() {
-            "pid" => out.pid = parse_u64(&e.key, &e.val)?,
-            "uptime" => out.uptime = parse_u64(&e.key, &e.val)?,
-            "time" => out.time = parse_i64(&e.key, &e.val)?,
-            "version" => out.version = e.val.clone(),
+                "max_connections" => out.max_connections = parse_u64(&e.key, &e.val)?,
+                "curr_connections" => out.curr_connections = parse_u64(&e.key, &e.val)?,
+                "total_connections" => out.total_connections = parse_u64(&e.key, &e.val)?,
+                "rejected_connections" => out.rejected_connections = parse_u64(&e.key, &e.val)?,
 
-            "rusage_user" => out.rusage_user = parse_f64(&e.key, &e.val)?,
-            "rusage_system" => out.rusage_system = parse_f64(&e.key, &e.val)?,
+                "cmd_get" => out.cmd_get = parse_u64(&e.key, &e.val)?,
+                "cmd_set" => out.cmd_set = parse_u64(&e.key, &e.val)?,
+                "cmd_flush" => out.cmd_flush = parse_u64(&e.key, &e.val)?,
+                "cmd_touch" => out.cmd_touch = parse_u64(&e.key, &e.val)?,
+                "cmd_meta" => out.cmd_meta = parse_u64(&e.key, &e.val)?,
 
-            "max_connections" => out.max_connections = parse_u64(&e.key, &e.val)?,
-            "curr_connections" => out.curr_connections = parse_u64(&e.key, &e.val)?,
-            "total_connections" => out.total_connections = parse_u64(&e.key, &e.val)?,
-            "rejected_connections" => out.rejected_connections = parse_u64(&e.key, &e.val)?,
+                "get_hits" => out.get_hits = parse_u64(&e.key, &e.val)?,
+                "get_misses" => out.get_misses = parse_u64(&e.key, &e.val)?,
+                "get_expired" => out.get_expired = parse_u64(&e.key, &e.val)?,
+                "get_flushed" => out.get_flushed = parse_u64(&e.key, &e.val)?,
 
-            "cmd_get" => out.cmd_get = parse_u64(&e.key, &e.val)?,
-            "cmd_set" => out.cmd_set = parse_u64(&e.key, &e.val)?,
-            "cmd_flush" => out.cmd_flush = parse_u64(&e.key, &e.val)?,
-            "cmd_touch" => out.cmd_touch = parse_u64(&e.key, &e.val)?,
-            "cmd_meta" => out.cmd_meta = parse_u64(&e.key, &e.val)?,
+                "store_too_large" => out.store_too_large = parse_u64(&e.key, &e.val)?,
+                "store_no_memory" => out.store_no_memory = parse_u64(&e.key, &e.val)?,
 
-            "get_hits" => out.get_hits = parse_u64(&e.key, &e.val)?,
-            "get_misses" => out.get_misses = parse_u64(&e.key, &e.val)?,
-            "get_expired" => out.get_expired = parse_u64(&e.key, &e.val)?,
-            "get_flushed" => out.get_flushed = parse_u64(&e.key, &e.val)?,
+                "delete_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
+                "delete_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
 
-            "store_too_large" => out.store_too_large = parse_u64(&e.key, &e.val)?,
-            "store_no_memory" => out.store_no_memory = parse_u64(&e.key, &e.val)?,
+                "incr_hits" => out.incr_hits = parse_u64(&e.key, &e.val)?,
+                "incr_misses" => out.incr_misses = parse_u64(&e.key, &e.val)?,
+                "decr_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
+                "decr_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
 
-            "delete_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
-            "delete_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
+                "touch_hits" => out.touch_hits = parse_u64(&e.key, &e.val)?,
+                "touch_misses" => out.touch_misses = parse_u64(&e.key, &e.val)?,
 
-            "incr_hits" => out.incr_hits = parse_u64(&e.key, &e.val)?,
-            "incr_misses" => out.incr_misses = parse_u64(&e.key, &e.val)?,
-            "decr_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
-            "decr_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
+                "bytes_read" => out.bytes_read = parse_u64(&e.key, &e.val)?,
+                "bytes_written" => out.bytes_written = parse_u64(&e.key, &e.val)?,
+                "bytes" => out.bytes = parse_u64(&e.key, &e.val)?,
 
-            "touch_hits" => out.touch_hits = parse_u64(&e.key, &e.val)?,
-            "touch_misses" => out.touch_misses = parse_u64(&e.key, &e.val)?,
-
-            "bytes_read" => out.bytes_read = parse_u64(&e.key, &e.val)?,
-            "bytes_written" => out.bytes_written = parse_u64(&e.key, &e.val)?,
-            "bytes" => out.bytes = parse_u64(&e.key, &e.val)?,
-
-            "curr_items" => out.curr_items = parse_u64(&e.key, &e.val)?,
-            "total_items" => out.total_items = parse_u64(&e.key, &e.val)?,
-            "evictions" => out.evictions = parse_u64(&e.key, &e.val)?,
-            _ => {}
+                "curr_items" => out.curr_items = parse_u64(&e.key, &e.val)?,
+                "total_items" => out.total_items = parse_u64(&e.key, &e.val)?,
+                "evictions" => out.evictions = parse_u64(&e.key, &e.val)?,
+                _ => {}
+            }
         }
-    }
 
-    Ok(out)
+        Ok(out)
+    }
 }
 
 fn parse_u64(key: &str, val: &str) -> Result<u64, MtopError> {
@@ -210,28 +205,6 @@ pub struct ProtocolError {
     message: Option<String>,
 }
 
-impl TryFrom<&str> for ProtocolError {
-    type Error = MtopError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let mut values = value.splitn(2, ' ');
-        let (kind, message) = match (values.next(), values.next()) {
-            (Some("ERROR"), None) => (ProtocolErrorKind::Syntax, None),
-            (Some("ERROR"), Some(msg)) => (ProtocolErrorKind::Syntax, Some(msg.to_owned())),
-            (Some("CLIENT_ERROR"), Some(msg)) => (ProtocolErrorKind::Client, Some(msg.to_owned())),
-            (Some("SERVER_ERROR"), Some(msg)) => (ProtocolErrorKind::Server, Some(msg.to_owned())),
-            _ => {
-                return Err(MtopError::Internal(format!(
-                    "unable to parse line '{}'",
-                    value
-                )));
-            }
-        };
-
-        Ok(ProtocolError { kind, message })
-    }
-}
-
 impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(msg) = &self.message {
@@ -245,32 +218,25 @@ impl fmt::Display for ProtocolError {
 impl error::Error for ProtocolError {}
 
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub struct RawStat {
+struct RawStat {
     key: String,
     val: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum StatsCommand {
     Default,
-    Items,
-    Slabs,
-    Sizes,
 }
 
 impl fmt::Display for StatsCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Default => write!(f, "stats"),
-            Self::Items => write!(f, "stats items"),
-            Self::Slabs => write!(f, "stats slabs"),
-            Self::Sizes => write!(f, "stats sizes"),
         }
     }
 }
 
-pub struct StatReader<R, W>
+pub struct Memcached<R, W>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -279,27 +245,30 @@ where
     write: W,
 }
 
-impl<R, W> StatReader<R, W>
+impl<R, W> Memcached<R, W>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     pub fn new(read: R, write: W) -> Self {
-        StatReader {
+        Memcached {
             lines: BufReader::new(read).lines(),
             write,
         }
     }
 
-    pub async fn read_stats(&mut self, cmd: StatsCommand) -> Result<Vec<RawStat>, MtopError> {
+    pub async fn stats(&mut self, cmd: StatsCommand) -> Result<Measurement, MtopError> {
         self.write
             .write_all(format!("{}\r\n", cmd).as_bytes())
             .instrument(tracing::span!(Level::DEBUG, "send_command"))
             .await?;
 
-        self.parse_lines()
+        let raw = self
+            .parse_lines()
             .instrument(tracing::span!(Level::DEBUG, "parse_response"))
-            .await
+            .await?;
+
+        Measurement::try_from(raw)
     }
 
     async fn parse_lines(&mut self) -> Result<Vec<RawStat>, MtopError> {
@@ -310,23 +279,41 @@ where
             match line.as_deref() {
                 Some("END") | None => break,
                 Some(v) => {
-                    let mut parts = v.splitn(3, ' ');
-                    match (parts.next(), parts.next(), parts.next()) {
-                        (Some("STAT"), Some(key), Some(val)) => out.push(RawStat {
-                            key: key.to_string(),
-                            val: val.to_string(),
-                        }),
-                        _ => {
-                            // If this line doesn't look like a stat, try to parse it as a memcached
-                            // protocol error which will fall back to "internal error" if it can't
-                            // actually be parsed as a protocol error.
-                            return Err(MtopError::Protocol(ProtocolError::try_from(v)?));
-                        }
+                    if let Some(raw) = self.parse_stat(v) {
+                        out.push(raw);
+                    } else if let Some(err) = self.parse_error(v) {
+                        return Err(MtopError::Protocol(err));
+                    } else {
+                        return Err(MtopError::Internal(format!("unable to parse '{}'", v)));
                     }
                 }
             }
         }
 
         Ok(out)
+    }
+
+    fn parse_stat(&self, line: &str) -> Option<RawStat> {
+        let mut parts = line.splitn(3, ' ');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("STAT"), Some(key), Some(val)) => Some(RawStat {
+                key: key.to_string(),
+                val: val.to_string(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn parse_error(&self, line: &str) -> Option<ProtocolError> {
+        let mut values = line.splitn(2, ' ');
+        let (kind, message) = match (values.next(), values.next()) {
+            (Some("ERROR"), None) => (ProtocolErrorKind::Syntax, None),
+            (Some("ERROR"), Some(msg)) => (ProtocolErrorKind::Syntax, Some(msg.to_owned())),
+            (Some("CLIENT_ERROR"), Some(msg)) => (ProtocolErrorKind::Client, Some(msg.to_owned())),
+            (Some("SERVER_ERROR"), Some(msg)) => (ProtocolErrorKind::Server, Some(msg.to_owned())),
+            _ => return None,
+        };
+
+        Some(ProtocolError { kind, message })
     }
 }
