@@ -1,6 +1,6 @@
 use crate::client::Measurement;
+use crate::queue::BlockingMeasurementQueue;
 use crossterm::event::{self, Event, KeyCode};
-use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 use tui::{
@@ -10,6 +10,16 @@ use tui::{
     widgets::{Block, Borders, Cell, Row, Table, TableState},
     Frame, Terminal,
 };
+
+const HEADERS: &[&str] = &[
+    "Connections",
+    "Gets",
+    "Sets",
+    "Read",
+    "Write",
+    "Bytes",
+    "Items",
+];
 
 pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
     loop {
@@ -38,35 +48,35 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
     let normal_style = Style::default().bg(Color::Blue);
-    let header_cells = [
-        "Connections",
-        "Gets",
-        "Sets",
-        "Read",
-        "Write",
-        "Bytes",
-        "Items",
-    ]
-    .iter()
-    .map(|h| Cell::from(*h).style(Style::default().fg(Color::Red)));
+
+    let headers = app.headers();
+    let header_cells = headers
+        .into_iter()
+        .map(|h| Cell::from(h).style(Style::default().fg(Color::Cyan)));
+
     let header = Row::new(header_cells)
         .style(normal_style)
         .height(1)
         .bottom_margin(1);
-    let rows = app.items.iter().map(|item| {
-        let height = item
-            .values
-            .iter()
-            .map(|(_, content)| content.chars().filter(|c| *c == '\n').count())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        let cells = item.values.iter().map(|(_, c)| Cell::from(c.clone()));
-        Row::new(cells).height(height as u16).bottom_margin(1)
+
+    let values = app.values();
+    let rows = values.measurements.iter().map(|m| {
+        let cells = vec![
+            Cell::from(m.connections()),
+            Cell::from(m.gets()),
+            Cell::from(m.sets()),
+            Cell::from(m.read()),
+            Cell::from(m.write()),
+            Cell::from(m.bytes()),
+            Cell::from(m.items()),
+        ];
+
+        Row::new(cells).bottom_margin(1)
     });
+
     let t = Table::new(rows)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title("Table"))
+        .block(Block::default().borders(Borders::ALL).title("Memcached"))
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
         .widths(&[
@@ -83,70 +93,107 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
 pub struct App {
     state: TableState,
-    items: Vec<MeasurementRow>,
+    queue: BlockingMeasurementQueue,
+    hosts: Vec<String>,
 }
 
 impl App {
-    pub fn new(measurements: Vec<Measurement>) -> Self {
+    pub fn new(hosts: Vec<String>, queue: BlockingMeasurementQueue) -> Self {
         App {
             state: TableState::default(),
-            items: measurements
-                .into_iter()
-                .map(|m| MeasurementRow::from(m))
-                .collect(),
+            hosts,
+            queue,
         }
     }
 
     fn next(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i >= self.items.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        self.state.select(Some(i));
+        // let i = match self.state.selected() {
+        //     Some(i) => {
+        //         if i >= self.items.len() - 1 {
+        //             0
+        //         } else {
+        //             i + 1
+        //         }
+        //     }
+        //     None => 0,
+        // };
+        // self.state.select(Some(i));
     }
 
     fn previous(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.items.len() - 1
-                } else {
-                    i - 1
-                }
+        // let i = match self.state.selected() {
+        //     Some(i) => {
+        //         if i == 0 {
+        //             self.items.len() - 1
+        //         } else {
+        //             i - 1
+        //         }
+        //     }
+        //     None => 0,
+        // };
+        // self.state.select(Some(i));
+    }
+
+    fn headers(&self) -> Vec<String> {
+        HEADERS.iter().map(|&s| s.to_owned()).collect()
+    }
+
+    fn values(&self) -> ApplicationValues {
+        let mut measurements = Vec::new();
+
+        for addr in &self.hosts {
+            if let Some(m) = self.queue.read(addr) {
+                measurements.push(MeasurementRow {
+                    hostname: addr.to_owned(),
+                    measurement: m,
+                })
             }
-            None => 0,
-        };
-        self.state.select(Some(i));
+        }
+
+        ApplicationValues { measurements }
     }
 }
 
+#[derive(Debug)]
+struct ApplicationValues {
+    measurements: Vec<MeasurementRow>,
+}
+
+#[derive(Debug)]
 struct MeasurementRow {
     hostname: String,
     measurement: Measurement,
-    values: HashMap<&'static str, String>,
 }
 
 impl MeasurementRow {
-    fn from(m: Measurement) -> Self {
-        let mut map = HashMap::new();
-        map.insert("Connections", m.total_connections.to_string());
-        map.insert("Gets", m.cmd_get.to_string());
-        map.insert("Sets", m.cmd_set.to_string());
-        map.insert("Read", m.bytes_read.to_string());
-        map.insert("Write", m.bytes_written.to_string());
-        map.insert("Bytes", m.bytes.to_string());
-        map.insert("Items", m.curr_items.to_string());
+    fn hostname(&self) -> String {
+        self.hostname.clone()
+    }
 
-        MeasurementRow {
-            hostname: "localhost:11211".to_owned(),
-            measurement: m,
-            values: map,
-        }
+    fn connections(&self) -> String {
+        self.measurement.curr_connections.to_string()
+    }
+
+    fn gets(&self) -> String {
+        self.measurement.cmd_get.to_string()
+    }
+
+    fn sets(&self) -> String {
+        self.measurement.cmd_set.to_string()
+    }
+
+    fn read(&self) -> String {
+        self.measurement.bytes_read.to_string()
+    }
+
+    fn write(&self) -> String {
+        self.measurement.bytes_written.to_string()
+    }
+
+    fn bytes(&self) -> String {
+        self.measurement.bytes.to_string()
+    }
+    fn items(&self) -> String {
+        self.measurement.curr_items.to_string()
     }
 }
