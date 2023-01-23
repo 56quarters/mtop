@@ -5,13 +5,13 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use mtop::client::{Measurement, Memcached, StatsCommand};
-use std::collections::VecDeque;
+use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
 use std::error;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::runtime::Handle;
 use tokio::task;
 use tracing::{Instrument, Level};
 use tui::{backend::CrosstermBackend, Terminal};
@@ -46,8 +46,8 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     )
     .expect("failed to set tracing subscriber");
 
-    // TODO: Need a queue per hostname
-    let queue = Arc::new(Mutex::new(VecDeque::with_capacity(NUM_MEASUREMENTS)));
+    let hosts = opts.hosts.clone();
+    let queue = Arc::new(MeasurementQueue::new(NUM_MEASUREMENTS));
     let queue_ref = queue.clone();
 
     task::spawn(async move {
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         loop {
             let _ = interval.tick().await;
 
-            for addr in opts.hosts.iter() {
+            for addr in &hosts {
                 // TODO: need to somehow handle this failure in main thread
                 //tracing::info!(message = "connecting", address = ?addr);
                 let c = TcpStream::connect(addr).await.unwrap();
@@ -68,11 +68,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                     .await
                 {
                     Ok(v) => {
-                        let mut q = queue_ref.lock().await;
-                        q.push_back(v);
-                        if q.len() > NUM_MEASUREMENTS {
-                            q.pop_front();
-                        }
+                        queue_ref.insert(addr.to_owned(), v).await;
                     }
                     Err(e) => tracing::warn!(message = "failed to fetch stats", "err" = %e),
                 }
@@ -80,26 +76,23 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         }
     });
 
+    let hosts = opts.hosts.clone();
     let mut m: Vec<Measurement> = Vec::new();
     let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS));
-    loop {
+
+    while m.len() < 3 {
         let _ = interval.tick().await;
         let queue_ref = queue.clone();
 
-        let mut q = queue_ref.lock().await;
-        //tracing::info!(message = "queue entries", entries = q.len());
-
-        if let Some(e) = q.pop_front() {
-            m.push(e);
-
-            if m.len() > 3 {
-                break;
+        for addr in &hosts {
+            if let Some(v) = queue_ref.read(addr).await {
+                m.push(v);
             }
-
-            //tracing::info!(message = "raw stats", stats = ?e);
-            //tracing::info!(message = "parsed stats", stats = ?m)
         }
     }
+
+    let queue_ref = queue.clone();
+    let blocking = BlockingMeasurementQueue::new(queue_ref, Handle::current());
 
     task::spawn_blocking(move || {
         enable_raw_mode().unwrap();
@@ -108,6 +101,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).unwrap();
 
+        println!("{:?}", blocking.read("localhost:11211"));
         let app = mtop::ui::App::new(m);
         let res = mtop::ui::run_app(&mut terminal, app);
 

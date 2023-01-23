@@ -1,3 +1,3 @@
 pub mod client;
-pub mod types;
+pub mod queue;
 pub mod ui;
