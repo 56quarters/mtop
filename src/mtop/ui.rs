@@ -187,15 +187,15 @@ impl MeasurementRow {
     }
 
     fn read(&self) -> String {
-        self.measurement.bytes_read.to_string()
+        human_bytes(self.measurement.bytes_read)
     }
 
     fn write(&self) -> String {
-        self.measurement.bytes_written.to_string()
+        human_bytes(self.measurement.bytes_written)
     }
 
     fn bytes(&self) -> String {
-        self.measurement.bytes.to_string()
+        human_bytes(self.measurement.bytes)
     }
     fn items(&self) -> String {
         self.measurement.curr_items.to_string()
@@ -203,5 +203,70 @@ impl MeasurementRow {
 
     fn evictions(&self) -> String {
         self.measurement.evictions.to_string()
+    }
+}
+
+struct Scale {
+    factor: f64,
+    suffix: &'static str,
+}
+
+fn human_bytes(val: u64) -> String {
+    let scales = vec![
+        Scale {
+            factor: 1024_f64.powi(0),
+            suffix: "",
+        },
+        Scale {
+            factor: 1024_f64.powi(1),
+            suffix: "k",
+        },
+        Scale {
+            factor: 1024_f64.powi(2),
+            suffix: "M",
+        },
+        Scale {
+            factor: 1024_f64.powi(3),
+            suffix: "G",
+        },
+        Scale {
+            factor: 1024_f64.powi(4),
+            suffix: "T",
+        },
+        Scale {
+            factor: 1024_f64.powi(5),
+            suffix: "P",
+        },
+        Scale {
+            factor: 1024_f64.powi(6),
+            suffix: "E",
+        },
+        Scale {
+            factor: 1024_f64.powi(7),
+            suffix: "Z",
+        },
+    ];
+
+    if val == 0 {
+        return val.to_string();
+    }
+
+    let l = (val as f64).log(1024.0).floor();
+    let index = l as usize;
+
+    return format!("{:.1}{}", val as f64 / scales[index].factor, scales[index].suffix);
+}
+
+#[cfg(test)]
+mod test {
+    use crate::ui::human_bytes;
+
+    #[test]
+    fn test_human_bytes() {
+        let v = human_bytes(1024);
+        println!("VAL: {}", v);
+
+        let v = human_bytes(1024 * 5 + 378371);
+        println!("VAL: {}", v);
     }
 }
