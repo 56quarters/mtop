@@ -70,7 +70,6 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .header(header)
         .block(Block::default().borders(Borders::ALL).title("Memcached"))
         .highlight_style(selected_style)
-        .highlight_symbol(">> ")
         .widths(&[
             Constraint::Percentage(20),
             Constraint::Percentage(10),
@@ -101,31 +100,31 @@ impl App {
     }
 
     fn next(&mut self) {
-        // let i = match self.state.selected() {
-        //     Some(i) => {
-        //         if i >= self.items.len() - 1 {
-        //             0
-        //         } else {
-        //             i + 1
-        //         }
-        //     }
-        //     None => 0,
-        // };
-        // self.state.select(Some(i));
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i >= self.hosts.len() - 1 {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.state.select(Some(i));
     }
 
     fn previous(&mut self) {
-        // let i = match self.state.selected() {
-        //     Some(i) => {
-        //         if i == 0 {
-        //             self.items.len() - 1
-        //         } else {
-        //             i - 1
-        //         }
-        //     }
-        //     None => 0,
-        // };
-        // self.state.select(Some(i));
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.hosts.len() - 1
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.state.select(Some(i));
     }
 
     fn headers(&self) -> Vec<&'static str> {
@@ -254,7 +253,11 @@ fn human_bytes(val: u64) -> String {
     let l = (val as f64).log(1024.0).floor();
     let index = l as usize;
 
-    return format!("{:.1}{}", val as f64 / scales[index].factor, scales[index].suffix);
+    return format!(
+        "{:.1}{}",
+        val as f64 / scales[index].factor,
+        scales[index].suffix
+    );
 }
 
 #[cfg(test)]
