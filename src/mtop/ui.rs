@@ -11,16 +11,6 @@ use tui::{
     Frame, Terminal,
 };
 
-const HEADERS: &[&str] = &[
-    "Connections",
-    "Gets",
-    "Sets",
-    "Read",
-    "Write",
-    "Bytes",
-    "Items",
-];
-
 pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
@@ -62,6 +52,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     let values = app.values();
     let rows = values.measurements.iter().map(|m| {
         let cells = vec![
+            Cell::from(m.hostname()),
             Cell::from(m.connections()),
             Cell::from(m.gets()),
             Cell::from(m.sets()),
@@ -69,6 +60,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             Cell::from(m.write()),
             Cell::from(m.bytes()),
             Cell::from(m.items()),
+            Cell::from(m.evictions()),
         ];
 
         Row::new(cells).bottom_margin(1)
@@ -80,12 +72,14 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
         .widths(&[
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+            Constraint::Percentage(10),
+            Constraint::Percentage(10),
+            Constraint::Percentage(10),
+            Constraint::Percentage(10),
+            Constraint::Percentage(10),
+            Constraint::Percentage(10),
+            Constraint::Percentage(10),
             Constraint::Percentage(10),
         ]);
     f.render_stateful_widget(t, rects[0], &mut app.state);
@@ -134,8 +128,18 @@ impl App {
         // self.state.select(Some(i));
     }
 
-    fn headers(&self) -> Vec<String> {
-        HEADERS.iter().map(|&s| s.to_owned()).collect()
+    fn headers(&self) -> Vec<&'static str> {
+        vec![
+            "Host",
+            "Connections",
+            "Gets",
+            "Sets",
+            "Read",
+            "Write",
+            "Bytes",
+            "Items",
+            "Evictions",
+        ]
     }
 
     fn values(&self) -> ApplicationValues {
@@ -195,5 +199,9 @@ impl MeasurementRow {
     }
     fn items(&self) -> String {
         self.measurement.curr_items.to_string()
+    }
+
+    fn evictions(&self) -> String {
+        self.measurement.evictions.to_string()
     }
 }
