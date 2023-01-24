@@ -3,25 +3,28 @@ use crate::queue::BlockingMeasurementQueue;
 use crossterm::event::{self, Event, KeyCode};
 use std::io;
 use std::time::Duration;
+use tui::layout::Alignment;
+use tui::widgets::Gauge;
 use tui::{
     backend::Backend,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, Row, Table, TableState},
+    text::{Span, Spans},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs, Wrap},
     Frame, Terminal,
 };
 
 pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
     loop {
-        terminal.draw(|f| ui(f, &mut app))?;
+        terminal.draw(|f| render_table(f, &mut app))?;
 
         if let Ok(available) = event::poll(Duration::from_secs(1)) {
             if available {
                 if let Event::Key(key) = event::read()? {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Down => app.next(),
-                        KeyCode::Up => app.previous(),
+                        KeyCode::Right => app.next(),
+                        KeyCode::Left => app.previous(),
                         _ => {}
                     }
                 }
@@ -30,14 +33,62 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Resu
     }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
+fn render_table<B>(f: &mut Frame<B>, app: &mut App)
+where
+    B: Backend,
+{
     let rects = Layout::default()
-        .constraints([Constraint::Percentage(100)].as_ref())
-        .margin(5)
+        .constraints(
+            [
+                Constraint::Percentage(10),
+                Constraint::Percentage(10),
+                Constraint::Percentage(10),
+                Constraint::Percentage(10),
+                Constraint::Percentage(60),
+            ]
+            .as_ref(),
+        )
+        .margin(1)
         .split(f.size());
 
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
     let normal_style = Style::default().bg(Color::Blue);
+
+    let values = app.values();
+
+    if values.measurements.len() > 0 {
+        let bytes = bytes_gauge(&values.measurements[0].measurement);
+        f.render_widget(bytes, rects[0]);
+
+        let connections = connections_gauge(&values.measurements[0].measurement);
+        f.render_widget(connections, rects[1]);
+
+        let hits = hits_gauge(&values.measurements[0].measurement);
+        f.render_widget(hits, rects[2]);
+    }
+
+    let titles = app
+        .hosts
+        .iter()
+        .map(|t| {
+            let (first, rest) = t.split_at(1);
+            Spans::from(vec![
+                Span::styled(first, Style::default().fg(Color::Yellow)),
+                Span::styled(rest, Style::default().fg(Color::Green)),
+            ])
+        })
+        .collect();
+    let tabs = Tabs::new(titles)
+        .block(Block::default().borders(Borders::ALL).title("Hosts"))
+        .select(0)
+        .style(Style::default().fg(Color::Cyan))
+        .highlight_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::Black),
+        );
+
+    f.render_widget(tabs, rects[3]);
 
     let headers = app.headers();
     let header_cells = headers
@@ -49,7 +100,6 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .height(1)
         .bottom_margin(1);
 
-    let values = app.values();
     let rows = values.measurements.iter().map(|m| {
         let cells = vec![
             Cell::from(m.hostname()),
@@ -81,7 +131,43 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             Constraint::Percentage(10),
             Constraint::Percentage(10),
         ]);
-    f.render_stateful_widget(t, rects[0], &mut app.state);
+    f.render_stateful_widget(t, rects[4], &mut app.state);
+}
+
+fn bytes_gauge(m: &Measurement) -> Gauge {
+    let used = m.bytes as f64 / m.max_bytes as f64;
+    let label = format!("{:.1}%", used * 100.0);
+    Gauge::default()
+        .block(Block::default().title("Bytes").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Magenta))
+        .percent((used * 100.0) as u16)
+        .label(label)
+}
+
+fn connections_gauge(m: &Measurement) -> Gauge {
+    let used = m.curr_connections as f64 / m.max_connections as f64;
+    let label = format!("{}/{}", m.curr_connections, m.max_connections);
+    Gauge::default()
+        .block(Block::default().title("Connections").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Yellow))
+        .percent((used * 100.0) as u16)
+        .label(label)
+}
+
+fn hits_gauge(m: &Measurement) -> Gauge {
+    let total = m.get_flushed + m.get_expired + m.get_hits + m.get_misses;
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        m.get_hits as f64 / total as f64
+    };
+
+    let label = format!("{:.1}%", ratio * 100.0);
+    Gauge::default()
+        .block(Block::default().title("Hits").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Cyan))
+        .percent((ratio * 100.0) as u16)
+        .label(label)
 }
 
 pub struct App {

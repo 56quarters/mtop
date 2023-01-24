@@ -58,6 +58,7 @@ pub struct Measurement {
     pub bytes_read: u64,
     pub bytes_written: u64,
     pub bytes: u64,
+    pub max_bytes: u64,
 
     // Items
     pub curr_items: u64,
@@ -113,6 +114,7 @@ impl TryFrom<Vec<RawStat>> for Measurement {
                 "bytes_read" => out.bytes_read = parse_u64(&e.key, &e.val)?,
                 "bytes_written" => out.bytes_written = parse_u64(&e.key, &e.val)?,
                 "bytes" => out.bytes = parse_u64(&e.key, &e.val)?,
+                "limit_maxbytes" => out.max_bytes = parse_u64(&e.key, &e.val)?,
 
                 "curr_items" => out.curr_items = parse_u64(&e.key, &e.val)?,
                 "total_items" => out.total_items = parse_u64(&e.key, &e.val)?,
