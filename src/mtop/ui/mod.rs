@@ -38,6 +38,7 @@ where
     B: Backend,
 {
     let rects = Layout::default()
+        .direction(Direction::Vertical)
         .constraints(
             [
                 Constraint::Percentage(10),
@@ -56,17 +57,6 @@ where
 
     let values = app.values();
 
-    if values.measurements.len() > 0 {
-        let bytes = bytes_gauge(&values.measurements[app.index].measurement);
-        f.render_widget(bytes, rects[0]);
-
-        let connections = connections_gauge(&values.measurements[app.index].measurement);
-        f.render_widget(connections, rects[1]);
-
-        let hits = hits_gauge(&values.measurements[app.index].measurement);
-        f.render_widget(hits, rects[2]);
-    }
-
     let titles = app
         .hosts
         .iter()
@@ -79,15 +69,23 @@ where
         })
         .collect();
 
-
-
     let tabs = Tabs::new(titles)
         .block(Block::default().borders(Borders::ALL).title("Hosts"))
         .select(app.index)
-        .style(Style::default().fg(Color::Cyan))
         .highlight_style(selected_style);
 
-    f.render_widget(tabs, rects[3]);
+    f.render_widget(tabs, rects[0]);
+
+    if values.measurements.len() > 0 {
+        let bytes = memory_gauge(&values.measurements[app.index].measurement);
+        f.render_widget(bytes, rects[1]);
+
+        let connections = connections_gauge(&values.measurements[app.index].measurement);
+        f.render_widget(connections, rects[2]);
+
+        let hits = hits_gauge(&values.measurements[app.index].measurement);
+        f.render_widget(hits, rects[3]);
+    }
 
     let headers = app.headers();
     let header_cells = headers
@@ -133,11 +131,11 @@ where
     f.render_stateful_widget(t, rects[4], &mut app.state);
 }
 
-fn bytes_gauge(m: &Measurement) -> Gauge {
+fn memory_gauge(m: &Measurement) -> Gauge {
     let used = m.bytes as f64 / m.max_bytes as f64;
     let label = format!("{:.1}%", used * 100.0);
     Gauge::default()
-        .block(Block::default().title("Bytes").borders(Borders::ALL))
+        .block(Block::default().title("Memory").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Magenta))
         .percent((used * 100.0) as u16)
         .label(label)
@@ -163,7 +161,7 @@ fn hits_gauge(m: &Measurement) -> Gauge {
 
     let label = format!("{:.1}%", ratio * 100.0);
     Gauge::default()
-        .block(Block::default().title("Hits").borders(Borders::ALL))
+        .block(Block::default().title("Hit Ratio").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Blue))
         .percent((ratio * 100.0) as u16)
         .label(label)
