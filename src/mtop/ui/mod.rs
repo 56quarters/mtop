@@ -57,13 +57,13 @@ where
     let values = app.values();
 
     if values.measurements.len() > 0 {
-        let bytes = bytes_gauge(&values.measurements[0].measurement);
+        let bytes = bytes_gauge(&values.measurements[app.index].measurement);
         f.render_widget(bytes, rects[0]);
 
-        let connections = connections_gauge(&values.measurements[0].measurement);
+        let connections = connections_gauge(&values.measurements[app.index].measurement);
         f.render_widget(connections, rects[1]);
 
-        let hits = hits_gauge(&values.measurements[0].measurement);
+        let hits = hits_gauge(&values.measurements[app.index].measurement);
         f.render_widget(hits, rects[2]);
     }
 
@@ -78,15 +78,14 @@ where
             ])
         })
         .collect();
+
+
+
     let tabs = Tabs::new(titles)
         .block(Block::default().borders(Borders::ALL).title("Hosts"))
-        .select(0)
+        .select(app.index)
         .style(Style::default().fg(Color::Cyan))
-        .highlight_style(
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::Black),
-        );
+        .highlight_style(selected_style);
 
     f.render_widget(tabs, rects[3]);
 
@@ -165,7 +164,7 @@ fn hits_gauge(m: &Measurement) -> Gauge {
     let label = format!("{:.1}%", ratio * 100.0);
     Gauge::default()
         .block(Block::default().title("Hits").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Cyan))
+        .gauge_style(Style::default().fg(Color::Blue))
         .percent((ratio * 100.0) as u16)
         .label(label)
 }
@@ -174,43 +173,31 @@ pub struct App {
     state: TableState,
     queue: BlockingMeasurementQueue,
     hosts: Vec<String>,
+    index: usize,
 }
 
 impl App {
     pub fn new(hosts: Vec<String>, queue: BlockingMeasurementQueue) -> Self {
         App {
             state: TableState::default(),
+            index: 0,
             hosts,
             queue,
+
         }
     }
 
-    fn next(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i >= self.hosts.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        self.state.select(Some(i));
+
+    pub fn next(&mut self) {
+        self.index = (self.index + 1) % self.hosts.len();
     }
 
-    fn previous(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.hosts.len() - 1
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        self.state.select(Some(i));
+    pub fn previous(&mut self) {
+        if self.index > 0 {
+            self.index -= 1;
+        } else {
+            self.index = self.hosts.len() - 1;
+        }
     }
 
     fn headers(&self) -> Vec<&'static str> {
