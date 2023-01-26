@@ -3,14 +3,13 @@ use crate::queue::BlockingMeasurementQueue;
 use crossterm::event::{self, Event, KeyCode};
 use std::io;
 use std::time::Duration;
-use tui::layout::Alignment;
 use tui::widgets::Gauge;
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs, Wrap},
+    widgets::{Block, Borders, Tabs},
     Frame, Terminal,
 };
 
@@ -34,106 +33,122 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Resu
 }
 
 fn render_table<B>(f: &mut Frame<B>, app: &mut App)
-where
-    B: Backend,
+    where
+        B: Backend,
 {
-    let rects = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Percentage(10),
-                Constraint::Percentage(10),
-                Constraint::Percentage(10),
-                Constraint::Percentage(10),
-                Constraint::Percentage(60),
-            ]
-            .as_ref(),
-        )
-        .margin(1)
-        .split(f.size());
-
-    let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-    let normal_style = Style::default().bg(Color::Blue);
-
     let values = app.values();
 
-    let titles = app
-        .hosts
+    let (tab_area, host_area) = {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(
+                [
+                    Constraint::Length(3),      // tabs
+                    Constraint::Percentage(90), // host info
+                ]
+                    .as_ref(),
+            )
+            .margin(1)
+            .split(f.size());
+        (chunks[0], chunks[1])
+    };
+
+    let host = app.hosts[app.index].clone();
+    let host_block = Block::default().title(host).borders(Borders::ALL);
+    let inner_host_area = host_block.inner(host_area);
+    f.render_widget(host_block, host_area);
+
+    let (gauge_area_1, gauge_area_2, gauge_area_3) = {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(
+                [
+                    Constraint::Length(5),  // gauges 1
+                    Constraint::Length(5),  // gauges 2
+                    Constraint::Length(5),  // gauges 3
+                ]
+                    .as_ref(),
+            )
+            .split(inner_host_area);
+        (chunks[0], chunks[1], chunks[2])
+    };
+
+    let gauge_areas_1 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .split(gauge_area_1);
+
+    let gauge_areas_2 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .split(gauge_area_2);
+
+    let gauge_areas_3 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+
+        ])
+        .split(gauge_area_3);
+
+    let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+
+    let tabs = host_tabs(&app.hosts, app.index, selected_style);
+    f.render_widget(tabs, tab_area);
+
+    if values.measurements.len() > 0 {
+        let bytes = memory_gauge(&values.measurements[app.index]);
+        f.render_widget(bytes, gauge_areas_1[0]);
+
+        let connections = connections_gauge(&values.measurements[app.index]);
+        f.render_widget(connections, gauge_areas_1[1]);
+
+        let hits = hits_gauge(&values.measurements[app.index]);
+        f.render_widget(hits, gauge_areas_1[2]);
+
+        let gets = get_gauge(&values.measurements[app.index]);
+        f.render_widget(gets, gauge_areas_2[0]);
+
+        let sets = set_gauge(&values.measurements[app.index]);
+        f.render_widget(sets, gauge_areas_2[1]);
+
+        let items = items_gauge(&values.measurements[app.index]);
+        f.render_widget(items, gauge_areas_3[0]);
+
+        let evictions = evictions_gauge(&values.measurements[app.index]);
+        f.render_widget(evictions, gauge_areas_3[1]);
+    }
+}
+
+fn host_tabs(hosts: &Vec<String>, index: usize, selected: Style) -> Tabs {
+    let titles = hosts
         .iter()
         .map(|t| {
             let (first, rest) = t.split_at(1);
             Spans::from(vec![
-                Span::styled(first, Style::default().fg(Color::Yellow)),
-                Span::styled(rest, Style::default().fg(Color::Green)),
+                Span::styled(first, Style::default().fg(Color::Cyan)),
+                Span::styled(rest, Style::default()),
             ])
         })
         .collect();
 
-    let tabs = Tabs::new(titles)
+    Tabs::new(titles)
         .block(Block::default().borders(Borders::ALL).title("Hosts"))
-        .select(app.index)
-        .highlight_style(selected_style);
-
-    f.render_widget(tabs, rects[0]);
-
-    if values.measurements.len() > 0 {
-        let bytes = memory_gauge(&values.measurements[app.index].measurement);
-        f.render_widget(bytes, rects[1]);
-
-        let connections = connections_gauge(&values.measurements[app.index].measurement);
-        f.render_widget(connections, rects[2]);
-
-        let hits = hits_gauge(&values.measurements[app.index].measurement);
-        f.render_widget(hits, rects[3]);
-    }
-
-    let headers = app.headers();
-    let header_cells = headers
-        .into_iter()
-        .map(|h| Cell::from(h).style(Style::default().fg(Color::Cyan)));
-
-    let header = Row::new(header_cells)
-        .style(normal_style)
-        .height(1)
-        .bottom_margin(1);
-
-    let rows = values.measurements.iter().map(|m| {
-        let cells = vec![
-            Cell::from(m.hostname()),
-            Cell::from(m.connections()),
-            Cell::from(m.gets()),
-            Cell::from(m.sets()),
-            Cell::from(m.read()),
-            Cell::from(m.write()),
-            Cell::from(m.bytes()),
-            Cell::from(m.items()),
-            Cell::from(m.evictions()),
-        ];
-
-        Row::new(cells).bottom_margin(1)
-    });
-
-    let t = Table::new(rows)
-        .header(header)
-        .block(Block::default().borders(Borders::ALL).title("Memcached"))
-        .highlight_style(selected_style)
-        .widths(&[
-            Constraint::Percentage(20),
-            Constraint::Percentage(10),
-            Constraint::Percentage(10),
-            Constraint::Percentage(10),
-            Constraint::Percentage(10),
-            Constraint::Percentage(10),
-            Constraint::Percentage(10),
-            Constraint::Percentage(10),
-            Constraint::Percentage(10),
-        ]);
-    f.render_stateful_widget(t, rects[4], &mut app.state);
+        .select(index)
+        .highlight_style(selected)
 }
 
 fn memory_gauge(m: &Measurement) -> Gauge {
     let used = m.bytes as f64 / m.max_bytes as f64;
-    let label = format!("{:.1}%", used * 100.0);
+    let label = format!("{}/{}", human_bytes(m.bytes), human_bytes(m.max_bytes));
     Gauge::default()
         .block(Block::default().title("Memory").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Magenta))
@@ -167,8 +182,43 @@ fn hits_gauge(m: &Measurement) -> Gauge {
         .label(label)
 }
 
+fn get_gauge(m: &Measurement) -> Gauge {
+    let label = format!("{}", m.cmd_get);
+    Gauge::default()
+        .block(Block::default().title("Gets").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Red))
+        .percent(0)
+        .label(label)
+}
+
+fn set_gauge(m: &Measurement) -> Gauge {
+    let label = format!("{}", m.cmd_set);
+    Gauge::default()
+        .block(Block::default().title("Sets").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Cyan))
+        .percent(0)
+        .label(label)
+}
+
+fn evictions_gauge(m: &Measurement) -> Gauge {
+    let label = format!("{}", m.evictions);
+    Gauge::default()
+        .block(Block::default().title("Evictions").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Green))
+        .percent(0)
+        .label(label)
+}
+
+fn items_gauge(m: &Measurement) -> Gauge {
+    let label = format!("{}", m.curr_items);
+    Gauge::default()
+        .block(Block::default().title("Items").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Yellow))
+        .percent(0)
+        .label(label)
+}
+
 pub struct App {
-    state: TableState,
     queue: BlockingMeasurementQueue,
     hosts: Vec<String>,
     index: usize,
@@ -177,14 +227,11 @@ pub struct App {
 impl App {
     pub fn new(hosts: Vec<String>, queue: BlockingMeasurementQueue) -> Self {
         App {
-            state: TableState::default(),
             index: 0,
             hosts,
             queue,
-
         }
     }
-
 
     pub fn next(&mut self) {
         self.index = (self.index + 1) % self.hosts.len();
@@ -198,29 +245,12 @@ impl App {
         }
     }
 
-    fn headers(&self) -> Vec<&'static str> {
-        vec![
-            "Host",
-            "Connections",
-            "Gets",
-            "Sets",
-            "Read",
-            "Write",
-            "Bytes",
-            "Items",
-            "Evictions",
-        ]
-    }
-
     fn values(&self) -> ApplicationValues {
         let mut measurements = Vec::new();
 
         for addr in &self.hosts {
             if let Some(m) = self.queue.read(addr) {
-                measurements.push(MeasurementRow {
-                    hostname: addr.to_owned(),
-                    measurement: m,
-                })
+                measurements.push(m)
             }
         }
 
@@ -230,50 +260,7 @@ impl App {
 
 #[derive(Debug)]
 struct ApplicationValues {
-    measurements: Vec<MeasurementRow>,
-}
-
-#[derive(Debug)]
-struct MeasurementRow {
-    hostname: String,
-    measurement: Measurement,
-}
-
-impl MeasurementRow {
-    fn hostname(&self) -> String {
-        self.hostname.clone()
-    }
-
-    fn connections(&self) -> String {
-        self.measurement.curr_connections.to_string()
-    }
-
-    fn gets(&self) -> String {
-        self.measurement.cmd_get.to_string()
-    }
-
-    fn sets(&self) -> String {
-        self.measurement.cmd_set.to_string()
-    }
-
-    fn read(&self) -> String {
-        human_bytes(self.measurement.bytes_read)
-    }
-
-    fn write(&self) -> String {
-        human_bytes(self.measurement.bytes_written)
-    }
-
-    fn bytes(&self) -> String {
-        human_bytes(self.measurement.bytes)
-    }
-    fn items(&self) -> String {
-        self.measurement.curr_items.to_string()
-    }
-
-    fn evictions(&self) -> String {
-        self.measurement.evictions.to_string()
-    }
+    measurements: Vec<Measurement>,
 }
 
 struct Scale {
