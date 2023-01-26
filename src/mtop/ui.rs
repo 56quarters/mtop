@@ -1,5 +1,4 @@
-use crate::client::Measurement;
-use crate::queue::BlockingMeasurementQueue;
+use crate::queue::{BlockingMeasurementQueue, MeasurementDelta};
 use crossterm::event::{self, Event, KeyCode};
 use std::io;
 use std::time::Duration;
@@ -84,29 +83,29 @@ where
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(gauge_area_3);
 
-    let tabs = host_tabs(&app.hosts, app.index);
+    let tabs = host_tabs(app.hosts(), app.selected());
     f.render_widget(tabs, tab_area);
 
-    if let Some(m) = app.current_values() {
-        let bytes = memory_gauge(&m);
+    if let Some(delta) = app.current_delta() {
+        let bytes = memory_gauge(&delta);
         f.render_widget(bytes, gauge_areas_1[0]);
 
-        let connections = connections_gauge(&m);
+        let connections = connections_gauge(&delta);
         f.render_widget(connections, gauge_areas_1[1]);
 
-        let hits = hits_gauge(&m);
+        let hits = hits_gauge(&delta);
         f.render_widget(hits, gauge_areas_1[2]);
 
-        let gets = get_gauge(&m);
+        let gets = gets_gauge(&delta);
         f.render_widget(gets, gauge_areas_2[0]);
 
-        let sets = set_gauge(&m);
+        let sets = sets_gauge(&delta);
         f.render_widget(sets, gauge_areas_2[1]);
 
-        let items = items_gauge(&m);
+        let items = items_gauge(&delta);
         f.render_widget(items, gauge_areas_3[0]);
 
-        let evictions = evictions_gauge(&m);
+        let evictions = evictions_gauge(&delta);
         f.render_widget(evictions, gauge_areas_3[1]);
     }
 }
@@ -131,9 +130,9 @@ fn host_tabs(hosts: &Vec<String>, index: usize) -> Tabs {
         .highlight_style(selected)
 }
 
-fn memory_gauge(m: &Measurement) -> Gauge {
-    let used = m.bytes as f64 / m.max_bytes as f64;
-    let label = format!("{}/{}", human_bytes(m.bytes), human_bytes(m.max_bytes));
+fn memory_gauge(m: &MeasurementDelta) -> Gauge {
+    let used = m.current.bytes as f64 / m.current.max_bytes as f64;
+    let label = format!("{}/{}", human_bytes(m.current.bytes), human_bytes(m.current.max_bytes));
     Gauge::default()
         .block(Block::default().title("Memory").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Magenta))
@@ -141,9 +140,9 @@ fn memory_gauge(m: &Measurement) -> Gauge {
         .label(label)
 }
 
-fn connections_gauge(m: &Measurement) -> Gauge {
-    let used = m.curr_connections as f64 / m.max_connections as f64;
-    let label = format!("{}/{}", m.curr_connections, m.max_connections);
+fn connections_gauge(m: &MeasurementDelta) -> Gauge {
+    let used = m.current.curr_connections as f64 / m.current.max_connections as f64;
+    let label = format!("{}/{}", m.current.curr_connections, m.current.max_connections);
     Gauge::default()
         .block(Block::default().title("Connections").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Yellow))
@@ -151,13 +150,11 @@ fn connections_gauge(m: &Measurement) -> Gauge {
         .label(label)
 }
 
-fn hits_gauge(m: &Measurement) -> Gauge {
-    let total = m.get_flushed + m.get_expired + m.get_hits + m.get_misses;
-    let ratio = if total == 0 {
-        0.0
-    } else {
-        m.get_hits as f64 / total as f64
-    };
+fn hits_gauge(m: &MeasurementDelta) -> Gauge {
+    let total = (m.current.get_flushed + m.current.get_expired + m.current.get_hits + m.current.get_misses)
+        - (m.previous.get_flushed + m.previous.get_expired + m.previous.get_hits + m.previous.get_misses);
+    let hits = m.current.get_hits - m.previous.get_hits;
+    let ratio = if total == 0 { 0.0 } else { hits as f64 / total as f64 };
 
     let label = format!("{:.1}%", ratio * 100.0);
     Gauge::default()
@@ -167,8 +164,9 @@ fn hits_gauge(m: &Measurement) -> Gauge {
         .label(label)
 }
 
-fn get_gauge(m: &Measurement) -> Gauge {
-    let label = format!("{}", m.cmd_get);
+fn gets_gauge(m: &MeasurementDelta) -> Gauge {
+    let diff = (m.current.cmd_get - m.previous.cmd_get) / m.seconds;
+    let label = format!("{}/s", diff);
     Gauge::default()
         .block(Block::default().title("Gets").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Red))
@@ -176,8 +174,9 @@ fn get_gauge(m: &Measurement) -> Gauge {
         .label(label)
 }
 
-fn set_gauge(m: &Measurement) -> Gauge {
-    let label = format!("{}", m.cmd_set);
+fn sets_gauge(m: &MeasurementDelta) -> Gauge {
+    let diff = (m.current.cmd_set - m.previous.cmd_set) / m.seconds;
+    let label = format!("{}/s", diff);
     Gauge::default()
         .block(Block::default().title("Sets").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Cyan))
@@ -185,8 +184,9 @@ fn set_gauge(m: &Measurement) -> Gauge {
         .label(label)
 }
 
-fn evictions_gauge(m: &Measurement) -> Gauge {
-    let label = format!("{}", m.evictions);
+fn evictions_gauge(m: &MeasurementDelta) -> Gauge {
+    let diff = (m.current.evictions - m.previous.evictions) / m.seconds;
+    let label = format!("{}/s", diff);
     Gauge::default()
         .block(Block::default().title("Evictions").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Green))
@@ -194,8 +194,8 @@ fn evictions_gauge(m: &Measurement) -> Gauge {
         .label(label)
 }
 
-fn items_gauge(m: &Measurement) -> Gauge {
-    let label = format!("{}", m.curr_items);
+fn items_gauge(m: &MeasurementDelta) -> Gauge {
+    let label = format!("{}", m.current.curr_items);
     Gauge::default()
         .block(Block::default().title("Items").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Yellow))
@@ -211,11 +211,7 @@ pub struct App {
 
 impl App {
     pub fn new(hosts: Vec<String>, queue: BlockingMeasurementQueue) -> Self {
-        App {
-            index: 0,
-            hosts,
-            queue,
-        }
+        App { index: 0, hosts, queue }
     }
 
     pub fn next(&mut self) {
@@ -230,15 +226,22 @@ impl App {
         }
     }
 
+    pub fn selected(&self) -> usize {
+        self.index
+    }
+
+    pub fn hosts(&self) -> &Vec<String> {
+        &self.hosts
+    }
+
     pub fn current_host(&self) -> Option<String> {
         self.hosts.get(self.index).map(|h| h.clone())
     }
 
-    pub fn current_values(&self) -> Option<Measurement> {
-        self.current_host().and_then(|h| self.queue.read(&h))
+    pub fn current_delta(&self) -> Option<MeasurementDelta> {
+        self.current_host().and_then(|h| self.queue.read_delta(&h))
     }
 }
-
 
 struct Scale {
     factor: f64,
@@ -288,11 +291,7 @@ fn human_bytes(val: u64) -> String {
     let l = (val as f64).log(1024.0).floor();
     let index = l as usize;
 
-    return format!(
-        "{:.1}{}",
-        val as f64 / scales[index].factor,
-        scales[index].suffix
-    );
+    return format!("{:.1}{}", val as f64 / scales[index].factor, scales[index].suffix);
 }
 
 #[cfg(test)]

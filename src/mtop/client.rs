@@ -128,21 +128,18 @@ impl TryFrom<Vec<RawStat>> for Measurement {
 }
 
 fn parse_u64(key: &str, val: &str) -> Result<u64, MtopError> {
-    val.parse().map_err(|e: ParseIntError| {
-        MtopError::Internal(format!("field {} value {}, {}", key, val, e))
-    })
+    val.parse()
+        .map_err(|e: ParseIntError| MtopError::Internal(format!("field {} value {}, {}", key, val, e)))
 }
 
 fn parse_i64(key: &str, val: &str) -> Result<i64, MtopError> {
-    val.parse().map_err(|e: ParseIntError| {
-        MtopError::Internal(format!("field {} value {}, {}", key, val, e))
-    })
+    val.parse()
+        .map_err(|e: ParseIntError| MtopError::Internal(format!("field {} value {}, {}", key, val, e)))
 }
 
 fn parse_f64(key: &str, val: &str) -> Result<f64, MtopError> {
-    val.parse().map_err(|e: ParseFloatError| {
-        MtopError::Internal(format!("field {} value {}, {}", key, val, e))
-    })
+    val.parse()
+        .map_err(|e: ParseFloatError| MtopError::Internal(format!("field {} value {}, {}", key, val, e)))
 }
 
 #[derive(Debug)]

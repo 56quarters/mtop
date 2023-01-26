@@ -1,9 +1,7 @@
 use clap::Parser;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use mtop::client::{Memcached, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
 use std::error;
@@ -18,7 +16,7 @@ use tui::{backend::CrosstermBackend, Terminal};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_STATS_INTERVAL_MS: u64 = 1000;
-const NUM_MEASUREMENTS: usize = 3;
+const NUM_MEASUREMENTS: usize = 10;
 
 /// mtop: top for memcached
 #[derive(Debug, Parser)]
@@ -89,12 +87,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let _res = mtop::ui::run_app(&mut terminal, app);
 
         disable_raw_mode().unwrap();
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )
-        .unwrap();
+        execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture).unwrap();
         terminal.show_cursor().unwrap();
     })
     .await;

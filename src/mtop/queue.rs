@@ -4,6 +4,13 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
+#[derive(Debug, Clone)]
+pub struct MeasurementDelta {
+    pub previous: Measurement,
+    pub current: Measurement,
+    pub seconds: u64,
+}
+
 #[derive(Debug)]
 pub struct MeasurementQueue {
     queues: Mutex<HashMap<String, VecDeque<Measurement>>>,
@@ -28,9 +35,19 @@ impl MeasurementQueue {
         }
     }
 
-    pub async fn read(&self, host: &str) -> Option<Measurement> {
+    pub async fn read_delta(&self, host: &str) -> Option<MeasurementDelta> {
         let map = self.queues.lock().await;
-        map.get(host).and_then(|q| q.front()).map(|o| o.clone())
+        map.get(host).and_then(|q| match (q.front(), q.back()) {
+            (Some(previous), Some(current)) if q.len() >= 2 => {
+                let seconds = (current.time - previous.time) as u64;
+                Some(MeasurementDelta {
+                    previous: previous.clone(),
+                    current: current.clone(),
+                    seconds,
+                })
+            }
+            _ => None,
+        })
     }
 }
 
@@ -49,7 +66,7 @@ impl BlockingMeasurementQueue {
         self.handle.block_on(self.queue.insert(host, m))
     }
 
-    pub fn read(&self, host: &str) -> Option<Measurement> {
-        self.handle.block_on(self.queue.read(host))
+    pub fn read_delta(&self, host: &str) -> Option<MeasurementDelta> {
+        self.handle.block_on(self.queue.read_delta(host))
     }
 }
