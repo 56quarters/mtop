@@ -33,27 +33,22 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Resu
 }
 
 fn render_table<B>(f: &mut Frame<B>, app: &mut App)
-    where
-        B: Backend,
+where
+    B: Backend,
 {
-    let values = app.values();
-
     let (tab_area, host_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(
-                [
-                    Constraint::Length(3),      // tabs
-                    Constraint::Percentage(90), // host info
-                ]
-                    .as_ref(),
-            )
+            .constraints([
+                Constraint::Length(3),      // tabs
+                Constraint::Percentage(90), // host info
+            ])
             .margin(1)
             .split(f.size());
         (chunks[0], chunks[1])
     };
 
-    let host = app.hosts[app.index].clone();
+    let host = app.current_host().unwrap_or("[unknown]".to_owned());
     let host_block = Block::default().title(host).borders(Borders::ALL);
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
@@ -61,14 +56,11 @@ fn render_table<B>(f: &mut Frame<B>, app: &mut App)
     let (gauge_area_1, gauge_area_2, gauge_area_3) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(
-                [
-                    Constraint::Length(5),  // gauges 1
-                    Constraint::Length(5),  // gauges 2
-                    Constraint::Length(5),  // gauges 3
-                ]
-                    .as_ref(),
-            )
+            .constraints([
+                Constraint::Length(5), // gauges 1
+                Constraint::Length(5), // gauges 2
+                Constraint::Length(5), // gauges 3
+            ])
             .split(inner_host_area);
         (chunks[0], chunks[1], chunks[2])
     };
@@ -84,51 +76,44 @@ fn render_table<B>(f: &mut Frame<B>, app: &mut App)
 
     let gauge_areas_2 = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(gauge_area_2);
 
     let gauge_areas_3 = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(gauge_area_3);
 
-    let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-
-    let tabs = host_tabs(&app.hosts, app.index, selected_style);
+    let tabs = host_tabs(&app.hosts, app.index);
     f.render_widget(tabs, tab_area);
 
-    if values.measurements.len() > 0 {
-        let bytes = memory_gauge(&values.measurements[app.index]);
+    if let Some(m) = app.current_values() {
+        let bytes = memory_gauge(&m);
         f.render_widget(bytes, gauge_areas_1[0]);
 
-        let connections = connections_gauge(&values.measurements[app.index]);
+        let connections = connections_gauge(&m);
         f.render_widget(connections, gauge_areas_1[1]);
 
-        let hits = hits_gauge(&values.measurements[app.index]);
+        let hits = hits_gauge(&m);
         f.render_widget(hits, gauge_areas_1[2]);
 
-        let gets = get_gauge(&values.measurements[app.index]);
+        let gets = get_gauge(&m);
         f.render_widget(gets, gauge_areas_2[0]);
 
-        let sets = set_gauge(&values.measurements[app.index]);
+        let sets = set_gauge(&m);
         f.render_widget(sets, gauge_areas_2[1]);
 
-        let items = items_gauge(&values.measurements[app.index]);
+        let items = items_gauge(&m);
         f.render_widget(items, gauge_areas_3[0]);
 
-        let evictions = evictions_gauge(&values.measurements[app.index]);
+        let evictions = evictions_gauge(&m);
         f.render_widget(evictions, gauge_areas_3[1]);
     }
 }
 
-fn host_tabs(hosts: &Vec<String>, index: usize, selected: Style) -> Tabs {
+fn host_tabs(hosts: &Vec<String>, index: usize) -> Tabs {
+    let selected = Style::default().add_modifier(Modifier::REVERSED);
+
     let titles = hosts
         .iter()
         .map(|t| {
@@ -245,23 +230,15 @@ impl App {
         }
     }
 
-    fn values(&self) -> ApplicationValues {
-        let mut measurements = Vec::new();
+    pub fn current_host(&self) -> Option<String> {
+        self.hosts.get(self.index).map(|h| h.clone())
+    }
 
-        for addr in &self.hosts {
-            if let Some(m) = self.queue.read(addr) {
-                measurements.push(m)
-            }
-        }
-
-        ApplicationValues { measurements }
+    pub fn current_values(&self) -> Option<Measurement> {
+        self.current_host().and_then(|h| self.queue.read(&h))
     }
 }
 
-#[derive(Debug)]
-struct ApplicationValues {
-    measurements: Vec<Measurement>,
-}
 
 struct Scale {
     factor: f64,
