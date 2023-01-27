@@ -228,7 +228,7 @@ fn bytes_read_gauge(m: &MeasurementDelta) -> Gauge {
     let diff = (m.current.bytes_read - m.previous.bytes_read) / m.seconds;
     let label = format!("{}/s", human_bytes(diff));
     Gauge::default()
-        .block(Block::default().title("Bytes read").borders(Borders::ALL))
+        .block(Block::default().title("Bytes rx").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::LightBlue))
         .percent(0)
         .label(label)
@@ -238,7 +238,7 @@ fn bytes_written_gauge(m: &MeasurementDelta) -> Gauge {
     let diff = (m.current.bytes_written - m.previous.bytes_written) / m.seconds;
     let label = format!("{}/s", human_bytes(diff));
     Gauge::default()
-        .block(Block::default().title("Bytes written").borders(Borders::ALL))
+        .block(Block::default().title("Bytes tx").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::LightMagenta))
         .percent(0)
         .label(label)
