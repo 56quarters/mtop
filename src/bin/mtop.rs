@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let mut terminal = Terminal::new(backend).unwrap();
 
         let blocking = BlockingMeasurementQueue::new(queue_ref, Handle::current());
-        let app = mtop::ui::App::new(hosts, blocking);
+        let app = mtop::ui::Application::new(hosts, blocking);
         let _res = mtop::ui::run_app(&mut terminal, app);
 
         disable_raw_mode().unwrap();

@@ -2,19 +2,16 @@ use crate::queue::{BlockingMeasurementQueue, MeasurementDelta};
 use crossterm::event::{self, Event, KeyCode};
 use std::io;
 use std::time::Duration;
-use tui::widgets::Gauge;
-use tui::{
-    backend::Backend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{Block, Borders, Tabs},
-    Frame, Terminal,
-};
+use tui::backend::Backend;
+use tui::layout::{Constraint, Direction, Layout};
+use tui::style::{Color, Modifier, Style};
+use tui::text::{Span, Spans};
+use tui::widgets::{Block, Borders, Clear, Gauge, Tabs};
+use tui::{Frame, Terminal};
 
-pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
+pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: Application) -> io::Result<()> {
     loop {
-        terminal.draw(|f| render_table(f, &mut app))?;
+        terminal.draw(|f| render(f, &mut app))?;
 
         if let Ok(available) = event::poll(Duration::from_secs(1)) {
             if available {
@@ -31,18 +28,19 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Resu
     }
 }
 
-fn render_table<B>(f: &mut Frame<B>, app: &mut App)
+fn render<B>(f: &mut Frame<B>, app: &mut Application)
 where
     B: Backend,
 {
+    f.render_widget(Clear, f.size());
+
     let (tab_area, host_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),      // tabs
+                Constraint::Min(3),         // tabs
                 Constraint::Percentage(90), // host info
             ])
-            .margin(1)
             .split(f.size());
         (chunks[0], chunks[1])
     };
@@ -52,61 +50,84 @@ where
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
 
-    let (gauge_area_1, gauge_area_2, gauge_area_3) = {
+    let (gauge_row_1, gauge_row_2, gauge_row_3) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5), // gauges 1
-                Constraint::Length(5), // gauges 2
-                Constraint::Length(5), // gauges 3
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
             ])
             .split(inner_host_area);
-        (chunks[0], chunks[1], chunks[2])
+
+        let gauges_1 = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
+            .split(chunks[0]);
+
+        let gauges_2 = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+            ])
+            .split(chunks[1]);
+
+        let gauges_3 = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+                Constraint::Percentage(25),
+            ])
+            .split(chunks[2]);
+
+        (gauges_1, gauges_2, gauges_3)
     };
-
-    let gauge_areas_1 = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
-        .split(gauge_area_1);
-
-    let gauge_areas_2 = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(gauge_area_2);
-
-    let gauge_areas_3 = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(gauge_area_3);
 
     let tabs = host_tabs(app.hosts(), app.selected());
     f.render_widget(tabs, tab_area);
 
     if let Some(delta) = app.current_delta() {
         let bytes = memory_gauge(&delta);
-        f.render_widget(bytes, gauge_areas_1[0]);
+        f.render_widget(bytes, gauge_row_1[0]);
 
         let connections = connections_gauge(&delta);
-        f.render_widget(connections, gauge_areas_1[1]);
+        f.render_widget(connections, gauge_row_1[1]);
 
         let hits = hits_gauge(&delta);
-        f.render_widget(hits, gauge_areas_1[2]);
+        f.render_widget(hits, gauge_row_1[2]);
 
         let gets = gets_gauge(&delta);
-        f.render_widget(gets, gauge_areas_2[0]);
+        f.render_widget(gets, gauge_row_2[0]);
 
         let sets = sets_gauge(&delta);
-        f.render_widget(sets, gauge_areas_2[1]);
+        f.render_widget(sets, gauge_row_2[1]);
 
         let items = items_gauge(&delta);
-        f.render_widget(items, gauge_areas_3[0]);
+        f.render_widget(items, gauge_row_2[2]);
 
         let evictions = evictions_gauge(&delta);
-        f.render_widget(evictions, gauge_areas_3[1]);
+        f.render_widget(evictions, gauge_row_2[3]);
+
+        let bytes_read = bytes_read_gauge(&delta);
+        f.render_widget(bytes_read, gauge_row_3[0]);
+
+        let bytes_written = bytes_written_gauge(&delta);
+        f.render_widget(bytes_written, gauge_row_3[1]);
+
+        let user_cpu = user_cpu_gauge(&delta);
+        f.render_widget(user_cpu, gauge_row_3[2]);
+
+        let system_cpu = system_cpu_gauge(&delta);
+        f.render_widget(system_cpu, gauge_row_3[3])
     }
 }
 
@@ -203,15 +224,55 @@ fn items_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-pub struct App {
+fn bytes_read_gauge(m: &MeasurementDelta) -> Gauge {
+    let diff = (m.current.bytes_read - m.previous.bytes_read) / m.seconds;
+    let label = format!("{}/s", human_bytes(diff));
+    Gauge::default()
+        .block(Block::default().title("Bytes read").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::LightBlue))
+        .percent(0)
+        .label(label)
+}
+
+fn bytes_written_gauge(m: &MeasurementDelta) -> Gauge {
+    let diff = (m.current.bytes_written - m.previous.bytes_written) / m.seconds;
+    let label = format!("{}/s", human_bytes(diff));
+    Gauge::default()
+        .block(Block::default().title("Bytes written").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::LightMagenta))
+        .percent(0)
+        .label(label)
+}
+
+fn user_cpu_gauge(m: &MeasurementDelta) -> Gauge {
+    let diff = ((m.current.rusage_user - m.previous.rusage_user) / m.seconds as f64) * 100.0;
+    let label = format!("{:.1}%", diff);
+    Gauge::default()
+        .block(Block::default().title("User CPU").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::LightRed))
+        .percent(0)
+        .label(label)
+}
+
+fn system_cpu_gauge(m: &MeasurementDelta) -> Gauge {
+    let diff = ((m.current.rusage_system - m.previous.rusage_system) / m.seconds as f64) * 100.0;
+    let label = format!("{:.1}%", diff);
+    Gauge::default()
+        .block(Block::default().title("System CPU").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::LightCyan))
+        .percent(0)
+        .label(label)
+}
+
+pub struct Application {
     queue: BlockingMeasurementQueue,
     hosts: Vec<String>,
     index: usize,
 }
 
-impl App {
+impl Application {
     pub fn new(hosts: Vec<String>, queue: BlockingMeasurementQueue) -> Self {
-        App { index: 0, hosts, queue }
+        Application { index: 0, hosts, queue }
     }
 
     pub fn next(&mut self) {
@@ -252,7 +313,7 @@ fn human_bytes(val: u64) -> String {
     let scales = vec![
         Scale {
             factor: 1024_f64.powi(0),
-            suffix: "",
+            suffix: "b",
         },
         Scale {
             factor: 1024_f64.powi(1),
