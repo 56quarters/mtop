@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io;
+use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
 use tracing::{Instrument, Level};
 
@@ -71,87 +72,67 @@ impl TryFrom<HashMap<String, String>> for Measurement {
 
     fn try_from(value: HashMap<String, String>) -> Result<Self, Self::Error> {
         Ok(Measurement {
-            pid: parse_u64("pid", &value)?,
-            uptime: parse_u64("uptime", &value)?,
-            time: parse_i64("time", &value)?,
-            version: parse_string("version", &value)?,
+            pid: parse_field("pid", &value)?,
+            uptime: parse_field("uptime", &value)?,
+            time: parse_field("time", &value)?,
+            version: parse_field("version", &value)?,
 
-            rusage_user: parse_f64("rusage_user", &value)?,
-            rusage_system: parse_f64("rusage_system", &value)?,
-            max_connections: parse_u64("max_connections", &value)?,
-            curr_connections: parse_u64("curr_connections", &value)?,
-            total_connections: parse_u64("total_connections", &value)?,
-            rejected_connections: parse_u64("rejected_connections", &value)?,
+            rusage_user: parse_field("rusage_user", &value)?,
+            rusage_system: parse_field("rusage_system", &value)?,
+            max_connections: parse_field("max_connections", &value)?,
+            curr_connections: parse_field("curr_connections", &value)?,
+            total_connections: parse_field("total_connections", &value)?,
+            rejected_connections: parse_field("rejected_connections", &value)?,
 
-            cmd_get: parse_u64("cmd_get", &value)?,
-            cmd_set: parse_u64("cmd_set", &value)?,
-            cmd_flush: parse_u64("cmd_flush", &value)?,
-            cmd_touch: parse_u64("cmd_touch", &value)?,
-            cmd_meta: parse_u64("cmd_meta", &value)?,
+            cmd_get: parse_field("cmd_get", &value)?,
+            cmd_set: parse_field("cmd_set", &value)?,
+            cmd_flush: parse_field("cmd_flush", &value)?,
+            cmd_touch: parse_field("cmd_touch", &value)?,
+            cmd_meta: parse_field("cmd_meta", &value)?,
 
-            get_hits: parse_u64("get_hits", &value)?,
-            get_misses: parse_u64("get_misses", &value)?,
-            get_expired: parse_u64("get_expired", &value)?,
-            get_flushed: parse_u64("get_flushed", &value)?,
+            get_hits: parse_field("get_hits", &value)?,
+            get_misses: parse_field("get_misses", &value)?,
+            get_expired: parse_field("get_expired", &value)?,
+            get_flushed: parse_field("get_flushed", &value)?,
 
-            store_too_large: parse_u64("store_too_large", &value)?,
-            store_no_memory: parse_u64("store_no_memory", &value)?,
+            store_too_large: parse_field("store_too_large", &value)?,
+            store_no_memory: parse_field("store_no_memory", &value)?,
 
-            delete_hits: parse_u64("delete_hits", &value)?,
-            delete_misses: parse_u64("delete_misses", &value)?,
+            delete_hits: parse_field("delete_hits", &value)?,
+            delete_misses: parse_field("delete_misses", &value)?,
 
-            incr_hits: parse_u64("incr_hits", &value)?,
-            incr_misses: parse_u64("incr_misses", &value)?,
+            incr_hits: parse_field("incr_hits", &value)?,
+            incr_misses: parse_field("incr_misses", &value)?,
 
-            decr_hits: parse_u64("decr_hits", &value)?,
-            decr_misses: parse_u64("decr_misses", &value)?,
+            decr_hits: parse_field("decr_hits", &value)?,
+            decr_misses: parse_field("decr_misses", &value)?,
 
-            touch_hits: parse_u64("touch_hits", &value)?,
-            touch_misses: parse_u64("touch_misses", &value)?,
+            touch_hits: parse_field("touch_hits", &value)?,
+            touch_misses: parse_field("touch_misses", &value)?,
 
-            bytes_read: parse_u64("bytes_read", &value)?,
-            bytes_written: parse_u64("bytes_written", &value)?,
-            bytes: parse_u64("bytes", &value)?,
-            max_bytes: parse_u64("limit_maxbytes", &value)?,
+            bytes_read: parse_field("bytes_read", &value)?,
+            bytes_written: parse_field("bytes_written", &value)?,
+            bytes: parse_field("bytes", &value)?,
+            max_bytes: parse_field("limit_maxbytes", &value)?,
 
-            curr_items: parse_u64("curr_items", &value)?,
-            total_items: parse_u64("total_items", &value)?,
-            evictions: parse_u64("evictions", &value)?,
+            curr_items: parse_field("curr_items", &value)?,
+            total_items: parse_field("total_items", &value)?,
+            evictions: parse_field("evictions", &value)?,
         })
     }
 }
 
-fn parse_u64(key: &str, map: &HashMap<String, String>) -> Result<u64, MtopError> {
+fn parse_field<T>(key: &str, map: &HashMap<String, String>) -> Result<T, MtopError>
+where
+    T: FromStr,
+    <T as FromStr>::Err: fmt::Display,
+{
     map.get(key)
         .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
         .and_then(|v| {
             v.parse()
-                .map_err(|e| MtopError::Internal(format!("field {} value {}, {}", key, v, e)))
+                .map_err(|e| MtopError::Internal(format!("field {} value {}: {}", key, v, e)))
         })
-}
-
-fn parse_i64(key: &str, map: &HashMap<String, String>) -> Result<i64, MtopError> {
-    map.get(key)
-        .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
-        .and_then(|v| {
-            v.parse()
-                .map_err(|e| MtopError::Internal(format!("field {} value {}, {}", key, v, e)))
-        })
-}
-
-fn parse_f64(key: &str, map: &HashMap<String, String>) -> Result<f64, MtopError> {
-    map.get(key)
-        .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
-        .and_then(|v| {
-            v.parse()
-                .map_err(|e| MtopError::Internal(format!("field {} value {}, {}", key, v, e)))
-        })
-}
-
-fn parse_string(key: &str, map: &HashMap<String, String>) -> Result<String, MtopError> {
-    map.get(key)
-        .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
-        .map(|v| v.clone())
 }
 
 #[derive(Debug)]
