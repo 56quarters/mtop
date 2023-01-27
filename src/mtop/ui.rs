@@ -38,7 +38,7 @@ where
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(3),         // tabs
+                Constraint::Length(3),      // tabs
                 Constraint::Percentage(90), // host info
             ])
             .split(f.size());
@@ -111,11 +111,11 @@ where
         let sets = sets_gauge(&delta);
         f.render_widget(sets, gauge_row_2[1]);
 
-        let items = items_gauge(&delta);
-        f.render_widget(items, gauge_row_2[2]);
-
         let evictions = evictions_gauge(&delta);
-        f.render_widget(evictions, gauge_row_2[3]);
+        f.render_widget(evictions, gauge_row_2[2]);
+
+        let items = items_gauge(&delta);
+        f.render_widget(items, gauge_row_2[3]);
 
         let bytes_read = bytes_read_gauge(&delta);
         f.render_widget(bytes_read, gauge_row_3[0]);
@@ -210,7 +210,7 @@ fn evictions_gauge(m: &MeasurementDelta) -> Gauge {
     let label = format!("{}/s", diff);
     Gauge::default()
         .block(Block::default().title("Evictions").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Green))
+        .gauge_style(Style::default().fg(Color::LightGreen))
         .percent(0)
         .label(label)
 }
