@@ -2,12 +2,14 @@ use clap::Parser;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use mtop::client::{Memcached, StatsCommand};
+use mtop::client::{Memcached, MtopError, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
-use std::error;
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{error, process};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::task;
@@ -48,26 +50,17 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let queue = Arc::new(MeasurementQueue::new(NUM_MEASUREMENTS));
     let queue_ref = queue.clone();
 
+    let mut client_pool = ClientPool::new(&hosts, queue_ref).await.unwrap_or_else(|e| {
+        tracing::error!(message = "failed to initialize memcached clients", hosts = ?hosts, error = %e);
+        process::exit(1)
+    });
+
     task::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS));
         loop {
             let _ = interval.tick().await;
-
-            for addr in &hosts {
-                // TODO: need to somehow handle this failure in main thread
-                //tracing::info!(message = "connecting", address = ?addr);
-                let c = TcpStream::connect(addr).await.unwrap();
-                let (r, w) = c.into_split();
-                let mut cache = Memcached::new(r, w);
-
-                match cache
-                    .stats(StatsCommand::Default)
-                    .instrument(tracing::span!(Level::DEBUG, "read_stats"))
-                    .await
-                {
-                    Ok(v) => queue_ref.insert(addr.to_owned(), v).await,
-                    Err(e) => tracing::warn!(message = "failed to fetch stats", "err" = %e),
-                }
+            if let Err(e) = client_pool.update().await {
+                tracing::warn!(message = "failed to fetch stats", "err" = %e);
             }
         }
     });
@@ -75,6 +68,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let hosts = opts.hosts.clone();
     let queue_ref = queue.clone();
 
+    // TODO: Clean all this up
     let _ = task::spawn_blocking(move || {
         enable_raw_mode().unwrap();
         let mut stdout = io::stdout();
@@ -93,4 +87,50 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     .await;
 
     Ok(())
+}
+
+// TODO: This works but it's kinda gross
+
+pub struct ClientPool {
+    clients: HashMap<String, Memcached<OwnedReadHalf, OwnedWriteHalf>>,
+    queue: Arc<MeasurementQueue>,
+}
+
+impl ClientPool {
+    pub async fn new(hosts: &[String], queue: Arc<MeasurementQueue>) -> Result<Self, MtopError> {
+        let mut clients = HashMap::new();
+
+        for host in hosts {
+            let client = connect(&host).await?;
+            clients.insert(host.clone(), client);
+        }
+
+        Ok(ClientPool { clients, queue })
+    }
+
+    pub async fn update(&mut self) -> Result<(), MtopError> {
+        for (host, client) in self.clients.iter_mut() {
+            match client
+                .stats(StatsCommand::Default)
+                .instrument(tracing::span!(Level::DEBUG, "read_stats"))
+                .await
+            {
+                Ok(v) => self.queue.insert(host.clone(), v).await,
+                Err(_) => {
+                    // TODO: What should we actually do here? Need to replace the client (probably?)
+                    //  but we don't want to throw away the actual error that happened.
+                    let replacement = connect(&host).await?;
+                    *client = replacement;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+async fn connect(host: &str) -> Result<Memcached<OwnedReadHalf, OwnedWriteHalf>, MtopError> {
+    let c = TcpStream::connect(host).await?;
+    let (r, w) = c.into_split();
+    Ok(Memcached::new(r, w))
 }
