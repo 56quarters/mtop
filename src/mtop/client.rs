@@ -70,56 +70,54 @@ impl TryFrom<HashMap<String, String>> for Measurement {
     type Error = MtopError;
 
     fn try_from(value: HashMap<String, String>) -> Result<Self, Self::Error> {
-        let mut out = Measurement::default();
+        Ok(Measurement {
+            pid: parse_u64("pid", &value)?,
+            uptime: parse_u64("uptime", &value)?,
+            time: parse_i64("time", &value)?,
+            version: parse_string("version", &value)?,
 
-        out.pid = parse_u64("pid", &value)?;
-        out.uptime = parse_u64("uptime", &value)?;
-        out.time = parse_i64("time", &value)?;
-        out.version = parse_string("version", &value)?;
+            rusage_user: parse_f64("rusage_user", &value)?,
+            rusage_system: parse_f64("rusage_system", &value)?,
+            max_connections: parse_u64("max_connections", &value)?,
+            curr_connections: parse_u64("curr_connections", &value)?,
+            total_connections: parse_u64("total_connections", &value)?,
+            rejected_connections: parse_u64("rejected_connections", &value)?,
 
-        out.rusage_user = parse_f64("rusage_user", &value)?;
-        out.rusage_system = parse_f64("rusage_system", &value)?;
-        out.max_connections = parse_u64("max_connections", &value)?;
-        out.curr_connections = parse_u64("curr_connections", &value)?;
-        out.total_connections = parse_u64("total_connections", &value)?;
-        out.rejected_connections = parse_u64("rejected_connections", &value)?;
+            cmd_get: parse_u64("cmd_get", &value)?,
+            cmd_set: parse_u64("cmd_set", &value)?,
+            cmd_flush: parse_u64("cmd_flush", &value)?,
+            cmd_touch: parse_u64("cmd_touch", &value)?,
+            cmd_meta: parse_u64("cmd_meta", &value)?,
 
-        out.cmd_get = parse_u64("cmd_get", &value)?;
-        out.cmd_set = parse_u64("cmd_set", &value)?;
-        out.cmd_flush = parse_u64("cmd_flush", &value)?;
-        out.cmd_touch = parse_u64("cmd_touch", &value)?;
-        out.cmd_meta = parse_u64("cmd_meta", &value)?;
+            get_hits: parse_u64("get_hits", &value)?,
+            get_misses: parse_u64("get_misses", &value)?,
+            get_expired: parse_u64("get_expired", &value)?,
+            get_flushed: parse_u64("get_flushed", &value)?,
 
-        out.get_hits = parse_u64("get_hits", &value)?;
-        out.get_misses = parse_u64("get_misses", &value)?;
-        out.get_expired = parse_u64("get_expired", &value)?;
-        out.get_flushed = parse_u64("get_flushed", &value)?;
+            store_too_large: parse_u64("store_too_large", &value)?,
+            store_no_memory: parse_u64("store_no_memory", &value)?,
 
-        out.store_too_large = parse_u64("store_too_large", &value)?;
-        out.store_no_memory = parse_u64("store_no_memory", &value)?;
+            delete_hits: parse_u64("delete_hits", &value)?,
+            delete_misses: parse_u64("delete_misses", &value)?,
 
-        out.delete_hits = parse_u64("delete_hits", &value)?;
-        out.decr_misses = parse_u64("delete_misses", &value)?;
+            incr_hits: parse_u64("incr_hits", &value)?,
+            incr_misses: parse_u64("incr_misses", &value)?,
 
-        out.incr_hits = parse_u64("incr_hits", &value)?;
-        out.incr_misses = parse_u64("incr_misses", &value)?;
+            decr_hits: parse_u64("decr_hits", &value)?,
+            decr_misses: parse_u64("decr_misses", &value)?,
 
-        out.delete_hits = parse_u64("decr_hits", &value)?;
-        out.decr_misses = parse_u64("decr_misses", &value)?;
+            touch_hits: parse_u64("touch_hits", &value)?,
+            touch_misses: parse_u64("touch_misses", &value)?,
 
-        out.touch_hits = parse_u64("touch_hits", &value)?;
-        out.touch_misses = parse_u64("touch_misses", &value)?;
+            bytes_read: parse_u64("bytes_read", &value)?,
+            bytes_written: parse_u64("bytes_written", &value)?,
+            bytes: parse_u64("bytes", &value)?,
+            max_bytes: parse_u64("limit_maxbytes", &value)?,
 
-        out.bytes_read = parse_u64("bytes_read", &value)?;
-        out.bytes_written = parse_u64("bytes_written", &value)?;
-        out.bytes = parse_u64("bytes", &value)?;
-        out.max_bytes = parse_u64("limit_maxbytes", &value)?;
-
-        out.curr_items = parse_u64("curr_items", &value)?;
-        out.total_items = parse_u64("total_items", &value)?;
-        out.evictions = parse_u64("evictions", &value)?;
-
-        Ok(out)
+            curr_items: parse_u64("curr_items", &value)?,
+            total_items: parse_u64("total_items", &value)?,
+            evictions: parse_u64("evictions", &value)?,
+        })
     }
 }
 

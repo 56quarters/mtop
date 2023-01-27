@@ -101,7 +101,7 @@ impl ClientPool {
         let mut clients = HashMap::new();
 
         for host in hosts {
-            let client = connect(&host).await?;
+            let client = connect(host).await?;
             clients.insert(host.clone(), client);
         }
 
@@ -119,7 +119,7 @@ impl ClientPool {
                 Err(_) => {
                     // TODO: What should we actually do here? Need to replace the client (probably?)
                     //  but we don't want to throw away the actual error that happened.
-                    let replacement = connect(&host).await?;
+                    let replacement = connect(host).await?;
                     *client = replacement;
                 }
             }

@@ -45,7 +45,7 @@ where
         (chunks[0], chunks[1])
     };
 
-    let host = app.current_host().unwrap_or("[unknown]".to_owned());
+    let host = app.current_host().unwrap_or_else(|| "[unknown]".to_owned());
     let host_block = Block::default().title(host).borders(Borders::ALL);
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
@@ -131,7 +131,7 @@ where
     }
 }
 
-fn host_tabs(hosts: &Vec<String>, index: usize) -> Tabs {
+fn host_tabs(hosts: &[String], index: usize) -> Tabs {
     let selected = Style::default().add_modifier(Modifier::REVERSED);
 
     let titles = hosts
@@ -296,7 +296,7 @@ impl Application {
     }
 
     pub fn current_host(&self) -> Option<String> {
-        self.hosts.get(self.index).map(|h| h.clone())
+        self.hosts.get(self.index).cloned()
     }
 
     pub fn current_delta(&self) -> Option<MeasurementDelta> {
@@ -352,7 +352,7 @@ fn human_bytes(val: u64) -> String {
     let l = (val as f64).log(1024.0).floor();
     let index = l as usize;
 
-    return format!("{:.1}{}", val as f64 / scales[index].factor, scales[index].suffix);
+    format!("{:.1}{}", val as f64 / scales[index].factor, scales[index].suffix)
 }
 
 #[cfg(test)]

@@ -27,7 +27,7 @@ impl MeasurementQueue {
 
     pub async fn insert(&self, host: String, m: Measurement) {
         let mut map = self.queues.lock().await;
-        let q = map.entry(host).or_insert_with(|| VecDeque::new());
+        let q = map.entry(host).or_insert_with(VecDeque::new);
 
         q.push_back(m);
         if q.len() > self.max_size {
