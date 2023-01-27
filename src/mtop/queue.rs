@@ -29,6 +29,15 @@ impl MeasurementQueue {
         let mut map = self.queues.lock().await;
         let q = map.entry(host).or_insert_with(VecDeque::new);
 
+        // If the last entry in the queue (most recent) has a higher uptime than the
+        // measurement we're inserting now, there was a memcached restart and counters
+        // are all reset to 0. Clear the existing queue to avoid underflow (since
+        // we assume counters can only increase).
+        let previous_uptime = q.back().map(|m| m.uptime).unwrap_or(0);
+        if m.uptime < previous_uptime {
+            q.clear();
+        }
+
         q.push_back(m);
         if q.len() > self.max_size {
             q.pop_front();
