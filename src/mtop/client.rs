@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io;
-use std::num::{ParseFloatError, ParseIntError};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
 use tracing::{Instrument, Level};
 
@@ -66,80 +66,94 @@ pub struct Measurement {
     pub evictions: u64,
 }
 
-impl TryFrom<Vec<RawStat>> for Measurement {
+impl TryFrom<HashMap<String, String>> for Measurement {
     type Error = MtopError;
 
-    fn try_from(value: Vec<RawStat>) -> Result<Self, Self::Error> {
+    fn try_from(value: HashMap<String, String>) -> Result<Self, Self::Error> {
         let mut out = Measurement::default();
-        for e in value {
-            match e.key.as_ref() {
-                "pid" => out.pid = parse_u64(&e.key, &e.val)?,
-                "uptime" => out.uptime = parse_u64(&e.key, &e.val)?,
-                "time" => out.time = parse_i64(&e.key, &e.val)?,
-                "version" => out.version = e.val.clone(),
 
-                "rusage_user" => out.rusage_user = parse_f64(&e.key, &e.val)?,
-                "rusage_system" => out.rusage_system = parse_f64(&e.key, &e.val)?,
+        out.pid = parse_u64("pid", &value)?;
+        out.uptime = parse_u64("uptime", &value)?;
+        out.time = parse_i64("time", &value)?;
+        out.version = parse_string("version", &value)?;
 
-                "max_connections" => out.max_connections = parse_u64(&e.key, &e.val)?,
-                "curr_connections" => out.curr_connections = parse_u64(&e.key, &e.val)?,
-                "total_connections" => out.total_connections = parse_u64(&e.key, &e.val)?,
-                "rejected_connections" => out.rejected_connections = parse_u64(&e.key, &e.val)?,
+        out.rusage_user = parse_f64("rusage_user", &value)?;
+        out.rusage_system = parse_f64("rusage_system", &value)?;
+        out.max_connections = parse_u64("max_connections", &value)?;
+        out.curr_connections = parse_u64("curr_connections", &value)?;
+        out.total_connections = parse_u64("total_connections", &value)?;
+        out.rejected_connections = parse_u64("rejected_connections", &value)?;
 
-                "cmd_get" => out.cmd_get = parse_u64(&e.key, &e.val)?,
-                "cmd_set" => out.cmd_set = parse_u64(&e.key, &e.val)?,
-                "cmd_flush" => out.cmd_flush = parse_u64(&e.key, &e.val)?,
-                "cmd_touch" => out.cmd_touch = parse_u64(&e.key, &e.val)?,
-                "cmd_meta" => out.cmd_meta = parse_u64(&e.key, &e.val)?,
+        out.cmd_get = parse_u64("cmd_get", &value)?;
+        out.cmd_set = parse_u64("cmd_set", &value)?;
+        out.cmd_flush = parse_u64("cmd_flush", &value)?;
+        out.cmd_touch = parse_u64("cmd_touch", &value)?;
+        out.cmd_meta = parse_u64("cmd_meta", &value)?;
 
-                "get_hits" => out.get_hits = parse_u64(&e.key, &e.val)?,
-                "get_misses" => out.get_misses = parse_u64(&e.key, &e.val)?,
-                "get_expired" => out.get_expired = parse_u64(&e.key, &e.val)?,
-                "get_flushed" => out.get_flushed = parse_u64(&e.key, &e.val)?,
+        out.get_hits = parse_u64("get_hits", &value)?;
+        out.get_misses = parse_u64("get_misses", &value)?;
+        out.get_expired = parse_u64("get_expired", &value)?;
+        out.get_flushed = parse_u64("get_flushed", &value)?;
 
-                "store_too_large" => out.store_too_large = parse_u64(&e.key, &e.val)?,
-                "store_no_memory" => out.store_no_memory = parse_u64(&e.key, &e.val)?,
+        out.store_too_large = parse_u64("store_too_large", &value)?;
+        out.store_no_memory = parse_u64("store_no_memory", &value)?;
 
-                "delete_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
-                "delete_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
+        out.delete_hits = parse_u64("delete_hits", &value)?;
+        out.decr_misses = parse_u64("delete_misses", &value)?;
 
-                "incr_hits" => out.incr_hits = parse_u64(&e.key, &e.val)?,
-                "incr_misses" => out.incr_misses = parse_u64(&e.key, &e.val)?,
-                "decr_hits" => out.delete_hits = parse_u64(&e.key, &e.val)?,
-                "decr_misses" => out.decr_misses = parse_u64(&e.key, &e.val)?,
+        out.incr_hits = parse_u64("incr_hits", &value)?;
+        out.incr_misses = parse_u64("incr_misses", &value)?;
 
-                "touch_hits" => out.touch_hits = parse_u64(&e.key, &e.val)?,
-                "touch_misses" => out.touch_misses = parse_u64(&e.key, &e.val)?,
+        out.delete_hits = parse_u64("decr_hits", &value)?;
+        out.decr_misses = parse_u64("decr_misses", &value)?;
 
-                "bytes_read" => out.bytes_read = parse_u64(&e.key, &e.val)?,
-                "bytes_written" => out.bytes_written = parse_u64(&e.key, &e.val)?,
-                "bytes" => out.bytes = parse_u64(&e.key, &e.val)?,
-                "limit_maxbytes" => out.max_bytes = parse_u64(&e.key, &e.val)?,
+        out.touch_hits = parse_u64("touch_hits", &value)?;
+        out.touch_misses = parse_u64("touch_misses", &value)?;
 
-                "curr_items" => out.curr_items = parse_u64(&e.key, &e.val)?,
-                "total_items" => out.total_items = parse_u64(&e.key, &e.val)?,
-                "evictions" => out.evictions = parse_u64(&e.key, &e.val)?,
-                _ => {}
-            }
-        }
+        out.bytes_read = parse_u64("bytes_read", &value)?;
+        out.bytes_written = parse_u64("bytes_written", &value)?;
+        out.bytes = parse_u64("bytes", &value)?;
+        out.max_bytes = parse_u64("limit_maxbytes", &value)?;
+
+        out.curr_items = parse_u64("curr_items", &value)?;
+        out.total_items = parse_u64("total_items", &value)?;
+        out.evictions = parse_u64("evictions", &value)?;
 
         Ok(out)
     }
 }
 
-fn parse_u64(key: &str, val: &str) -> Result<u64, MtopError> {
-    val.parse()
-        .map_err(|e: ParseIntError| MtopError::Internal(format!("field {} value {}, {}", key, val, e)))
+fn parse_u64(key: &str, map: &HashMap<String, String>) -> Result<u64, MtopError> {
+    map.get(key)
+        .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
+        .and_then(|v| {
+            v.parse()
+                .map_err(|e| MtopError::Internal(format!("field {} value {}, {}", key, v, e)))
+        })
 }
 
-fn parse_i64(key: &str, val: &str) -> Result<i64, MtopError> {
-    val.parse()
-        .map_err(|e: ParseIntError| MtopError::Internal(format!("field {} value {}, {}", key, val, e)))
+fn parse_i64(key: &str, map: &HashMap<String, String>) -> Result<i64, MtopError> {
+    map.get(key)
+        .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
+        .and_then(|v| {
+            v.parse()
+                .map_err(|e| MtopError::Internal(format!("field {} value {}, {}", key, v, e)))
+        })
 }
 
-fn parse_f64(key: &str, val: &str) -> Result<f64, MtopError> {
-    val.parse()
-        .map_err(|e: ParseFloatError| MtopError::Internal(format!("field {} value {}, {}", key, val, e)))
+fn parse_f64(key: &str, map: &HashMap<String, String>) -> Result<f64, MtopError> {
+    map.get(key)
+        .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
+        .and_then(|v| {
+            v.parse()
+                .map_err(|e| MtopError::Internal(format!("field {} value {}, {}", key, v, e)))
+        })
+}
+
+fn parse_string(key: &str, map: &HashMap<String, String>) -> Result<String, MtopError> {
+    map.get(key)
+        .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
+        .map(|v| v.clone())
 }
 
 #[derive(Debug)]
@@ -270,8 +284,8 @@ where
         Measurement::try_from(raw)
     }
 
-    async fn parse_lines(&mut self) -> Result<Vec<RawStat>, MtopError> {
-        let mut out = Vec::new();
+    async fn parse_lines(&mut self) -> Result<HashMap<String, String>, MtopError> {
+        let mut out = HashMap::new();
 
         loop {
             let line = self.lines.next_line().await?;
@@ -279,7 +293,7 @@ where
                 Some("END") | None => break,
                 Some(v) => {
                     if let Some(raw) = self.parse_stat(v) {
-                        out.push(raw);
+                        out.insert(raw.key, raw.val);
                     } else if let Some(err) = self.parse_error(v) {
                         return Err(MtopError::Protocol(err));
                     } else {
