@@ -47,6 +47,8 @@ impl MeasurementQueue {
     pub async fn read_delta(&self, host: &str) -> Option<MeasurementDelta> {
         let map = self.queues.lock().await;
         map.get(host).and_then(|q| match (q.front(), q.back()) {
+            // The delta is only valid if there are more than two entries in the queue. This
+            // avoids division by zero errors (since the time for the entries would be the same).
             (Some(previous), Some(current)) if q.len() >= 2 => {
                 let seconds = (current.time - previous.time) as u64;
                 Some(MeasurementDelta {
