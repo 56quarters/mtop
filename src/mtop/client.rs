@@ -79,6 +79,7 @@ impl TryFrom<HashMap<String, String>> for Measurement {
 
             rusage_user: parse_field("rusage_user", &value)?,
             rusage_system: parse_field("rusage_system", &value)?,
+
             max_connections: parse_field("max_connections", &value)?,
             curr_connections: parse_field("curr_connections", &value)?,
             total_connections: parse_field("total_connections", &value)?,
@@ -209,12 +210,6 @@ impl fmt::Display for ProtocolError {
 
 impl error::Error for ProtocolError {}
 
-#[derive(Debug, Eq, PartialEq, Clone)]
-struct RawStat {
-    key: String,
-    val: String,
-}
-
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum StatsCommand {
     Default,
@@ -271,8 +266,8 @@ where
             match line.as_deref() {
                 Some("END") | None => break,
                 Some(v) => {
-                    if let Some(raw) = self.parse_stat(v) {
-                        out.insert(raw.key, raw.val);
+                    if let Some((key, val)) = self.parse_stat(v) {
+                        out.insert(key, val);
                     } else if let Some(err) = self.parse_error(v) {
                         return Err(MtopError::Protocol(err));
                     } else {
@@ -285,13 +280,10 @@ where
         Ok(out)
     }
 
-    fn parse_stat(&self, line: &str) -> Option<RawStat> {
+    fn parse_stat(&self, line: &str) -> Option<(String, String)> {
         let mut parts = line.splitn(3, ' ');
         match (parts.next(), parts.next(), parts.next()) {
-            (Some("STAT"), Some(key), Some(val)) => Some(RawStat {
-                key: key.to_string(),
-                val: val.to_string(),
-            }),
+            (Some("STAT"), Some(key), Some(val)) => Some((key.to_owned(), val.to_owned())),
             _ => None,
         }
     }
