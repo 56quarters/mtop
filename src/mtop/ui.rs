@@ -54,7 +54,7 @@ where
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(34),
+                Constraint::Percentage(33),
                 Constraint::Percentage(33),
                 Constraint::Percentage(33),
             ])
@@ -190,7 +190,7 @@ fn gets_gauge(m: &MeasurementDelta) -> Gauge {
     let label = format!("{}/s", diff);
     Gauge::default()
         .block(Block::default().title("Gets").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Red))
+        .gauge_style(Style::default().fg(Color::LightGreen))
         .percent(0)
         .label(label)
 }
@@ -210,7 +210,7 @@ fn evictions_gauge(m: &MeasurementDelta) -> Gauge {
     let label = format!("{}/s", diff);
     Gauge::default()
         .block(Block::default().title("Evictions").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightGreen))
+        .gauge_style(Style::default().fg(Color::Red))
         .percent(0)
         .label(label)
 }
@@ -229,7 +229,7 @@ fn bytes_read_gauge(m: &MeasurementDelta) -> Gauge {
     let label = format!("{}/s", human_bytes(diff));
     Gauge::default()
         .block(Block::default().title("Bytes rx").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightBlue))
+        .gauge_style(Style::default().fg(Color::LightMagenta))
         .percent(0)
         .label(label)
 }
@@ -239,7 +239,7 @@ fn bytes_written_gauge(m: &MeasurementDelta) -> Gauge {
     let label = format!("{}/s", human_bytes(diff));
     Gauge::default()
         .block(Block::default().title("Bytes tx").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightMagenta))
+        .gauge_style(Style::default().fg(Color::LightBlue))
         .percent(0)
         .label(label)
 }
@@ -249,7 +249,7 @@ fn user_cpu_gauge(m: &MeasurementDelta) -> Gauge {
     let label = format!("{:.1}%", diff);
     Gauge::default()
         .block(Block::default().title("User CPU").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightRed))
+        .gauge_style(Style::default().fg(Color::LightCyan))
         .percent(0)
         .label(label)
 }
@@ -259,7 +259,7 @@ fn system_cpu_gauge(m: &MeasurementDelta) -> Gauge {
     let label = format!("{:.1}%", diff);
     Gauge::default()
         .block(Block::default().title("System CPU").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightCyan))
+        .gauge_style(Style::default().fg(Color::LightRed))
         .percent(0)
         .label(label)
 }
@@ -272,7 +272,7 @@ pub struct Application {
 
 impl Application {
     pub fn new(hosts: Vec<String>, queue: BlockingMeasurementQueue) -> Self {
-        Application { index: 0, hosts, queue }
+        Application { hosts, queue, index: 0 }
     }
 
     pub fn next(&mut self) {
