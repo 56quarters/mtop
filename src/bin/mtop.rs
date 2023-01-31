@@ -126,6 +126,7 @@ impl UpdateTask {
             self.queue.insert(host.to_owned(), stats).await;
             self.pool.put(client).await;
         }
+
         Ok(())
     }
 }
