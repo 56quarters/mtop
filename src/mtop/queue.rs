@@ -33,9 +33,10 @@ impl MeasurementQueue {
         // measurement we're inserting now, there was a memcached restart and counters
         // are all reset to 0. Clear the existing queue to avoid underflow (since
         // we assume counters can only increase).
-        let previous_uptime = q.back().map(|m| m.uptime).unwrap_or(0);
-        if m.uptime < previous_uptime {
-            q.clear();
+        if let Some(prev) = q.back() {
+            if m.uptime < prev.uptime {
+                q.clear()
+            }
         }
 
         q.push_back(m);
