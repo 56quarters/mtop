@@ -2,15 +2,14 @@ use clap::Parser;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use mtop::client::{Memcached, MtopError, StatsCommand};
+use mtop::client::{MtopError, StatsCommand};
+use mtop::pool::ClientPool;
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
-use std::collections::HashMap;
+use std::error;
 use std::io;
+use std::process;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{error, process};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::{Instrument, Level};
@@ -50,7 +49,10 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let queue = Arc::new(MeasurementQueue::new(NUM_MEASUREMENTS));
     let queue_ref = queue.clone();
 
-    let mut client_pool = ClientPool::new(&hosts, queue_ref).await.unwrap_or_else(|e| {
+    // Run the initial connection to each server once in the main thread to make
+    // bad hostnames easier to spot.
+    let update_task = UpdateTask::new(hosts.clone(), queue_ref);
+    update_task.connect().await.unwrap_or_else(|e| {
         tracing::error!(message = "failed to initialize memcached clients", hosts = ?hosts, error = %e);
         process::exit(1)
     });
@@ -59,7 +61,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS));
         loop {
             let _ = interval.tick().await;
-            if let Err(e) = client_pool.update().await {
+            if let Err(e) = update_task.update().await {
                 tracing::warn!(message = "failed to fetch stats", "err" = %e);
             }
         }
@@ -89,48 +91,41 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     Ok(())
 }
 
-// TODO: This works but it's kinda gross
-
-pub struct ClientPool {
-    clients: HashMap<String, Memcached<OwnedReadHalf, OwnedWriteHalf>>,
+pub struct UpdateTask {
+    hosts: Vec<String>,
+    pool: ClientPool,
     queue: Arc<MeasurementQueue>,
 }
 
-impl ClientPool {
-    pub async fn new(hosts: &[String], queue: Arc<MeasurementQueue>) -> Result<Self, MtopError> {
-        let mut clients = HashMap::new();
-
-        for host in hosts {
-            let client = connect(host).await?;
-            clients.insert(host.clone(), client);
+impl UpdateTask {
+    pub fn new(hosts: Vec<String>, queue: Arc<MeasurementQueue>) -> Self {
+        UpdateTask {
+            hosts,
+            queue,
+            pool: ClientPool::new(),
         }
-
-        Ok(ClientPool { clients, queue })
     }
 
-    pub async fn update(&mut self) -> Result<(), MtopError> {
-        for (host, client) in self.clients.iter_mut() {
-            match client
-                .stats(StatsCommand::Default)
-                .instrument(tracing::span!(Level::DEBUG, "read_stats"))
-                .await
-            {
-                Ok(v) => self.queue.insert(host.clone(), v).await,
-                Err(_) => {
-                    // TODO: What should we actually do here? Need to replace the client (probably?)
-                    //  but we don't want to throw away the actual error that happened.
-                    let replacement = connect(host).await?;
-                    *client = replacement;
-                }
-            }
+    pub async fn connect(&self) -> Result<(), MtopError> {
+        for host in self.hosts.iter() {
+            let client = self.pool.get(host).await?;
+            self.pool.put(client).await;
         }
 
         Ok(())
     }
-}
 
-async fn connect(host: &str) -> Result<Memcached<OwnedReadHalf, OwnedWriteHalf>, MtopError> {
-    let c = TcpStream::connect(host).await?;
-    let (r, w) = c.into_split();
-    Ok(Memcached::new(r, w))
+    pub async fn update(&self) -> Result<(), MtopError> {
+        for host in self.hosts.iter() {
+            let mut client = self.pool.get(host).await?;
+            let stats = client
+                .stats(StatsCommand::Default)
+                .instrument(tracing::span!(Level::DEBUG, "read_stats"))
+                .await?;
+
+            self.queue.insert(host.to_owned(), stats).await;
+            self.pool.put(client).await;
+        }
+        Ok(())
+    }
 }
