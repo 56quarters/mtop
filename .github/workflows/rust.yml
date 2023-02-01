@@ -1,0 +1,26 @@
+name: pr-push
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Versions
+      run: cargo --version && rustc --version
+    - name: Build
+      run: cargo build --verbose
+    - name: Clippy
+      run: cargo clippy --verbose
+    - name: Format
+      run: cargo fmt --check --verbose
+    - name: Tests
+      run: cargo test --verbose
