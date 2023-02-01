@@ -6,7 +6,7 @@ use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Modifier, Style};
 use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, Clear, Gauge, Tabs};
+use tui::widgets::{Block, Borders, Gauge, Tabs};
 use tui::{Frame, Terminal};
 
 pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: Application) -> io::Result<()> {
@@ -32,8 +32,6 @@ fn render<B>(f: &mut Frame<B>, app: &mut Application)
 where
     B: Backend,
 {
-    f.render_widget(Clear, f.size());
-
     let (tab_area, host_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
