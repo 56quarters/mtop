@@ -18,8 +18,8 @@ pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: Application) -> 
                 if let Event::Key(key) = event::read()? {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Right => app.next(),
-                        KeyCode::Left => app.previous(),
+                        KeyCode::Right | KeyCode::Char('l') => app.next(),
+                        KeyCode::Left | KeyCode::Char('h') => app.previous(),
                         _ => {}
                     }
                 }
