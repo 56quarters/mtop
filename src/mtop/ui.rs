@@ -271,8 +271,12 @@ pub struct Application {
 }
 
 impl Application {
-    pub fn new(hosts: Vec<String>, queue: BlockingMeasurementQueue) -> Self {
-        Application { hosts, queue, index: 0 }
+    pub fn new(hosts: &[String], queue: BlockingMeasurementQueue) -> Self {
+        Application {
+            queue,
+            hosts: Vec::from(hosts),
+            index: 0,
+        }
     }
 
     pub fn next(&mut self) {

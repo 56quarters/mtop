@@ -5,6 +5,8 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
+// TODO: Just move this to the client module? Make it a directory?
+
 pub struct Client {
     inner: Memcached<OwnedReadHalf, OwnedWriteHalf>,
     host: String,

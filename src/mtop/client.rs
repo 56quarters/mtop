@@ -140,7 +140,7 @@ where
 pub enum MtopError {
     Internal(String),
     Protocol(ProtocolError),
-    IO(io::Error),
+    IO(io::Error), // TODO: Add field here for host?
 }
 
 impl fmt::Display for MtopError {

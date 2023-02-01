@@ -45,15 +45,14 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     )
     .expect("failed to set tracing subscriber");
 
-    let hosts = opts.hosts.clone();
     let queue = Arc::new(MeasurementQueue::new(NUM_MEASUREMENTS));
     let queue_ref = queue.clone();
 
     // Run the initial connection to each server once in the main thread to make
     // bad hostnames easier to spot.
-    let update_task = UpdateTask::new(hosts.clone(), queue_ref);
+    let update_task = UpdateTask::new(&opts.hosts, queue_ref);
     update_task.connect().await.unwrap_or_else(|e| {
-        tracing::error!(message = "failed to initialize memcached clients", hosts = ?hosts, error = %e);
+        tracing::error!(message = "failed to initialize memcached clients", hosts = ?opts.hosts, error = %e);
         process::exit(1)
     });
 
@@ -67,7 +66,6 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         }
     });
 
-    let hosts = opts.hosts.clone();
     let queue_ref = queue.clone();
 
     // TODO: Clean all this up
@@ -79,7 +77,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let mut terminal = Terminal::new(backend).unwrap();
 
         let blocking = BlockingMeasurementQueue::new(queue_ref, Handle::current());
-        let app = mtop::ui::Application::new(hosts, blocking);
+        let app = mtop::ui::Application::new(&opts.hosts, blocking);
         let _res = mtop::ui::run_app(&mut terminal, app);
 
         disable_raw_mode().unwrap();
@@ -98,10 +96,10 @@ pub struct UpdateTask {
 }
 
 impl UpdateTask {
-    pub fn new(hosts: Vec<String>, queue: Arc<MeasurementQueue>) -> Self {
+    pub fn new(hosts: &[String], queue: Arc<MeasurementQueue>) -> Self {
         UpdateTask {
-            hosts,
             queue,
+            hosts: Vec::from(hosts),
             pool: ClientPool::new(),
         }
     }
