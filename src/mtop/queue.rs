@@ -31,18 +31,18 @@ impl MeasurementQueue {
 
         if let Some(prev) = q.back() {
             if m.uptime <= prev.uptime {
-                // If the most recent entry in the queue has a higher or the same uptime than the
+                // The most recent entry in the queue has a higher or the same uptime than the
                 // measurement we're inserting now. This means there was a memcached restart and
                 // counters are all reset to 0. Clear the existing queue to avoid underflow (since
                 // we assume counters can only increase).
                 q.clear();
-            } else if m.time <= prev.time {
+            } else if m.server_time <= prev.server_time {
                 // Make sure that any calculations that depend on the number of seconds elapsed
                 // since the last measurement don't divide by zero. Realistically this shouldn't
                 // happen unless we get really unlucky with the frequency of updates or the
                 // memcached server is being purposefully malicious but it doesn't hurt to be
                 // defensive.
-                return
+                return;
             }
         }
 

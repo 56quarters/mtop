@@ -11,7 +11,7 @@ pub struct Measurement {
     // Server info
     pub pid: u64,
     pub uptime: u64,
-    pub time: i64,
+    pub server_time: u64,
     pub version: String,
 
     // CPU
@@ -74,7 +74,7 @@ impl TryFrom<HashMap<String, String>> for Measurement {
         Ok(Measurement {
             pid: parse_field("pid", &value)?,
             uptime: parse_field("uptime", &value)?,
-            time: parse_field("time", &value)?,
+            server_time: parse_field("time", &value)?,
             version: parse_field("version", &value)?,
 
             rusage_user: parse_field("rusage_user", &value)?,
