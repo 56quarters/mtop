@@ -29,13 +29,20 @@ impl MeasurementQueue {
         let mut map = self.queues.lock().await;
         let q = map.entry(host).or_insert_with(VecDeque::new);
 
-        // If the last entry in the queue (most recent) has a higher uptime than the
-        // measurement we're inserting now, there was a memcached restart and counters
-        // are all reset to 0. Clear the existing queue to avoid underflow (since
-        // we assume counters can only increase).
         if let Some(prev) = q.back() {
             if m.uptime < prev.uptime {
-                q.clear()
+                // If the most recent entry in the queue has a higher uptime than the measurement
+                // we're inserting now. This means there was a memcached restart and counters are
+                // all reset to 0. Clear the existing queue to avoid underflow (since we assume
+                // counters can only increase).
+                q.clear();
+            } else if m.time == prev.time {
+                // The most recent entry in the queue has the same timestamp as the measurement
+                // we're inserting now. This can happen when we get unlucky and our periodic task
+                // runs on second boundaries and memcached has the same timestamp for both stats
+                // responses. Discard this measurement and wait for the next one to avoid division
+                // by zero errors.
+                return
             }
         }
 
