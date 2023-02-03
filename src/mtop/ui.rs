@@ -97,7 +97,9 @@ where
     f.render_widget(tabs, tab_area);
 
     if let Some(delta) = app.current_delta() {
-        let bytes = memory_gauge(&delta);
+        let units = UnitFormatter::new();
+
+        let bytes = memory_gauge(&delta, &units);
         f.render_widget(bytes, gauge_row_1[0]);
 
         let connections = connections_gauge(&delta);
@@ -118,10 +120,10 @@ where
         let items = items_gauge(&delta);
         f.render_widget(items, gauge_row_2[3]);
 
-        let bytes_read = bytes_read_gauge(&delta);
+        let bytes_read = bytes_read_gauge(&delta, &units);
         f.render_widget(bytes_read, gauge_row_3[0]);
 
-        let bytes_written = bytes_written_gauge(&delta);
+        let bytes_written = bytes_written_gauge(&delta, &units);
         f.render_widget(bytes_written, gauge_row_3[1]);
 
         let user_cpu = user_cpu_gauge(&delta);
@@ -152,9 +154,9 @@ fn host_tabs(hosts: &[String], index: usize) -> Tabs {
         .highlight_style(selected)
 }
 
-fn memory_gauge(m: &MeasurementDelta) -> Gauge {
+fn memory_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let used = m.current.bytes as f64 / m.current.max_bytes as f64;
-    let label = format!("{}/{}", human_bytes(m.current.bytes), human_bytes(m.current.max_bytes));
+    let label = format!("{}/{}", units.bytes(m.current.bytes), units.bytes(m.current.max_bytes));
     Gauge::default()
         .block(Block::default().title("Memory").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Magenta))
@@ -225,9 +227,9 @@ fn items_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn bytes_read_gauge(m: &MeasurementDelta) -> Gauge {
+fn bytes_read_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.bytes_read - m.previous.bytes_read) / m.seconds;
-    let label = format!("{}/s", human_bytes(diff));
+    let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
         .block(Block::default().title("Bytes rx").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::LightMagenta))
@@ -235,9 +237,9 @@ fn bytes_read_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn bytes_written_gauge(m: &MeasurementDelta) -> Gauge {
+fn bytes_written_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.bytes_written - m.previous.bytes_written) / m.seconds;
-    let label = format!("{}/s", human_bytes(diff));
+    let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
         .block(Block::default().title("Bytes tx").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::LightBlue))
@@ -296,7 +298,7 @@ impl Application {
         self.index
     }
 
-    pub fn hosts(&self) -> &Vec<String> {
+    pub fn hosts(&self) -> &[String] {
         &self.hosts
     }
 
@@ -314,62 +316,61 @@ struct Scale {
     suffix: &'static str,
 }
 
-fn human_bytes(val: u64) -> String {
-    let scales = vec![
-        Scale {
-            factor: 1024_f64.powi(0),
-            suffix: "b",
-        },
-        Scale {
-            factor: 1024_f64.powi(1),
-            suffix: "k",
-        },
-        Scale {
-            factor: 1024_f64.powi(2),
-            suffix: "M",
-        },
-        Scale {
-            factor: 1024_f64.powi(3),
-            suffix: "G",
-        },
-        Scale {
-            factor: 1024_f64.powi(4),
-            suffix: "T",
-        },
-        Scale {
-            factor: 1024_f64.powi(5),
-            suffix: "P",
-        },
-        Scale {
-            factor: 1024_f64.powi(6),
-            suffix: "E",
-        },
-        Scale {
-            factor: 1024_f64.powi(7),
-            suffix: "Z",
-        },
-    ];
-
-    if val == 0 {
-        return val.to_string();
-    }
-
-    let l = (val as f64).log(1024.0).floor();
-    let index = l as usize;
-
-    format!("{:.1}{}", val as f64 / scales[index].factor, scales[index].suffix)
+struct UnitFormatter {
+    scales: Vec<Scale>,
 }
 
-#[cfg(test)]
-mod test {
-    use crate::ui::human_bytes;
+impl UnitFormatter {
+    fn new() -> Self {
+        UnitFormatter {
+            scales: vec![
+                Scale {
+                    factor: 1024_f64.powi(0),
+                    suffix: "b",
+                },
+                Scale {
+                    factor: 1024_f64.powi(1),
+                    suffix: "k",
+                },
+                Scale {
+                    factor: 1024_f64.powi(2),
+                    suffix: "M",
+                },
+                Scale {
+                    factor: 1024_f64.powi(3),
+                    suffix: "G",
+                },
+                Scale {
+                    factor: 1024_f64.powi(4),
+                    suffix: "T",
+                },
+                Scale {
+                    factor: 1024_f64.powi(5),
+                    suffix: "P",
+                },
+                Scale {
+                    factor: 1024_f64.powi(6),
+                    suffix: "E",
+                },
+                Scale {
+                    factor: 1024_f64.powi(7),
+                    suffix: "Z",
+                },
+            ],
+        }
+    }
 
-    #[test]
-    fn test_human_bytes() {
-        let v = human_bytes(1024);
-        println!("VAL: {}", v);
+    fn bytes(&self, val: u64) -> String {
+        if val == 0 {
+            return val.to_string();
+        }
 
-        let v = human_bytes(1024 * 5 + 378371);
-        println!("VAL: {}", v);
+        let l = (val as f64).log(1024.0).floor();
+        let index = l as usize;
+
+        self.scales
+            .get(index)
+            .map(|s| format!("{:.1}{}", val as f64 / s.factor, s.suffix))
+            .unwrap_or_else(|| val.to_string())
     }
 }
