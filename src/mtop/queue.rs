@@ -58,7 +58,7 @@ impl MeasurementQueue {
             // The delta is only valid if there are more than two entries in the queue. This
             // avoids division by zero errors (since the time for the entries would be the same).
             (Some(previous), Some(current)) if q.len() >= 2 => {
-                let seconds = (current.server_time - previous.server_time) as u64;
+                let seconds = current.server_time - previous.server_time;
                 Some(MeasurementDelta {
                     previous: previous.clone(),
                     current: current.clone(),
