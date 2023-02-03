@@ -2,8 +2,7 @@ use clap::Parser;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use mtop::client::{MtopError, StatsCommand};
-use mtop::pool::ClientPool;
+use mtop::client::{MemcachedPool, MtopError, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
 use std::error;
 use std::io;
@@ -16,7 +15,9 @@ use tracing::{Instrument, Level};
 use tui::{backend::CrosstermBackend, Terminal};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
-const DEFAULT_STATS_INTERVAL_MS: u64 = 1000;
+// Update interval of more than a second to minimize the chance that stats returned by the
+// memcached server have the exact same "time" value (which has one-second granularity).
+const DEFAULT_STATS_INTERVAL_MS: u64 = 1073;
 const NUM_MEASUREMENTS: usize = 10;
 
 /// mtop: top for memcached
@@ -91,7 +92,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
 pub struct UpdateTask {
     hosts: Vec<String>,
-    pool: ClientPool,
+    pool: MemcachedPool,
     queue: Arc<MeasurementQueue>,
 }
 
@@ -100,7 +101,7 @@ impl UpdateTask {
         UpdateTask {
             queue,
             hosts: Vec::from(hosts),
-            pool: ClientPool::new(),
+            pool: MemcachedPool::new(),
         }
     }
 

@@ -2,8 +2,12 @@ use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io;
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tracing::{Instrument, Level};
 
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -300,4 +304,60 @@ where
 
         Some(ProtocolError { kind, message })
     }
+}
+
+pub struct PooledMemcached {
+    inner: Memcached<OwnedReadHalf, OwnedWriteHalf>,
+    host: String,
+}
+
+impl Deref for PooledMemcached {
+    type Target = Memcached<OwnedReadHalf, OwnedWriteHalf>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for PooledMemcached {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+#[derive(Default)]
+pub struct MemcachedPool {
+    clients: Mutex<HashMap<String, Memcached<OwnedReadHalf, OwnedWriteHalf>>>,
+}
+
+impl MemcachedPool {
+    pub fn new() -> Self {
+        MemcachedPool {
+            clients: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub async fn get(&self, host: &str) -> Result<PooledMemcached, MtopError> {
+        let mut map = self.clients.lock().await;
+        let inner = match map.remove(host) {
+            Some(c) => c,
+            None => connect(host).await?,
+        };
+
+        Ok(PooledMemcached {
+            inner,
+            host: host.to_owned(),
+        })
+    }
+
+    pub async fn put(&self, client: PooledMemcached) {
+        let mut map = self.clients.lock().await;
+        map.insert(client.host, client.inner);
+    }
+}
+
+async fn connect(host: &str) -> Result<Memcached<OwnedReadHalf, OwnedWriteHalf>, MtopError> {
+    let c = TcpStream::connect(host).await?;
+    let (r, w) = c.into_split();
+    Ok(Memcached::new(r, w))
 }
