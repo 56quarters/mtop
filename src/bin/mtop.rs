@@ -1,11 +1,10 @@
 use clap::Parser;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
-use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use mtop::client::{MemcachedPool, MtopError, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
 use std::error;
 use std::io;
+use std::panic;
 use std::process;
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,25 +68,37 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     let queue_ref = queue.clone();
 
-    // TODO: Clean all this up
     let _ = task::spawn_blocking(move || {
-        enable_raw_mode().unwrap();
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut term = initialize_terminal().unwrap();
+
+        let original_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |p| {
+            reset_terminal().unwrap();
+            original_hook(p);
+        }));
 
         let blocking = BlockingMeasurementQueue::new(queue_ref, Handle::current());
         let app = mtop::ui::Application::new(&opts.hosts, blocking);
-        let _res = mtop::ui::run_app(&mut terminal, app);
+        let _res = mtop::ui::run_app(&mut term, app);
 
-        disable_raw_mode().unwrap();
-        execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture).unwrap();
-        terminal.show_cursor().unwrap();
+        reset_terminal().unwrap();
     })
     .await;
 
     Ok(())
+}
+
+fn initialize_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    terminal::enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    Terminal::new(CrosstermBackend::new(stdout))
+}
+
+fn reset_terminal() -> io::Result<()> {
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, LeaveAlternateScreen)?;
+    terminal::disable_raw_mode()
 }
 
 pub struct UpdateTask {

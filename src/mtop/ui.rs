@@ -9,7 +9,10 @@ use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, Gauge, Tabs};
 use tui::{Frame, Terminal};
 
-pub fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: Application) -> io::Result<()> {
+pub fn run_app<B>(terminal: &mut Terminal<B>, mut app: Application) -> io::Result<()>
+where
+    B: Backend,
+{
     loop {
         terminal.draw(|f| render(f, &mut app))?;
 
