@@ -1,11 +1,9 @@
 use clap::Parser;
 use mtop::client::{MemcachedPool, MtopError, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
-use std::error;
-use std::panic;
-use std::process;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{error, panic, process};
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::{Instrument, Level};
@@ -50,7 +48,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let update_task = UpdateTask::new(&opts.hosts, queue_ref);
     update_task.connect().await.unwrap_or_else(|e| {
         tracing::error!(message = "failed to initialize memcached clients", hosts = ?opts.hosts, error = %e);
-        process::exit(1)
+        process::exit(1);
     });
 
     task::spawn(async move {
@@ -65,8 +63,8 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     let queue_ref = queue.clone();
 
-    let _ = task::spawn_blocking(move || {
-        let mut term = mtop::ui::initialize_terminal().unwrap();
+    let join = task::spawn_blocking(move || {
+        let mut term = mtop::ui::initialize_terminal()?;
 
         let original_hook = panic::take_hook();
         panic::set_hook(Box::new(move |p| {
@@ -74,13 +72,24 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             original_hook(p);
         }));
 
-        let blocking = BlockingMeasurementQueue::new(queue_ref, Handle::current());
-        let app = mtop::ui::Application::new(&opts.hosts, blocking);
-        let _res = mtop::ui::run_app(&mut term, app);
+        let blocking_queue = BlockingMeasurementQueue::new(queue_ref, Handle::current());
+        let app = mtop::ui::Application::new(&opts.hosts, blocking_queue);
+        mtop::ui::run_app(&mut term, app)?;
 
-        mtop::ui::reset_terminal().unwrap();
-    })
-    .await;
+        mtop::ui::reset_terminal()
+    });
+
+    match join.await {
+        Err(e) => {
+            tracing::error!(message = "unable to run UI in dedicated thread", error = %e);
+            process::exit(1);
+        }
+        Ok(Err(e)) => {
+            tracing::error!(message = "error setting up terminal or running UI", error = %e);
+            process::exit(1);
+        }
+        _ => {}
+    }
 
     Ok(())
 }
