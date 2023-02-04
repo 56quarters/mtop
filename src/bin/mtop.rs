@@ -3,7 +3,7 @@ use mtop::client::{MemcachedPool, MtopError, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
 use std::sync::Arc;
 use std::time::Duration;
-use std::{error, panic, process};
+use std::{error, process};
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::{Instrument, Level};
@@ -63,23 +63,19 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     let queue_ref = queue.clone();
 
-    let join = task::spawn_blocking(move || {
+    let res = task::spawn_blocking(move || {
         let mut term = mtop::ui::initialize_terminal()?;
-
-        let original_hook = panic::take_hook();
-        panic::set_hook(Box::new(move |p| {
-            mtop::ui::reset_terminal().unwrap();
-            original_hook(p);
-        }));
+        mtop::ui::install_panic_handler();
 
         let blocking_queue = BlockingMeasurementQueue::new(queue_ref, Handle::current());
         let app = mtop::ui::Application::new(&opts.hosts, blocking_queue);
+
         mtop::ui::run_app(&mut term, app)?;
-
         mtop::ui::reset_terminal()
-    });
+    })
+    .await;
 
-    match join.await {
+    match res {
         Err(e) => {
             tracing::error!(message = "unable to run UI in dedicated thread", error = %e);
             process::exit(1);

@@ -1,8 +1,8 @@
 use crate::queue::{BlockingMeasurementQueue, MeasurementDelta};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
-use std::io;
 use std::time::Duration;
+use std::{io, panic};
 use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Modifier, Style};
@@ -21,6 +21,14 @@ pub fn reset_terminal() -> io::Result<()> {
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, LeaveAlternateScreen)?;
     terminal::disable_raw_mode()
+}
+
+pub fn install_panic_handler() {
+    let original_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |p| {
+        reset_terminal().unwrap();
+        original_hook(p);
+    }));
 }
 
 pub fn run_app<B>(terminal: &mut Terminal<B>, mut app: Application) -> io::Result<()>
