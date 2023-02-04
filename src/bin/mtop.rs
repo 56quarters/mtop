@@ -1,9 +1,7 @@
 use clap::Parser;
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use mtop::client::{MemcachedPool, MtopError, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
 use std::error;
-use std::io;
 use std::panic;
 use std::process;
 use std::sync::Arc;
@@ -11,7 +9,6 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::{Instrument, Level};
-use tui::{backend::CrosstermBackend, Terminal};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 // Update interval of more than a second to minimize the chance that stats returned by the
@@ -22,7 +19,7 @@ const NUM_MEASUREMENTS: usize = 10;
 /// mtop: top for memcached
 #[derive(Debug, Parser)]
 #[clap(name = "mtop", version = clap::crate_version ! ())]
-struct MtopApplication {
+struct MtopConfig {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
     /// (case insensitive)
     #[clap(long, default_value_t = DEFAULT_LOG_LEVEL)]
@@ -36,7 +33,7 @@ struct MtopApplication {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    let opts = MtopApplication::parse();
+    let opts = MtopConfig::parse();
 
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
@@ -69,11 +66,11 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let queue_ref = queue.clone();
 
     let _ = task::spawn_blocking(move || {
-        let mut term = initialize_terminal().unwrap();
+        let mut term = mtop::ui::initialize_terminal().unwrap();
 
         let original_hook = panic::take_hook();
         panic::set_hook(Box::new(move |p| {
-            reset_terminal().unwrap();
+            mtop::ui::reset_terminal().unwrap();
             original_hook(p);
         }));
 
@@ -81,24 +78,11 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let app = mtop::ui::Application::new(&opts.hosts, blocking);
         let _res = mtop::ui::run_app(&mut term, app);
 
-        reset_terminal().unwrap();
+        mtop::ui::reset_terminal().unwrap();
     })
     .await;
 
     Ok(())
-}
-
-fn initialize_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    terminal::enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen)?;
-    Terminal::new(CrosstermBackend::new(stdout))
-}
-
-fn reset_terminal() -> io::Result<()> {
-    let mut stdout = io::stdout();
-    crossterm::execute!(stdout, LeaveAlternateScreen)?;
-    terminal::disable_raw_mode()
 }
 
 pub struct UpdateTask {

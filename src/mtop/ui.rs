@@ -1,5 +1,6 @@
 use crate::queue::{BlockingMeasurementQueue, MeasurementDelta};
 use crossterm::event::{self, Event, KeyCode};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use std::io;
 use std::time::Duration;
 use tui::backend::Backend;
@@ -7,7 +8,20 @@ use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Modifier, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, Gauge, Tabs};
-use tui::{Frame, Terminal};
+use tui::{backend::CrosstermBackend, Frame, Terminal};
+
+pub fn initialize_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    terminal::enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    Terminal::new(CrosstermBackend::new(stdout))
+}
+
+pub fn reset_terminal() -> io::Result<()> {
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, LeaveAlternateScreen)?;
+    terminal::disable_raw_mode()
+}
 
 pub fn run_app<B>(terminal: &mut Terminal<B>, mut app: Application) -> io::Result<()>
 where
