@@ -10,6 +10,8 @@ use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, Gauge, Tabs};
 use tui::{backend::CrosstermBackend, Frame, Terminal};
 
+const DRAW_INTERVAL_SECS: u64 = 1;
+
 pub fn initialize_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -38,16 +40,14 @@ where
     loop {
         terminal.draw(|f| render(f, &mut app))?;
 
-        if let Ok(available) = event::poll(Duration::from_secs(1)) {
-            if available {
-                if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Right | KeyCode::Char('l') => app.next(),
-                        KeyCode::Left | KeyCode::Char('h') => app.previous(),
-                        KeyCode::Char('m') => app.toggle_messages(),
-                        _ => {}
-                    }
+        if event::poll(Duration::from_secs(DRAW_INTERVAL_SECS))? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Right | KeyCode::Char('l') => app.next(),
+                    KeyCode::Left | KeyCode::Char('h') => app.previous(),
+                    KeyCode::Char('m') => app.toggle_messages(),
+                    _ => {}
                 }
             }
         }
