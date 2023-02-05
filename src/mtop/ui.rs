@@ -45,6 +45,7 @@ where
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Right | KeyCode::Char('l') => app.next(),
                         KeyCode::Left | KeyCode::Char('h') => app.previous(),
+                        KeyCode::Char('m') => app.toggle_messages(),
                         _ => {}
                     }
                 }
@@ -57,7 +58,7 @@ fn render<B>(f: &mut Frame<B>, app: &mut Application)
 where
     B: Backend,
 {
-    let (tab_area, host_area) = {
+    let (tab_area, content_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -68,10 +69,25 @@ where
         (chunks[0], chunks[1])
     };
 
+    let (host_area, messages_area) = {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(if app.messages() {
+                [Constraint::Percentage(70), Constraint::Percentage(30)]
+            } else {
+                [Constraint::Percentage(100), Constraint::Percentage(0)]
+            })
+            .split(content_area);
+        (chunks[0], chunks[1])
+    };
+
     let host = app.current_host().unwrap_or_else(|| "[unknown]".to_owned());
     let host_block = Block::default().title(host).borders(Borders::ALL);
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
+
+    let messages_block = Block::default().title("Messages").borders(Borders::ALL);
+    f.render_widget(messages_block, messages_area);
 
     let (gauge_row_1, gauge_row_2, gauge_row_3) = {
         let chunks = Layout::default()
@@ -291,6 +307,7 @@ fn system_cpu_gauge(m: &MeasurementDelta) -> Gauge {
 
 pub struct Application {
     queue: BlockingMeasurementQueue,
+    messages: bool,
     hosts: Vec<String>,
     index: usize,
 }
@@ -299,6 +316,7 @@ impl Application {
     pub fn new(hosts: &[String], queue: BlockingMeasurementQueue) -> Self {
         Application {
             queue,
+            messages: false,
             hosts: Vec::from(hosts),
             index: 0,
         }
@@ -330,6 +348,14 @@ impl Application {
 
     pub fn current_delta(&self) -> Option<MeasurementDelta> {
         self.current_host().and_then(|h| self.queue.read_delta(&h))
+    }
+
+    pub fn messages(&self) -> bool {
+        self.messages
+    }
+
+    pub fn toggle_messages(&mut self) {
+        self.messages = !self.messages;
     }
 }
 
