@@ -77,7 +77,37 @@ cargo build --target=x86_64-unknown-linux-musl --release
 
 These binaries should then be copied on to your `$PATH`.
 
+## Usage
+
+`mtop` takes one or more Memcached `host:port` combinations as arguments. Statistics from
+each of these  servers will be collected approximately once a second. A maximum of ten
+measurements from each server will be kept in memory to use for computations. Some examples
+of invoking `mtop` are given below.
+
+### Connecting to a local server
+```
+mtop localhost:11211
+```
+
+### Connecting to multiple servers
+
+```
+mtop cache01.example.com:11211 cache02.example.com:11211 cache03.example.com:11211
+```
+
+### Connecting to a port-forwarded Kubernetes pod
+
+```
+kubectl port-forward --namespace=example memcached-0 11211:11211
+mtop localhost:11211
+```
+
 ## Limitations
+
+### No TLS connections
+
+`mtop` currently only supports plain-text (unencrypted) connections to servers. TLS support
+*may* be added in a future version.
 
 ### Errors break the UI
 
