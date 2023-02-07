@@ -10,15 +10,87 @@ mtop: `top` for Memcached.
 
 ## Features
 
-TBD
-
-## Build
-
-TBD
+* Display real-time statistics about your `memcached` servers such as
+  * Memory usage/limit
+  * Current/max connections
+  * Hit ratio
+  * Gets/Sets/Evictions
+  * Bytes transmitted and received
+  * Server CPU usage
+* Support for monitoring multiple servers: `mtop example1:11211 example2:11211 example3:11211`
 
 ## Install
 
+There are multiple ways to install `mtop` listed below.
+
+### Binaries
+
 TBD
+
+### Cargo
+
+`mtop` along with its dependencies can be downloaded and built from source using the
+Rust `cargo` tool. Note that this requires you have a Rust toolchain installed.
+
+To install:
+
+```
+cargo install mtop
+```
+
+To install as a completely static binary (Linux only):
+
+```
+cargo install --target=x86_64-unknown-linux-musl mtop 
+```
+
+To uninstall:
+
+```
+cargo uninstall mtop
+```
+
+### Source
+
+`mtop` along with its dependencies can be built from the latest sources on Github using
+the Rust `cargo` tool. Note that this requires you have Git and a Rust toolchain installed.
+
+Get the sources:
+
+```
+git clone https://github.com/56quarters/mtop.git && cd mtop
+```
+
+Build a binary:
+
+```
+cargo build --release
+./target/release/mtop --help
+```
+
+Build a completely static binary (Linux only):
+
+```
+cargo build --target=x86_64-unknown-linux-musl --release
+./target/x86_64-unknown-linux-musl/release/mtop --help
+```
+
+These binaries should then be copied on to your `$PATH`.
+
+## Limitations
+
+### Errors break the UI
+
+Any errors connecting to Memcached servers are logged to `stderr` by default. This causes UI
+glitches and may require restarting `mtop` to resolve. Any messages logged are also lost when
+`mtop` exits. This will be fixed in a future version.
+
+### No historical data
+
+`mtop` displays instantaneous statistics or an average over the last 10 seconds (depending on
+the particular statistic). It does not persist statistics anywhere for historical analysis. If
+this is something you need, use the [memcached_exporter](https://github.com/prometheus/memcached_exporter)
+for Prometheus.
 
 ## License
 
@@ -26,6 +98,5 @@ mtop is available under the terms of the [GPL, version 3](LICENSE).
 
 ### Contribution
 
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you shall be licensed as above, without any
-additional terms or conditions.
+Any contribution intentionally submitted  for inclusion in the work by you
+shall be licensed as above, without any additional terms or conditions.
