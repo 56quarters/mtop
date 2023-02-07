@@ -3,7 +3,7 @@ use mtop::client::{MemcachedPool, MtopError, StatsCommand};
 use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
 use std::sync::Arc;
 use std::time::Duration;
-use std::{error, process};
+use std::{error, io, process};
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::{Instrument, Level};
@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
             .with_max_level(opts.log_level)
+            .with_writer(io::stderr)
             .finish(),
     )
     .expect("failed to set tracing subscriber");
