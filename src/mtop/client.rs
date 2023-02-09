@@ -259,6 +259,8 @@ where
             .instrument(tracing::span!(Level::DEBUG, "parse_response"))
             .await?;
 
+        // TODO: `stats slabs` and `stats sizes` are exactly the same up to this point. Should
+        //  be pretty easy to handle that if it makes sense (figure out a good UI for that data).
         Measurement::try_from(raw)
     }
 
