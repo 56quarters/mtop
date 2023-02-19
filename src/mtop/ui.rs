@@ -10,7 +10,7 @@ use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, Gauge, Tabs};
 use tui::{backend::CrosstermBackend, Frame, Terminal};
 
-const DRAW_INTERVAL_SECS: u64 = 1;
+const DRAW_INTERVAL: Duration = Duration::from_secs(1);
 
 pub fn initialize_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     terminal::enable_raw_mode()?;
@@ -40,13 +40,12 @@ where
     loop {
         terminal.draw(|f| render(f, &mut app))?;
 
-        if event::poll(Duration::from_secs(DRAW_INTERVAL_SECS))? {
+        if event::poll(DRAW_INTERVAL)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Right | KeyCode::Char('l') => app.next(),
                     KeyCode::Left | KeyCode::Char('h') => app.previous(),
-                    KeyCode::Char('m') => app.toggle_messages(),
                     _ => {}
                 }
             }
@@ -58,7 +57,7 @@ fn render<B>(f: &mut Frame<B>, app: &mut Application)
 where
     B: Backend,
 {
-    let (tab_area, content_area) = {
+    let (tab_area, host_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -69,25 +68,10 @@ where
         (chunks[0], chunks[1])
     };
 
-    let (host_area, messages_area) = {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(if app.messages() {
-                [Constraint::Percentage(70), Constraint::Percentage(30)]
-            } else {
-                [Constraint::Percentage(100), Constraint::Percentage(0)]
-            })
-            .split(content_area);
-        (chunks[0], chunks[1])
-    };
-
     let host = app.current_host().unwrap_or_else(|| "[unknown]".to_owned());
     let host_block = Block::default().title(host).borders(Borders::ALL);
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
-
-    let messages_block = Block::default().title("Messages").borders(Borders::ALL);
-    f.render_widget(messages_block, messages_area);
 
     let (gauge_row_1, gauge_row_2, gauge_row_3) = {
         let chunks = Layout::default()
@@ -131,7 +115,7 @@ where
         (gauges_1, gauges_2, gauges_3)
     };
 
-    let tabs = host_tabs(app.hosts(), app.selected());
+    let tabs = host_tabs(app.hosts(), app.selected_host());
     f.render_widget(tabs, tab_area);
 
     if let Some(delta) = app.current_delta() {
@@ -306,56 +290,46 @@ fn system_cpu_gauge(m: &MeasurementDelta) -> Gauge {
 }
 
 pub struct Application {
-    queue: BlockingMeasurementQueue,
-    messages: bool,
+    measurements: BlockingMeasurementQueue,
     hosts: Vec<String>,
-    index: usize,
+    selected_host: usize,
 }
 
 impl Application {
-    pub fn new(hosts: &[String], queue: BlockingMeasurementQueue) -> Self {
+    pub fn new(hosts: &[String], measurements: BlockingMeasurementQueue) -> Self {
         Application {
-            queue,
-            messages: false,
+            measurements,
             hosts: Vec::from(hosts),
-            index: 0,
+            selected_host: 0,
         }
     }
 
     pub fn next(&mut self) {
-        self.index = (self.index + 1) % self.hosts.len();
+        self.selected_host = (self.selected_host + 1) % self.hosts.len();
     }
 
     pub fn previous(&mut self) {
-        if self.index > 0 {
-            self.index -= 1;
+        if self.selected_host > 0 {
+            self.selected_host -= 1;
         } else {
-            self.index = self.hosts.len() - 1;
+            self.selected_host = self.hosts.len() - 1;
         }
-    }
-
-    pub fn selected(&self) -> usize {
-        self.index
     }
 
     pub fn hosts(&self) -> &[String] {
         &self.hosts
     }
 
+    pub fn selected_host(&self) -> usize {
+        self.selected_host
+    }
+
     pub fn current_host(&self) -> Option<String> {
-        self.hosts.get(self.index).cloned()
+        self.hosts.get(self.selected_host).cloned()
     }
 
     pub fn current_delta(&self) -> Option<MeasurementDelta> {
-        self.current_host().and_then(|h| self.queue.read_delta(&h))
-    }
-
-    pub fn messages(&self) -> bool {
-        self.messages
-    }
-
-    pub fn toggle_messages(&mut self) {
-        self.messages = !self.messages;
+        self.current_host().and_then(|h| self.measurements.read_delta(&h))
     }
 }
 
