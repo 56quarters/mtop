@@ -1,6 +1,6 @@
 [package]
 name = "mtop"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Nick Pillitteri"]
 description = "mtop: top for Memcached"
 homepage = "https://github.com/56quarters/mtop"
