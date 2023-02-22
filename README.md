@@ -81,8 +81,15 @@ These binaries should then be copied on to your `$PATH`.
 
 `mtop` takes one or more Memcached `host:port` combinations as arguments. Statistics from
 each of these  servers will be collected approximately once a second. A maximum of ten
-measurements from each server will be kept in memory to use for computations. Some examples
-of invoking `mtop` are given below.
+measurements from each server will be kept in memory to use for computations.
+
+If `mtop` is not able to connect to the servers when starting, it will exit after printing
+an error message. If `mtop` is not able to connect to servers or fetch statistics from
+them _after_ starting, the errors will be logged to a file. The location of this file is
+`/tmp/mtop/mtop.log` on Unix-like systems. This log file is truncated every time `mtop`
+starts.
+
+Some examples of invoking `mtop` are given below.
 
 ### Connecting to a local server
 ```
@@ -108,12 +115,6 @@ mtop localhost:11211
 
 `mtop` currently only supports plain-text (unencrypted) connections to servers. TLS support
 *may* be added in a future version.
-
-### Errors break the UI
-
-Any errors connecting to Memcached servers are logged to `stderr` by default. This causes UI
-glitches and may require restarting `mtop` to resolve. Any messages logged are also lost when
-`mtop` exits. This will be fixed in a future version.
 
 ### No historical data
 
