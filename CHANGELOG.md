@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.0 - Unreleased
+
+- Introduce `mc` binary for running Memcached operations from the command line. #7
+
 ## v0.2.0 - 2023-02-22
 
 - Errors fetching stats are logged to a file instead of `stderr`. #6

@@ -10,7 +10,7 @@ license = "GPL-3.0+"
 edition = "2021"
 
 [dependencies]
-clap = { version = "3.0.14", features = ["cargo", "derive", "std"], default-features = false }
+clap = { version = "4.1.8", features = ["cargo", "derive", "wrap_help"] }
 crossterm = "0.26.0"
 tokio = { version = "1.14.0", features = ["full"] }
 tracing = "0.1.11"

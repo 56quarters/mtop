@@ -1,6 +1,6 @@
 use clap::{Parser, ValueHint};
-use mtop::client::{MemcachedPool, MtopError, StatsCommand};
-use mtop::queue::{BlockingMeasurementQueue, MeasurementQueue};
+use mtop::client::{MemcachedPool, MtopError};
+use mtop::queue::{BlockingStatsQueue, StatsQueue};
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,27 +14,27 @@ use tracing::{Instrument, Level};
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 // Update interval of more than a second to minimize the chance that stats returned by the
 // memcached server have the exact same "time" value (which has one-second granularity).
-const DEFAULT_STATS_INTERVAL_MS: u64 = 1073;
+const DEFAULT_STATS_INTERVAL: Duration = Duration::from_millis(1073);
 const NUM_MEASUREMENTS: usize = 10;
 
 /// mtop: top for memcached
 #[derive(Debug, Parser)]
-#[clap(name = "mtop", version = clap::crate_version ! ())]
+#[command(name = "mtop", version = clap::crate_version!())]
 struct MtopConfig {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
     /// (case insensitive).
-    #[clap(long, default_value_t = DEFAULT_LOG_LEVEL)]
+    #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
     log_level: Level,
 
     /// File to log errors to since they cannot be logged to the console. If the path is not
     /// writable, mtop will not start.
     /// [default: $TEMP/mtop/mtop.log]
-    #[clap(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, value_hint = ValueHint::FilePath)]
     log_file: Option<PathBuf>,
 
     /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least
     /// once and may be used multiple times (separated by spaces).
-    #[clap(required = true, value_hint = ValueHint::Hostname)]
+    #[arg(required = true, value_hint = ValueHint::Hostname)]
     hosts: Vec<String>,
 }
 
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         process::exit(1);
     });
 
-    let measurements = Arc::new(MeasurementQueue::new(NUM_MEASUREMENTS));
+    let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
     let measurements_ref = measurements.clone();
 
     // Run the initial connection to each server once in the main thread to make
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     task::spawn(
         async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_STATS_INTERVAL_MS));
+            let mut interval = tokio::time::interval(DEFAULT_STATS_INTERVAL);
             loop {
                 let _ = interval.tick().await;
                 if let Err(e) = update_task.update().await {
@@ -86,8 +86,8 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let mut term = mtop::ui::initialize_terminal()?;
         mtop::ui::install_panic_handler();
 
-        let blocking_queue = BlockingMeasurementQueue::new(measurements_ref, Handle::current());
-        let app = mtop::ui::Application::new(&opts.hosts, blocking_queue);
+        let blocking_measurements = BlockingStatsQueue::new(measurements_ref, Handle::current());
+        let app = mtop::ui::Application::new(&opts.hosts, blocking_measurements);
 
         // Run the terminal reset unconditionally but prefer to return an error from the
         // application, if available, for logging.
@@ -113,11 +113,11 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 pub struct UpdateTask {
     hosts: Vec<String>,
     pool: MemcachedPool,
-    queue: Arc<MeasurementQueue>,
+    queue: Arc<StatsQueue>,
 }
 
 impl UpdateTask {
-    pub fn new(hosts: &[String], queue: Arc<MeasurementQueue>) -> Self {
+    pub fn new(hosts: &[String], queue: Arc<StatsQueue>) -> Self {
         UpdateTask {
             queue,
             hosts: Vec::from(hosts),
@@ -138,7 +138,7 @@ impl UpdateTask {
         for host in self.hosts.iter() {
             let mut client = self.pool.get(host).await?;
             let stats = client
-                .stats(StatsCommand::Default)
+                .stats()
                 .instrument(tracing::span!(Level::DEBUG, "read_stats"))
                 .await?;
 

@@ -1,17 +1,17 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, Lines};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tracing::{Instrument, Level};
 
 #[derive(Debug, Default, PartialEq, Clone)]
-pub struct Measurement {
+pub struct Stats {
     // Server info
     pub pid: u64,
     pub uptime: u64,
@@ -71,11 +71,11 @@ pub struct Measurement {
     pub evictions: u64,
 }
 
-impl TryFrom<HashMap<String, String>> for Measurement {
+impl TryFrom<HashMap<String, String>> for Stats {
     type Error = MtopError;
 
     fn try_from(value: HashMap<String, String>) -> Result<Self, Self::Error> {
-        Ok(Measurement {
+        Ok(Stats {
             pid: parse_field("pid", &value)?,
             uptime: parse_field("uptime", &value)?,
             server_time: parse_field("time", &value)?,
@@ -140,6 +140,46 @@ where
         })
 }
 
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub struct Value {
+    pub key: String,
+    pub len: u64,
+    pub cas: u64,
+    pub flags: u64,
+    pub data: Vec<u8>,
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.key.partial_cmp(&other.key)
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub struct Item {
+    pub key: String,
+    pub expires: u32,
+    pub last_access: u32,
+}
+
+impl PartialOrd for Item {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.key.partial_cmp(&other.key)
+    }
+}
+
+impl Ord for Item {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
 #[derive(Debug)]
 pub enum MtopError {
     Internal(String),
@@ -181,17 +221,23 @@ impl From<ProtocolError> for MtopError {
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum ProtocolErrorKind {
-    Syntax,
+    BadClass,
+    Busy,
     Client,
+    NotFound,
     Server,
+    Syntax,
 }
 
 impl fmt::Display for ProtocolErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Syntax => "ERROR".fmt(f),
+            Self::BadClass => "BADCLASS".fmt(f),
+            Self::Busy => "BUSY".fmt(f),
             Self::Client => "CLIENT_ERROR".fmt(f),
+            Self::NotFound => "NOT_FOUND".fmt(f),
             Self::Server => "SERVER_ERROR".fmt(f),
+            Self::Syntax => "ERROR".fmt(f),
         }
     }
 }
@@ -214,15 +260,23 @@ impl fmt::Display for ProtocolError {
 
 impl error::Error for ProtocolError {}
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum StatsCommand {
-    Default,
+#[derive(Debug, Eq, PartialEq, Clone)]
+enum Command<'a> {
+    CrawlerMetadump,
+    Delete(&'a str),
+    Gets(&'a [String]),
+    Stats,
+    Touch(&'a str, u32),
 }
 
-impl fmt::Display for StatsCommand {
+impl<'a> fmt::Display for Command<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Default => write!(f, "stats"),
+            Self::CrawlerMetadump => write!(f, "lru_crawler metadump all"),
+            Self::Delete(key) => write!(f, "delete {}", key),
+            Self::Gets(keys) => write!(f, "gets {}", keys.join(" ")),
+            Self::Stats => write!(f, "stats"),
+            Self::Touch(key, ttl) => write!(f, "touch {} {}", key, ttl),
         }
     }
 }
@@ -232,8 +286,8 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    lines: Lines<BufReader<R>>,
-    write: W,
+    read: Lines<BufReader<R>>,
+    write: BufWriter<W>,
 }
 
 impl<R, W> Memcached<R, W>
@@ -243,42 +297,61 @@ where
 {
     pub fn new(read: R, write: W) -> Self {
         Memcached {
-            lines: BufReader::new(read).lines(),
-            write,
+            read: BufReader::new(read).lines(),
+            write: BufWriter::new(write),
         }
     }
 
-    pub async fn stats(&mut self, cmd: StatsCommand) -> Result<Measurement, MtopError> {
-        self.write
-            .write_all(format!("{}\r\n", cmd).as_bytes())
-            .instrument(tracing::span!(Level::DEBUG, "send_command"))
-            .await?;
-
-        let raw = self
-            .parse_lines()
-            .instrument(tracing::span!(Level::DEBUG, "parse_response"))
-            .await?;
-
-        // TODO: `stats slabs` and `stats sizes` are exactly the same up to this point. Should
-        //  be pretty easy to handle that if it makes sense (figure out a good UI for that data).
-        Measurement::try_from(raw)
-    }
-
-    async fn parse_lines(&mut self) -> Result<HashMap<String, String>, MtopError> {
-        let mut out = HashMap::new();
+    pub async fn stats(&mut self) -> Result<Stats, MtopError> {
+        self.send(Command::Stats).await?;
+        let mut raw = HashMap::new();
 
         loop {
-            let line = self.lines.next_line().await?;
+            let line = self.read.next_line().await?;
             match line.as_deref() {
                 Some("END") | None => break,
                 Some(v) => {
-                    if let Some((key, val)) = self.parse_stat(v) {
-                        out.insert(key, val);
-                    } else if let Some(err) = self.parse_error(v) {
+                    let (key, val) = Self::parse_stat(v)?;
+                    raw.insert(key, val);
+                }
+            }
+        }
+
+        Stats::try_from(raw)
+    }
+
+    fn parse_stat(line: &str) -> Result<(String, String), MtopError> {
+        let mut parts = line.splitn(3, ' ');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("STAT"), Some(key), Some(val)) => Ok((key.to_owned(), val.to_owned())),
+            _ => {
+                if let Some(err) = Self::parse_error(line) {
+                    Err(MtopError::Protocol(err))
+                } else {
+                    Err(MtopError::Internal(format!("unable to parse '{}'", line)))
+                }
+            }
+        }
+    }
+
+    pub async fn keys(&mut self) -> Result<Vec<Item>, MtopError> {
+        self.send(Command::CrawlerMetadump).await?;
+        let mut out = Vec::new();
+
+        loop {
+            let line = self.read.next_line().await?;
+            match line.as_deref() {
+                Some("END") | None => break,
+                Some(v) => {
+                    // Check for an error first because the `metadump` command doesn't
+                    // have any sort of prefix for each result line like `STAT` or `VALUE`
+                    // so it's hard to know if it's valid without looking for an error.
+                    if let Some(err) = Self::parse_error(v) {
                         return Err(MtopError::Protocol(err));
-                    } else {
-                        return Err(MtopError::Internal(format!("unable to parse '{}'", v)));
                     }
+
+                    let item = Self::parse_crawler_meta(v)?;
+                    out.push(item);
                 }
             }
         }
@@ -286,25 +359,131 @@ where
         Ok(out)
     }
 
-    fn parse_stat(&self, line: &str) -> Option<(String, String)> {
-        let mut parts = line.splitn(3, ' ');
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some("STAT"), Some(key), Some(val)) => Some((key.to_owned(), val.to_owned())),
-            _ => None,
+    fn parse_crawler_meta(line: &str) -> Result<Item, MtopError> {
+        let mut kv = HashMap::new();
+
+        for p in line.split(' ') {
+            // TODO: Need to URI decode the value
+            let (key, val) = p.split_once('=').unwrap();
+            kv.insert(key.to_owned(), val.to_owned());
+        }
+
+        Ok(Item {
+            key: parse_field("key", &kv)?,
+            expires: parse_field("exp", &kv)?,
+            last_access: parse_field("la", &kv)?,
+        })
+    }
+
+    pub async fn get(&mut self, keys: Vec<String>) -> Result<HashMap<String, Value>, MtopError> {
+        if keys.is_empty() {
+            return Err(MtopError::Internal("missing required keys".to_owned()));
+        }
+
+        self.send(Command::Gets(&keys)).await?;
+        let mut out = HashMap::with_capacity(keys.len());
+
+        loop {
+            let line = self.read.next_line().await?;
+            match line.as_deref() {
+                Some("END") | None => break,
+                Some(v) => {
+                    let value = self.parse_gets_value(v).await?;
+                    out.insert(value.key.clone(), value);
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    async fn parse_gets_value(&mut self, line: &str) -> Result<Value, MtopError> {
+        let mut parts = line.splitn(5, ' ');
+
+        match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some("VALUE"), Some(k), Some(flags), Some(len), Some(cas)) => {
+                let flags = flags.parse::<u64>().unwrap();
+                let len = len.parse::<u64>().unwrap();
+                let cas = cas.parse::<u64>().unwrap();
+
+                // Two extra bytes to read the trailing \r\n but then truncate them.
+                let mut data = Vec::with_capacity(len as usize + 2);
+                let reader = self.read.get_mut();
+                reader.take(len + 2).read_to_end(&mut data).await?;
+                data.truncate(len as usize);
+
+                Ok(Value {
+                    key: k.to_owned(),
+                    len,
+                    flags,
+                    cas,
+                    data,
+                })
+            }
+            _ => {
+                // Response doesn't look like a `VALUE` line, see if the server has
+                // responded with an error that we can parse. Otherwise, consider this
+                // an internal error.
+                if let Some(err) = Self::parse_error(line) {
+                    Err(MtopError::Protocol(err))
+                } else {
+                    Err(MtopError::Internal(format!("unable to parse '{}'", line)))
+                }
+            }
         }
     }
 
-    fn parse_error(&self, line: &str) -> Option<ProtocolError> {
+    pub async fn touch(&mut self, key: String, ttl: u32) -> Result<(), MtopError> {
+        self.send(Command::Touch(&key, ttl)).await?;
+        if let Some(v) = self.read.next_line().await? {
+            Self::parse_simple_response(&v, "TOUCHED")
+        } else {
+            Err(MtopError::Internal("unexpected empty response".to_owned()))
+        }
+    }
+
+    pub async fn delete(&mut self, key: String) -> Result<(), MtopError> {
+        self.send(Command::Delete(&key)).await?;
+        if let Some(v) = self.read.next_line().await? {
+            Self::parse_simple_response(&v, "DELETED")
+        } else {
+            Err(MtopError::Internal("unexpected empty response".to_owned()))
+        }
+    }
+
+    fn parse_simple_response(line: &str, expected: &str) -> Result<(), MtopError> {
+        if line == expected {
+            Ok(())
+        } else if let Some(err) = Self::parse_error(line) {
+            Err(MtopError::Protocol(err))
+        } else {
+            Err(MtopError::Internal(format!("unable to parse '{}'", line)))
+        }
+    }
+
+    fn parse_error(line: &str) -> Option<ProtocolError> {
         let mut values = line.splitn(2, ' ');
         let (kind, message) = match (values.next(), values.next()) {
+            (Some("BADCLASS"), Some(msg)) => (ProtocolErrorKind::BadClass, Some(msg.to_owned())),
+            (Some("BUSY"), Some(msg)) => (ProtocolErrorKind::Busy, Some(msg.to_owned())),
+            (Some("CLIENT_ERROR"), Some(msg)) => (ProtocolErrorKind::Client, Some(msg.to_owned())),
             (Some("ERROR"), None) => (ProtocolErrorKind::Syntax, None),
             (Some("ERROR"), Some(msg)) => (ProtocolErrorKind::Syntax, Some(msg.to_owned())),
-            (Some("CLIENT_ERROR"), Some(msg)) => (ProtocolErrorKind::Client, Some(msg.to_owned())),
+            (Some("NOT_FOUND"), None) => (ProtocolErrorKind::NotFound, None),
             (Some("SERVER_ERROR"), Some(msg)) => (ProtocolErrorKind::Server, Some(msg.to_owned())),
+
             _ => return None,
         };
 
         Some(ProtocolError { kind, message })
+    }
+
+    async fn send<T>(&mut self, cmd: T) -> Result<(), MtopError>
+    where
+        T: fmt::Display,
+    {
+        self.write.write_all(format!("{}\r\n", cmd).as_bytes()).await?;
+        Ok(self.write.flush().await?)
     }
 }
 

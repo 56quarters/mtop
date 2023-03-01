@@ -1,31 +1,31 @@
-use crate::client::Measurement;
+use crate::client::Stats;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
-pub struct MeasurementDelta {
-    pub previous: Measurement,
-    pub current: Measurement,
+pub struct StatsDelta {
+    pub previous: Stats,
+    pub current: Stats,
     pub seconds: u64,
 }
 
 #[derive(Debug)]
-pub struct MeasurementQueue {
-    queues: Mutex<HashMap<String, VecDeque<Measurement>>>,
+pub struct StatsQueue {
+    queues: Mutex<HashMap<String, VecDeque<Stats>>>,
     max_size: usize,
 }
 
-impl MeasurementQueue {
+impl StatsQueue {
     pub fn new(max_size: usize) -> Self {
-        MeasurementQueue {
+        StatsQueue {
             max_size,
             queues: Mutex::new(HashMap::new()),
         }
     }
 
-    pub async fn insert(&self, host: String, m: Measurement) {
+    pub async fn insert(&self, host: String, m: Stats) {
         let mut map = self.queues.lock().await;
         let q = map.entry(host).or_insert_with(VecDeque::new);
 
@@ -52,14 +52,14 @@ impl MeasurementQueue {
         }
     }
 
-    pub async fn read_delta(&self, host: &str) -> Option<MeasurementDelta> {
+    pub async fn read_delta(&self, host: &str) -> Option<StatsDelta> {
         let map = self.queues.lock().await;
         map.get(host).and_then(|q| match (q.front(), q.back()) {
             // The delta is only valid if there are more than two entries in the queue. This
             // avoids division by zero errors (since the time for the entries would be the same).
             (Some(previous), Some(current)) if q.len() >= 2 => {
                 let seconds = current.server_time - previous.server_time;
-                Some(MeasurementDelta {
+                Some(StatsDelta {
                     previous: previous.clone(),
                     current: current.clone(),
                     seconds,
@@ -71,21 +71,21 @@ impl MeasurementQueue {
 }
 
 #[derive(Debug)]
-pub struct BlockingMeasurementQueue {
-    queue: Arc<MeasurementQueue>,
+pub struct BlockingStatsQueue {
+    queue: Arc<StatsQueue>,
     handle: Handle,
 }
 
-impl BlockingMeasurementQueue {
-    pub fn new(queue: Arc<MeasurementQueue>, handle: Handle) -> Self {
-        BlockingMeasurementQueue { queue, handle }
+impl BlockingStatsQueue {
+    pub fn new(queue: Arc<StatsQueue>, handle: Handle) -> Self {
+        BlockingStatsQueue { queue, handle }
     }
 
-    pub fn insert(&self, host: String, m: Measurement) {
+    pub fn insert(&self, host: String, m: Stats) {
         self.handle.block_on(self.queue.insert(host, m))
     }
 
-    pub fn read_delta(&self, host: &str) -> Option<MeasurementDelta> {
+    pub fn read_delta(&self, host: &str) -> Option<StatsDelta> {
         self.handle.block_on(self.queue.read_delta(host))
     }
 }
