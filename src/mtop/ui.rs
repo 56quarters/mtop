@@ -1,4 +1,4 @@
-use crate::queue::{BlockingMeasurementQueue, MeasurementDelta};
+use crate::queue::{BlockingStatsQueue, StatsDelta};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use std::time::Duration;
@@ -176,7 +176,7 @@ fn host_tabs(hosts: &[String], index: usize) -> Tabs {
         .highlight_style(selected)
 }
 
-fn memory_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Gauge<'a> {
+fn memory_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let used = m.current.bytes as f64 / m.current.max_bytes as f64;
     let label = format!("{}/{}", units.bytes(m.current.bytes), units.bytes(m.current.max_bytes));
     Gauge::default()
@@ -186,7 +186,7 @@ fn memory_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Gauge<
         .label(label)
 }
 
-fn connections_gauge(m: &MeasurementDelta) -> Gauge {
+fn connections_gauge(m: &StatsDelta) -> Gauge {
     let used = m.current.curr_connections as f64 / m.current.max_connections as f64;
     let label = format!("{}/{}", m.current.curr_connections, m.current.max_connections);
     Gauge::default()
@@ -196,7 +196,7 @@ fn connections_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn hits_gauge(m: &MeasurementDelta) -> Gauge {
+fn hits_gauge(m: &StatsDelta) -> Gauge {
     let total = (m.current.get_flushed + m.current.get_expired + m.current.get_hits + m.current.get_misses)
         - (m.previous.get_flushed + m.previous.get_expired + m.previous.get_hits + m.previous.get_misses);
     let hits = m.current.get_hits - m.previous.get_hits;
@@ -210,7 +210,7 @@ fn hits_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn gets_gauge(m: &MeasurementDelta) -> Gauge {
+fn gets_gauge(m: &StatsDelta) -> Gauge {
     let diff = (m.current.cmd_get - m.previous.cmd_get) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
@@ -220,7 +220,7 @@ fn gets_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn sets_gauge(m: &MeasurementDelta) -> Gauge {
+fn sets_gauge(m: &StatsDelta) -> Gauge {
     let diff = (m.current.cmd_set - m.previous.cmd_set) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
@@ -230,7 +230,7 @@ fn sets_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn evictions_gauge(m: &MeasurementDelta) -> Gauge {
+fn evictions_gauge(m: &StatsDelta) -> Gauge {
     let diff = (m.current.evictions - m.previous.evictions) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
@@ -240,7 +240,7 @@ fn evictions_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn items_gauge(m: &MeasurementDelta) -> Gauge {
+fn items_gauge(m: &StatsDelta) -> Gauge {
     let label = format!("{}", m.current.curr_items);
     Gauge::default()
         .block(Block::default().title("Items").borders(Borders::ALL))
@@ -249,7 +249,7 @@ fn items_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn bytes_read_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Gauge<'a> {
+fn bytes_read_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.bytes_read - m.previous.bytes_read) / m.seconds;
     let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
@@ -259,7 +259,7 @@ fn bytes_read_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Ga
         .label(label)
 }
 
-fn bytes_written_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) -> Gauge<'a> {
+fn bytes_written_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.bytes_written - m.previous.bytes_written) / m.seconds;
     let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
@@ -269,7 +269,7 @@ fn bytes_written_gauge<'a>(m: &'a MeasurementDelta, units: &'a UnitFormatter) ->
         .label(label)
 }
 
-fn user_cpu_gauge(m: &MeasurementDelta) -> Gauge {
+fn user_cpu_gauge(m: &StatsDelta) -> Gauge {
     let diff = ((m.current.rusage_user - m.previous.rusage_user) / m.seconds as f64) * 100.0;
     let label = format!("{:.1}%", diff);
     Gauge::default()
@@ -279,7 +279,7 @@ fn user_cpu_gauge(m: &MeasurementDelta) -> Gauge {
         .label(label)
 }
 
-fn system_cpu_gauge(m: &MeasurementDelta) -> Gauge {
+fn system_cpu_gauge(m: &StatsDelta) -> Gauge {
     let diff = ((m.current.rusage_system - m.previous.rusage_system) / m.seconds as f64) * 100.0;
     let label = format!("{:.1}%", diff);
     Gauge::default()
@@ -290,15 +290,15 @@ fn system_cpu_gauge(m: &MeasurementDelta) -> Gauge {
 }
 
 pub struct Application {
-    measurements: BlockingMeasurementQueue,
+    stats: BlockingStatsQueue,
     hosts: Vec<String>,
     selected_host: usize,
 }
 
 impl Application {
-    pub fn new(hosts: &[String], measurements: BlockingMeasurementQueue) -> Self {
+    pub fn new(hosts: &[String], stats: BlockingStatsQueue) -> Self {
         Application {
-            measurements,
+            stats,
             hosts: Vec::from(hosts),
             selected_host: 0,
         }
@@ -328,8 +328,8 @@ impl Application {
         self.hosts.get(self.selected_host).cloned()
     }
 
-    pub fn current_delta(&self) -> Option<MeasurementDelta> {
-        self.current_host().and_then(|h| self.measurements.read_delta(&h))
+    pub fn current_delta(&self) -> Option<StatsDelta> {
+        self.current_host().and_then(|h| self.stats.read_delta(&h))
     }
 }
 

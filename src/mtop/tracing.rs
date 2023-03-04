@@ -6,6 +6,7 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::fmt::format::{DefaultFields, Format};
 use tracing_subscriber::FmtSubscriber;
 
+#[allow(clippy::type_complexity)]
 pub fn console_subscriber(
     level: tracing::Level,
 ) -> Result<FmtSubscriber<DefaultFields, Format, LevelFilter, fn() -> Stderr>, io::Error> {
@@ -15,6 +16,7 @@ pub fn console_subscriber(
         .finish())
 }
 
+#[allow(clippy::type_complexity)]
 pub fn file_subscriber(
     level: tracing::Level,
     path: PathBuf,
