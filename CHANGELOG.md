@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.0 - Unreleased
+## v0.3.0 - 2023-03-04
 
 - Introduce `mc` binary for running Memcached operations from the command line. #7
 
