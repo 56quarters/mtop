@@ -97,7 +97,6 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 process::exit(1);
             });
 
-            pool.put(client).await;
             if let Some(v) = results.get(&c.key) {
                 let _ = io::stdout().write_all(&v.data);
             }
@@ -108,9 +107,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 process::exit(1);
             });
 
-            pool.put(client).await;
             keys.sort();
-
             if let Err(e) = print_keys(&keys) {
                 tracing::warn!(message = "error flushing output", error = %e);
             }
@@ -123,6 +120,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         }
     }
 
+    pool.put(client).await;
     Ok(())
 }
 
