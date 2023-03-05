@@ -1,5 +1,5 @@
 use clap::{Parser, ValueHint};
-use mtop::client::{Item, MemcachedPool};
+use mtop::client::{Item, MemcachedPool, Value};
 use std::error;
 use std::io::{self, BufWriter, Write};
 use std::{env, process};
@@ -87,18 +87,20 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     match opts.mode {
         SubCommand::Delete(c) => {
             if let Err(e) = client.delete(c.key.clone()).await {
-                tracing::error!(message = "unable to delete key", key = c.key, host = opts.host, error = %e);
+                tracing::error!(message = "unable to delete item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             }
         }
         SubCommand::Get(c) => {
             let results = client.get(vec![c.key.clone()]).await.unwrap_or_else(|e| {
-                tracing::error!(message = "unable to get key", key = c.key, host = opts.host, error = %e);
+                tracing::error!(message = "unable to get item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             });
 
             if let Some(v) = results.get(&c.key) {
-                let _ = io::stdout().write_all(&v.data);
+                if let Err(e) = print_data(v) {
+                    tracing::warn!(message = "error writing output", error = %e);
+                }
             }
         }
         SubCommand::Keys(_) => {
@@ -109,12 +111,12 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
             keys.sort();
             if let Err(e) = print_keys(&keys) {
-                tracing::warn!(message = "error flushing output", error = %e);
+                tracing::warn!(message = "error writing output", error = %e);
             }
         }
         SubCommand::Touch(c) => {
             if let Err(e) = client.touch(c.key.clone(), c.ttl).await {
-                tracing::error!(message = "unable to touch key", key = c.key, host = opts.host, error = %e);
+                tracing::error!(message = "unable to touch item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             }
         }
@@ -122,6 +124,14 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     pool.put(client).await;
     Ok(())
+}
+
+fn print_data(val: &Value) -> io::Result<()> {
+    let out = io::stdout().lock();
+    let mut buf = BufWriter::new(out);
+
+    buf.write_all(&val.data)?;
+    buf.flush()
 }
 
 fn print_keys(items: &[Item]) -> io::Result<()> {

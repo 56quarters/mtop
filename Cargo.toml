@@ -11,7 +11,7 @@ keywords = ["top", "memcached"]
 edition = "2021"
 
 [dependencies]
-clap = { version = "4.1.8", features = ["cargo", "derive", "wrap_help"] }
+clap = { version = "4.1.8", features = ["cargo", "derive", "help", "error-context", "std", "usage", "wrap_help"], default_features = false }
 crossterm = "0.26.0"
 tokio = { version = "1.14.0", features = ["full"] }
 tracing = "0.1.11"
