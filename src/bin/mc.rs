@@ -1,5 +1,5 @@
 use clap::{Parser, ValueHint};
-use mtop::client::{Item, MemcachedPool, Value};
+use mtop::client::{MemcachedPool, Meta, Value};
 use std::error;
 use std::io::{self, BufWriter, Write};
 use std::{env, process};
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             }
         }
         SubCommand::Get(c) => {
-            let results = client.get(vec![c.key.clone()]).await.unwrap_or_else(|e| {
+            let results = client.get(&[c.key.clone()]).await.unwrap_or_else(|e| {
                 tracing::error!(message = "unable to get item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             });
@@ -104,13 +104,13 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             }
         }
         SubCommand::Keys(_) => {
-            let mut keys = client.keys().await.unwrap_or_else(|e| {
+            let mut metas = client.metas().await.unwrap_or_else(|e| {
                 tracing::error!(message = "unable to list keys", host = opts.host, error = %e);
                 process::exit(1);
             });
 
-            keys.sort();
-            if let Err(e) = print_keys(&keys) {
+            metas.sort();
+            if let Err(e) = print_keys(&metas) {
                 tracing::warn!(message = "error writing output", error = %e);
             }
         }
@@ -134,12 +134,12 @@ fn print_data(val: &Value) -> io::Result<()> {
     buf.flush()
 }
 
-fn print_keys(items: &[Item]) -> io::Result<()> {
+fn print_keys(metas: &[Meta]) -> io::Result<()> {
     let out = io::stdout().lock();
     let mut buf = BufWriter::new(out);
 
-    for item in items {
-        let _ = writeln!(buf, "{}", item.key);
+    for meta in metas {
+        let _ = writeln!(buf, "{}", meta.key);
     }
 
     buf.flush()

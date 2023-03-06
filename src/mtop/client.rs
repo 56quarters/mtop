@@ -127,6 +127,8 @@ impl TryFrom<HashMap<String, String>> for Stats {
     }
 }
 
+/// Parse the named field from a map of fields and their values or return `MtopError::Internal`
+/// if it cannot be parsed.
 fn parse_field<T>(key: &str, map: &HashMap<String, String>) -> Result<T, MtopError>
 where
     T: FromStr,
@@ -136,14 +138,23 @@ where
         .ok_or_else(|| MtopError::Internal(format!("field {} missing", key)))
         .and_then(|v| {
             v.parse()
-                .map_err(|e| MtopError::Internal(format!("field {} value {}: {}", key, v, e)))
+                .map_err(|e| MtopError::Internal(format!("field {} value '{}': {}", key, v, e)))
         })
+}
+
+/// Parse a single value or return `MtopError::Internal` if it cannot be parsed.
+fn parse_value<T>(val: &str, line: &str) -> Result<T, MtopError>
+where
+    T: FromStr + fmt::Display,
+    <T as FromStr>::Err: fmt::Display,
+{
+    val.parse()
+        .map_err(|e| MtopError::Internal(format!("parsing {} from '{}': {}", val, line, e)))
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Value {
     pub key: String,
-    pub len: u64,
     pub cas: u64,
     pub flags: u64,
     pub data: Vec<u8>,
@@ -162,19 +173,31 @@ impl Ord for Value {
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
-pub struct Item {
+pub struct Meta {
     pub key: String,
     pub expires: u32,
     pub last_access: u32,
 }
 
-impl PartialOrd for Item {
+impl TryFrom<HashMap<String, String>> for Meta {
+    type Error = MtopError;
+
+    fn try_from(value: HashMap<String, String>) -> Result<Self, Self::Error> {
+        Ok(Meta {
+            key: parse_field("key", &value)?,
+            expires: parse_field("exp", &value)?,
+            last_access: parse_field("la", &value)?,
+        })
+    }
+}
+
+impl PartialOrd for Meta {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.key.partial_cmp(&other.key)
     }
 }
 
-impl Ord for Item {
+impl Ord for Meta {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key.cmp(&other.key)
     }
@@ -302,16 +325,19 @@ where
         }
     }
 
+    /// Get a `Stats` object with the current values of the interesting stats for the server.
     pub async fn stats(&mut self) -> Result<Stats, MtopError> {
         self.send(Command::Stats).await?;
         let mut raw = HashMap::new();
 
+        // Collect each of the returned `STAT` lines into key-value pairs and create
+        // a single Stats object from them with each of the expected fields.
         loop {
             let line = self.read.next_line().await?;
             match line.as_deref() {
                 Some("END") | None => break,
                 Some(v) => {
-                    let (key, val) = Self::parse_stat(v)?;
+                    let (key, val) = Self::parse_stat_line(v)?;
                     raw.insert(key, val);
                 }
             }
@@ -320,8 +346,9 @@ where
         Stats::try_from(raw)
     }
 
-    fn parse_stat(line: &str) -> Result<(String, String), MtopError> {
+    fn parse_stat_line(line: &str) -> Result<(String, String), MtopError> {
         let mut parts = line.splitn(3, ' ');
+
         match (parts.next(), parts.next(), parts.next()) {
             (Some("STAT"), Some(key), Some(val)) => Ok((key.to_owned(), val.to_owned())),
             _ => {
@@ -334,7 +361,9 @@ where
         }
     }
 
-    pub async fn keys(&mut self) -> Result<Vec<Item>, MtopError> {
+    /// Get a `Meta` object for every item in the cache which includes its key and expiration
+    /// time as a UNIX timestamp.
+    pub async fn metas(&mut self) -> Result<Vec<Meta>, MtopError> {
         self.send(Command::CrawlerMetadump).await?;
         let mut out = Vec::new();
 
@@ -359,28 +388,30 @@ where
         Ok(out)
     }
 
-    fn parse_crawler_meta(line: &str) -> Result<Item, MtopError> {
-        let mut kv = HashMap::new();
+    fn parse_crawler_meta(line: &str) -> Result<Meta, MtopError> {
+        let mut raw = HashMap::new();
 
         for p in line.split(' ') {
-            // TODO: Need to URI decode the value
-            let (key, val) = p.split_once('=').unwrap();
-            kv.insert(key.to_owned(), val.to_owned());
+            let (key, val) = p
+                .split_once('=')
+                .ok_or_else(|| MtopError::Internal(format!("unexpected metadump format '{}'", line)))?;
+            let decoded = urlencoding::decode(val)
+                .map_err(|e| MtopError::Internal(format!("unexpected metadump encoding '{}': {}", line, e)))?;
+
+            raw.insert(key.to_owned(), decoded.into_owned());
         }
 
-        Ok(Item {
-            key: parse_field("key", &kv)?,
-            expires: parse_field("exp", &kv)?,
-            last_access: parse_field("la", &kv)?,
-        })
+        Meta::try_from(raw)
     }
 
-    pub async fn get(&mut self, keys: Vec<String>) -> Result<HashMap<String, Value>, MtopError> {
+    /// Get a map of the requested keys and their corresponding `Value` in the cache
+    /// including the key, flags, and data.
+    pub async fn get(&mut self, keys: &[String]) -> Result<HashMap<String, Value>, MtopError> {
         if keys.is_empty() {
             return Err(MtopError::Internal("missing required keys".to_owned()));
         }
 
-        self.send(Command::Gets(&keys)).await?;
+        self.send(Command::Gets(keys)).await?;
         let mut out = HashMap::with_capacity(keys.len());
 
         loop {
@@ -388,7 +419,7 @@ where
             match line.as_deref() {
                 Some("END") | None => break,
                 Some(v) => {
-                    let value = self.parse_gets_value(v).await?;
+                    let value = Self::parse_gets_value(v, self.read.get_mut()).await?;
                     out.insert(value.key.clone(), value);
                 }
             }
@@ -397,24 +428,22 @@ where
         Ok(out)
     }
 
-    async fn parse_gets_value(&mut self, line: &str) -> Result<Value, MtopError> {
+    async fn parse_gets_value(line: &str, reader: &mut BufReader<R>) -> Result<Value, MtopError> {
         let mut parts = line.splitn(5, ' ');
 
         match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("VALUE"), Some(k), Some(flags), Some(len), Some(cas)) => {
-                let flags = flags.parse::<u64>().unwrap();
-                let len = len.parse::<u64>().unwrap();
-                let cas = cas.parse::<u64>().unwrap();
+                let flags: u64 = parse_value(flags, line)?;
+                let len: u64 = parse_value(len, line)?;
+                let cas: u64 = parse_value(cas, line)?;
 
                 // Two extra bytes to read the trailing \r\n but then truncate them.
                 let mut data = Vec::with_capacity(len as usize + 2);
-                let reader = self.read.get_mut();
                 reader.take(len + 2).read_to_end(&mut data).await?;
                 data.truncate(len as usize);
 
                 Ok(Value {
                     key: k.to_owned(),
-                    len,
                     flags,
                     cas,
                     data,
