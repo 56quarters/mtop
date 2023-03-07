@@ -109,6 +109,14 @@ kubectl port-forward --namespace=example memcached-0 11211:11211
 mtop localhost:11211
 ```
 
+### UI
+
+Within the `mtop` UI, there are a few keys that control behavior.
+
+* `q` to quit.
+* `l` or `right-arrow` to select the next host.
+* `h` or `left-arrow` to select the previous host.
+
 ## Limitations
 
 ### No TLS connections
