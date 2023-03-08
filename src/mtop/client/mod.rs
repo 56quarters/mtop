@@ -6,7 +6,6 @@ use std::io;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, Lines};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
@@ -289,39 +288,52 @@ enum Command<'a> {
     Delete(&'a str),
     Gets(&'a [String]),
     Stats,
+    Set(&'a str, u64, u32, &'a [u8]),
     Touch(&'a str, u32),
 }
 
-impl<'a> fmt::Display for Command<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CrawlerMetadump => write!(f, "lru_crawler metadump all"),
-            Self::Delete(key) => write!(f, "delete {}", key),
-            Self::Gets(keys) => write!(f, "gets {}", keys.join(" ")),
-            Self::Stats => write!(f, "stats"),
-            Self::Touch(key, ttl) => write!(f, "touch {} {}", key, ttl),
-        }
+impl<'a> Command<'a> {
+    fn try_into_bytes(self) -> io::Result<Vec<u8>> {
+        let buf = match self {
+            Self::CrawlerMetadump => "lru_crawler metadump all\r\n".to_owned().into_bytes(),
+            Self::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
+            Self::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
+            Self::Stats => "stats\r\n".to_owned().into_bytes(),
+            Self::Set(key, flags, ttl, data) => {
+                let mut buf = Vec::new();
+                io::Write::write_all(
+                    &mut buf,
+                    format!("set {} {} {} {}\r\n", key, flags, ttl, data.len()).as_bytes(),
+                )?;
+                io::Write::write_all(&mut buf, data)?;
+                io::Write::write_all(&mut buf, "\r\n".as_bytes())?;
+                buf
+            }
+            Self::Touch(key, ttl) => format!("touch {} {}\r\n", key, ttl).into_bytes(),
+        };
+
+        Ok(buf)
     }
 }
 
-pub struct Memcached<R, W>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    read: Lines<BufReader<R>>,
-    write: BufWriter<W>,
+pub struct Memcached {
+    read: Lines<BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>>>,
+    write: BufWriter<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
 }
 
-impl<R, W> Memcached<R, W>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    pub fn new(read: R, write: W) -> Self {
+impl Memcached {
+    pub fn new<R, W>(read: R, write: W) -> Self
+    where
+        R: AsyncRead + Send + Sync + Unpin + 'static,
+        W: AsyncWrite + Send + Sync + Unpin + 'static,
+    {
+        // Need to set the types here explicitly otherwise they get inferred as `BufReader<Box<R>>`
+        let buf_reader: BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>> = BufReader::new(Box::new(read));
+        let buf_writer: BufWriter<Box<dyn AsyncWrite + Send + Sync + Unpin>> = BufWriter::new(Box::new(write));
+
         Memcached {
-            read: BufReader::new(read).lines(),
-            write: BufWriter::new(write),
+            read: buf_reader.lines(),
+            write: buf_writer,
         }
     }
 
@@ -370,7 +382,10 @@ where
         loop {
             let line = self.read.next_line().await?;
             match line.as_deref() {
-                Some("END") | None => break,
+                Some("END") | None => {
+                    tracing::debug!("breaking on line {:?}", line);
+                    break;
+                }
                 Some(v) => {
                     // Check for an error first because the `metadump` command doesn't
                     // have any sort of prefix for each result line like `STAT` or `VALUE`
@@ -419,7 +434,7 @@ where
             match line.as_deref() {
                 Some("END") | None => break,
                 Some(v) => {
-                    let value = Self::parse_gets_value(v, self.read.get_mut()).await?;
+                    let value = self.parse_gets_value(v).await?;
                     out.insert(value.key.clone(), value);
                 }
             }
@@ -428,7 +443,7 @@ where
         Ok(out)
     }
 
-    async fn parse_gets_value(line: &str, reader: &mut BufReader<R>) -> Result<Value, MtopError> {
+    async fn parse_gets_value(&mut self, line: &str) -> Result<Value, MtopError> {
         let mut parts = line.splitn(5, ' ');
 
         match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
@@ -439,6 +454,7 @@ where
 
                 // Two extra bytes to read the trailing \r\n but then truncate them.
                 let mut data = Vec::with_capacity(len as usize + 2);
+                let reader = self.read.get_mut();
                 reader.take(len + 2).read_to_end(&mut data).await?;
                 data.truncate(len as usize);
 
@@ -459,6 +475,15 @@ where
                     Err(MtopError::Internal(format!("unable to parse '{}'", line)))
                 }
             }
+        }
+    }
+
+    pub async fn set(&mut self, key: String, flags: u64, ttl: u32, data: Vec<u8>) -> Result<(), MtopError> {
+        self.send(Command::Set(&key, flags, ttl, &data)).await?;
+        if let Some(v) = self.read.next_line().await? {
+            Self::parse_simple_response(&v, "STORED")
+        } else {
+            Err(MtopError::Internal("unexpected empty response".to_owned()))
         }
     }
 
@@ -507,22 +532,20 @@ where
         Some(ProtocolError { kind, message })
     }
 
-    async fn send<T>(&mut self, cmd: T) -> Result<(), MtopError>
-    where
-        T: fmt::Display,
-    {
-        self.write.write_all(format!("{}\r\n", cmd).as_bytes()).await?;
+    async fn send<'a>(&'a mut self, cmd: Command<'a>) -> Result<(), MtopError> {
+        let cmd_bytes = cmd.try_into_bytes()?;
+        self.write.write_all(&cmd_bytes).await?;
         Ok(self.write.flush().await?)
     }
 }
 
 pub struct PooledMemcached {
-    inner: Memcached<OwnedReadHalf, OwnedWriteHalf>,
+    inner: Memcached,
     host: String,
 }
 
 impl Deref for PooledMemcached {
-    type Target = Memcached<OwnedReadHalf, OwnedWriteHalf>;
+    type Target = Memcached;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -537,7 +560,7 @@ impl DerefMut for PooledMemcached {
 
 #[derive(Default)]
 pub struct MemcachedPool {
-    clients: Mutex<HashMap<String, Memcached<OwnedReadHalf, OwnedWriteHalf>>>,
+    clients: Mutex<HashMap<String, Memcached>>,
 }
 
 impl MemcachedPool {
@@ -566,7 +589,7 @@ impl MemcachedPool {
     }
 }
 
-async fn connect(host: &str) -> Result<Memcached<OwnedReadHalf, OwnedWriteHalf>, MtopError> {
+async fn connect(host: &str) -> Result<Memcached, MtopError> {
     let c = TcpStream::connect(host).await?;
     let (r, w) = c.into_split();
     Ok(Memcached::new(r, w))
