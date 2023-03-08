@@ -177,22 +177,22 @@ fn host_tabs(hosts: &[String], index: usize) -> Tabs {
 }
 
 fn memory_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
-    let used = m.current.bytes as f64 / m.current.max_bytes as f64;
+    let ratio = (m.current.bytes as f64 / m.current.max_bytes as f64).min(1.0);
     let label = format!("{}/{}", units.bytes(m.current.bytes), units.bytes(m.current.max_bytes));
     Gauge::default()
         .block(Block::default().title("Memory").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Magenta))
-        .percent((used * 100.0) as u16)
+        .ratio(ratio)
         .label(label)
 }
 
 fn connections_gauge(m: &StatsDelta) -> Gauge {
-    let used = m.current.curr_connections as f64 / m.current.max_connections as f64;
+    let ratio = (m.current.curr_connections as f64 / m.current.max_connections as f64).min(1.0);
     let label = format!("{}/{}", m.current.curr_connections, m.current.max_connections);
     Gauge::default()
         .block(Block::default().title("Connections").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Yellow))
-        .percent((used * 100.0) as u16)
+        .ratio(ratio)
         .label(label)
 }
 
@@ -200,13 +200,13 @@ fn hits_gauge(m: &StatsDelta) -> Gauge {
     let total = (m.current.get_flushed + m.current.get_expired + m.current.get_hits + m.current.get_misses)
         - (m.previous.get_flushed + m.previous.get_expired + m.previous.get_hits + m.previous.get_misses);
     let hits = m.current.get_hits - m.previous.get_hits;
-    let ratio = if total == 0 { 0.0 } else { hits as f64 / total as f64 };
+    let ratio = (if total == 0 { 0.0 } else { hits as f64 / total as f64 }).min(1.0);
 
     let label = format!("{:.1}%", ratio * 100.0);
     Gauge::default()
         .block(Block::default().title("Hit Ratio").borders(Borders::ALL))
         .gauge_style(Style::default().fg(Color::Blue))
-        .percent((ratio * 100.0) as u16)
+        .ratio(ratio)
         .label(label)
 }
 

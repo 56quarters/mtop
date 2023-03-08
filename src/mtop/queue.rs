@@ -30,11 +30,28 @@ impl StatsQueue {
         let q = map.entry(host).or_insert_with(VecDeque::new);
 
         if let Some(prev) = q.back() {
-            if m.uptime <= prev.uptime {
-                // The most recent entry in the queue has a higher or the same uptime than the
-                // measurement we're inserting now. This means there was a memcached restart and
-                // counters are all reset to 0. Clear the existing queue to avoid underflow (since
-                // we assume counters can only increase).
+            if m.uptime == prev.uptime {
+                // The most recent entry in the queue has the same uptime as the measurement we're
+                // inserting now. This can happen when the server is under heavy load and it isn't
+                // able to update the variable it uses to keep track of uptime. Instead of clearing
+                // the entire measurement queue, skip this insert instead (less disruptive to users
+                // to miss a measurement than cause the UI to reset).
+                tracing::debug!(
+                    message = "server uptime did not advanced, dropping measurement",
+                    old_uptime = prev.uptime,
+                    current_uptime = m.uptime,
+                );
+                return;
+            } else if m.uptime < prev.uptime {
+                // The most recent entry in the queue has a higher uptime than the measurement
+                // we're inserting now. This means there was a restart and counters are all reset
+                // to 0. Clear the existing queue to avoid underflow (since we assume counters can
+                // only increase).
+                tracing::debug!(
+                    message = "server uptime reset detected, clearing measurement queue",
+                    old_uptime = prev.uptime,
+                    current_uptime = m.uptime
+                );
                 q.clear();
             } else if m.server_time <= prev.server_time {
                 // Make sure that any calculations that depend on the number of seconds elapsed
@@ -42,6 +59,11 @@ impl StatsQueue {
                 // happen unless we get really unlucky with the frequency of updates or the
                 // memcached server is being purposefully malicious but it doesn't hurt to be
                 // defensive.
+                tracing::debug!(
+                    message = "server timestamp did not advance, dropping measurement",
+                    old_timestamp = prev.server_time,
+                    current_timestamp = m.server_time
+                );
                 return;
             }
         }

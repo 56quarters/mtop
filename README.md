@@ -109,6 +109,24 @@ kubectl port-forward --namespace=example memcached-0 11211:11211
 mtop localhost:11211
 ```
 
+### TLS connection to server
+
+```
+mtop --tls-enabled cache01.example.com:11211
+```
+
+### TLS with a custom CA
+
+```
+mtop --tls-enabled --tls-ca memcached-ca-cert.pem cache01.example.com:11211
+```
+
+### TLS with client authentication and a custom CA
+
+```
+mtop --tls-enabled --tls-ca memcached-ca-cert.pem --tls-cert memcached-client-cert.pem --tls-key memcached-client-key.pem cache01.example.com:11211
+```
+
 ### UI
 
 Within the `mtop` UI, there are a few keys that control behavior.
@@ -118,11 +136,6 @@ Within the `mtop` UI, there are a few keys that control behavior.
 * `h` or `left-arrow` to select the previous host.
 
 ## Limitations
-
-### No TLS connections
-
-`mtop` currently only supports plain-text (unencrypted) connections to servers. TLS support
-*may* be added in a future version.
 
 ### No historical data
 

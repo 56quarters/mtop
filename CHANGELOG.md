@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.0 - ????-??-??
+
+- Add the ability to use mTLS connections to Memcached for `mc` and `mtop`. #13
+
 ## v0.3.0 - 2023-03-04
 
 - Introduce `mc` binary for running Memcached operations from the command line. #7
