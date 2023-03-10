@@ -137,11 +137,7 @@ impl UpdateTask {
     pub async fn update(&self) -> Result<(), MtopError> {
         for host in self.hosts.iter() {
             let mut client = self.pool.get(host).await?;
-            let stats = client
-                .stats()
-                .instrument(tracing::span!(Level::DEBUG, "read_stats"))
-                .await?;
-
+            let stats = client.stats().instrument(tracing::span!(Level::DEBUG, "stats")).await?;
             self.queue.insert(host.to_owned(), stats).await;
             self.pool.put(client).await;
         }

@@ -1,8 +1,9 @@
 use clap::{Parser, ValueHint};
 use mtop::client::{MemcachedPool, Meta, Value};
 use std::error;
-use std::io::{self, BufWriter, Write};
+use std::io;
 use std::{env, process};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tracing::Level;
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
@@ -30,10 +31,11 @@ enum SubCommand {
     Delete(DeleteCommand),
     Get(GetCommand),
     Keys(KeysCommand),
+    Set(SetCommand),
     Touch(TouchCommand),
 }
 
-/// Delete an item associated with a key.
+/// Delete an item in the cache.
 #[derive(Debug, Parser)]
 struct DeleteCommand {
     /// Key of the item to delete. If the item  does not exist the command will exit with an
@@ -42,7 +44,7 @@ struct DeleteCommand {
     key: String,
 }
 
-/// Get the value of an item associated with a key.
+/// Get the value of an item in the cache.
 #[derive(Debug, Parser)]
 struct GetCommand {
     /// Key of the item to get. The raw contents of this item will be written to standard out.
@@ -52,11 +54,28 @@ struct GetCommand {
     key: String,
 }
 
-/// Show keys for all items in a server.
+/// Show keys for all items in the cache.
 #[derive(Debug, Parser)]
 struct KeysCommand;
 
-/// Update the TTL of an item associated with a key.
+/// Set a value in the cache.
+///
+/// The value will be read from standard input. You can use shell pipes or redirects to set
+/// the contents of files as values.
+#[derive(Debug, Parser)]
+struct SetCommand {
+    /// Key of the item to set the value for.
+    #[arg(required = true)]
+    key: String,
+
+    /// TTL to set for the item, in seconds. If the TTL is longer than the number of seconds
+    /// in 30 days, it will be treated as a UNIX timestamp, setting the item to expire at a
+    /// particular date/time.
+    #[arg(required = true)]
+    ttl: u32,
+}
+
+/// Update the TTL of an item in the cache.
 #[derive(Debug, Parser)]
 struct TouchCommand {
     /// Key of the item to update the TTL of. If the item does not exist the command will exit
@@ -98,7 +117,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             });
 
             if let Some(v) = results.get(&c.key) {
-                if let Err(e) = print_data(v) {
+                if let Err(e) = print_data(v).await {
                     tracing::warn!(message = "error writing output", error = %e);
                 }
             }
@@ -110,8 +129,19 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             });
 
             metas.sort();
-            if let Err(e) = print_keys(&metas) {
+            if let Err(e) = print_keys(&metas).await {
                 tracing::warn!(message = "error writing output", error = %e);
+            }
+        }
+        SubCommand::Set(c) => {
+            let buf = read_input().await.unwrap_or_else(|e| {
+                tracing::error!(message = "unable to read item data from stdin", error = %e);
+                process::exit(1);
+            });
+
+            if let Err(e) = client.set(c.key.clone(), 0, c.ttl, buf).await {
+                tracing::error!(message = "unable to set item", key = c.key, host = opts.host, error = %e);
+                process::exit(1);
             }
         }
         SubCommand::Touch(c) => {
@@ -126,21 +156,24 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     Ok(())
 }
 
-fn print_data(val: &Value) -> io::Result<()> {
-    let out = io::stdout().lock();
-    let mut buf = BufWriter::new(out);
-
-    buf.write_all(&val.data)?;
-    buf.flush()
+async fn read_input() -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut input = BufReader::new(tokio::io::stdin());
+    input.read_to_end(&mut buf).await?;
+    Ok(buf)
 }
 
-fn print_keys(metas: &[Meta]) -> io::Result<()> {
-    let out = io::stdout().lock();
-    let mut buf = BufWriter::new(out);
+async fn print_data(val: &Value) -> io::Result<()> {
+    let mut output = BufWriter::new(tokio::io::stdout());
+    output.write_all(&val.data).await?;
+    output.flush().await
+}
 
+async fn print_keys(metas: &[Meta]) -> io::Result<()> {
+    let mut output = BufWriter::new(tokio::io::stdout());
     for meta in metas {
-        let _ = writeln!(buf, "{}", meta.key);
+        output.write_all(format!("{}\n", meta.key).as_bytes()).await?;
     }
 
-    buf.flush()
+    output.flush().await
 }
