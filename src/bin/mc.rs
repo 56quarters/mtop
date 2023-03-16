@@ -213,7 +213,7 @@ async fn print_data(val: &Value) -> io::Result<()> {
 async fn print_keys(metas: &[Meta]) -> io::Result<()> {
     let mut output = BufWriter::new(tokio::io::stdout());
     for meta in metas {
-        output.write_all(format!("{}\n", meta.key).as_bytes()).await?;
+        output.write_all(format!("{}\t{}\n", meta.key, meta.size).as_bytes()).await?;
     }
 
     output.flush().await
