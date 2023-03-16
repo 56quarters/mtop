@@ -1,9 +1,11 @@
-use clap::{Parser, ValueHint};
-use mtop::client::{MemcachedPool, Meta, Value};
+use clap::{Args, Parser, Subcommand, ValueHint};
+use mtop::client::{MemcachedPool, Meta, TLSConfig, Value};
 use std::error;
 use std::io;
+use std::path::PathBuf;
 use std::{env, process};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::runtime::Handle;
 use tracing::Level;
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
@@ -22,12 +24,36 @@ struct McConfig {
     #[arg(long, default_value_t = DEFAULT_HOST.to_owned(), value_hint = ValueHint::Hostname)]
     host: String,
 
+    /// Enable TLS connections to the Memcached server.
+    #[arg(long)]
+    tls_enabled: bool,
+
+    /// Optional certificate authority to use for validating the server certificate instead of
+    /// the default root certificates.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    tls_ca: Option<PathBuf>,
+
+    /// Optional server name to use for validating the server certificate. If not set, the
+    /// hostname of the server is used for checking that the certificate matches the server.
+    #[arg(long)]
+    tls_server_name: Option<String>,
+
+    /// Optional client certificate to use to authenticate with the Memcached server. Note that
+    /// this may or may not be required based on how the Memcached server is configured.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    tls_cert: Option<PathBuf>,
+
+    /// Optional client key to use to authenticate with the Memcached server. Note that this may
+    /// or may not be required based on how the Memcached server is configured.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    tls_key: Option<PathBuf>,
+
     #[command(subcommand)]
-    mode: SubCommand,
+    mode: Action,
 }
 
-#[derive(Debug, Parser)]
-enum SubCommand {
+#[derive(Debug, Subcommand)]
+enum Action {
     Delete(DeleteCommand),
     Get(GetCommand),
     Keys(KeysCommand),
@@ -36,7 +62,7 @@ enum SubCommand {
 }
 
 /// Delete an item in the cache.
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct DeleteCommand {
     /// Key of the item to delete. If the item  does not exist the command will exit with an
     /// error status.
@@ -45,7 +71,7 @@ struct DeleteCommand {
 }
 
 /// Get the value of an item in the cache.
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct GetCommand {
     /// Key of the item to get. The raw contents of this item will be written to standard out.
     /// This has the potential to mess up your terminal. Consider piping the output to a file
@@ -55,14 +81,14 @@ struct GetCommand {
 }
 
 /// Show keys for all items in the cache.
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct KeysCommand;
 
 /// Set a value in the cache.
 ///
 /// The value will be read from standard input. You can use shell pipes or redirects to set
 /// the contents of files as values.
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct SetCommand {
     /// Key of the item to set the value for.
     #[arg(required = true)]
@@ -76,7 +102,7 @@ struct SetCommand {
 }
 
 /// Update the TTL of an item in the cache.
-#[derive(Debug, Parser)]
+#[derive(Debug, Args)]
 struct TouchCommand {
     /// Key of the item to update the TTL of. If the item does not exist the command will exit
     /// with an error status.
@@ -97,20 +123,35 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let console_subscriber = mtop::tracing::console_subscriber(opts.log_level)?;
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
-    let pool = MemcachedPool::new();
+    let pool = MemcachedPool::new(
+        Handle::current(),
+        TLSConfig {
+            enabled: opts.tls_enabled,
+            ca_path: opts.tls_ca,
+            cert_path: opts.tls_cert,
+            key_path: opts.tls_key,
+            server_name: opts.tls_server_name,
+        },
+    )
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!(message = "unable to initialize memcached client", host = opts.host, error = %e);
+        process::exit(1);
+    });
+
     let mut client = pool.get(&opts.host).await.unwrap_or_else(|e| {
         tracing::error!(message = "unable to connect", host = opts.host, error = %e);
         process::exit(1);
     });
 
     match opts.mode {
-        SubCommand::Delete(c) => {
+        Action::Delete(c) => {
             if let Err(e) = client.delete(c.key.clone()).await {
                 tracing::error!(message = "unable to delete item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             }
         }
-        SubCommand::Get(c) => {
+        Action::Get(c) => {
             let results = client.get(&[c.key.clone()]).await.unwrap_or_else(|e| {
                 tracing::error!(message = "unable to get item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
@@ -122,7 +163,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 }
             }
         }
-        SubCommand::Keys(_) => {
+        Action::Keys(_) => {
             let mut metas = client.metas().await.unwrap_or_else(|e| {
                 tracing::error!(message = "unable to list keys", host = opts.host, error = %e);
                 process::exit(1);
@@ -133,7 +174,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 tracing::warn!(message = "error writing output", error = %e);
             }
         }
-        SubCommand::Set(c) => {
+        Action::Set(c) => {
             let buf = read_input().await.unwrap_or_else(|e| {
                 tracing::error!(message = "unable to read item data from stdin", error = %e);
                 process::exit(1);
@@ -144,7 +185,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 process::exit(1);
             }
         }
-        SubCommand::Touch(c) => {
+        Action::Touch(c) => {
             if let Err(e) = client.touch(c.key.clone(), c.ttl).await {
                 tracing::error!(message = "unable to touch item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);

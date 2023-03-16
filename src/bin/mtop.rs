@@ -1,5 +1,5 @@
 use clap::{Parser, ValueHint};
-use mtop::client::{MemcachedPool, MtopError};
+use mtop::client::{MemcachedPool, MtopError, TLSConfig};
 use mtop::queue::{BlockingStatsQueue, StatsQueue};
 use std::env;
 use std::path::PathBuf;
@@ -32,6 +32,30 @@ struct MtopConfig {
     #[arg(long, value_hint = ValueHint::FilePath)]
     log_file: Option<PathBuf>,
 
+    /// Enable TLS connections to the Memcached server.
+    #[arg(long)]
+    tls_enabled: bool,
+
+    /// Optional certificate authority to use for validating the server certificate instead of
+    /// the default root certificates.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    tls_ca: Option<PathBuf>,
+
+    /// Optional server name to use for validating the server certificate. If not set, the
+    /// hostname of the server is used for checking that the certificate matches the server.
+    #[arg(long)]
+    tls_server_name: Option<String>,
+
+    /// Optional client certificate to use to authenticate with the Memcached server. Note that
+    /// this may or may not be required based on how the Memcached server is configured.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    tls_cert: Option<PathBuf>,
+
+    /// Optional client key to use to authenticate with the Memcached server. Note that this may
+    /// or may not be required based on how the Memcached server is configured.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    tls_key: Option<PathBuf>,
+
     /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least
     /// once and may be used multiple times (separated by spaces).
     #[arg(required = true, value_hint = ValueHint::Hostname)]
@@ -60,11 +84,27 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
     let measurements_ref = measurements.clone();
 
+    let pool = MemcachedPool::new(
+        Handle::current(),
+        TLSConfig {
+            enabled: opts.tls_enabled,
+            ca_path: opts.tls_ca,
+            cert_path: opts.tls_cert,
+            key_path: opts.tls_key,
+            server_name: opts.tls_server_name,
+        },
+    )
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!(message = "unable to initialize memcached client", hosts = ?opts.hosts, error = %e);
+        process::exit(1);
+    });
+
     // Run the initial connection to each server once in the main thread to make
     // bad hostnames easier to spot.
-    let update_task = UpdateTask::new(&opts.hosts, measurements_ref);
+    let update_task = UpdateTask::new(&opts.hosts, pool, measurements_ref);
     update_task.connect().await.unwrap_or_else(|e| {
-        tracing::error!(message = "failed to initialize memcached clients", hosts = ?opts.hosts, error = %e);
+        tracing::error!(message = "unable to connect to memcached servers", hosts = ?opts.hosts, error = %e);
         process::exit(1);
     });
 
@@ -117,17 +157,18 @@ pub struct UpdateTask {
 }
 
 impl UpdateTask {
-    pub fn new(hosts: &[String], queue: Arc<StatsQueue>) -> Self {
+    pub fn new(hosts: &[String], pool: MemcachedPool, queue: Arc<StatsQueue>) -> Self {
         UpdateTask {
-            queue,
             hosts: Vec::from(hosts),
-            pool: MemcachedPool::new(),
+            pool,
+            queue,
         }
     }
 
     pub async fn connect(&self) -> Result<(), MtopError> {
         for host in self.hosts.iter() {
-            let client = self.pool.get(host).await?;
+            let mut client = self.pool.get(host).await?;
+            client.ping().await?;
             self.pool.put(client).await;
         }
 
