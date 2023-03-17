@@ -173,6 +173,7 @@ pub struct Meta {
     pub key: String,
     pub expires: u32,
     pub last_access: u32,
+    pub size: u64,
 }
 
 impl TryFrom<HashMap<String, String>> for Meta {
@@ -183,6 +184,7 @@ impl TryFrom<HashMap<String, String>> for Meta {
             key: parse_field("key", &value)?,
             expires: parse_field("exp", &value)?,
             last_access: parse_field("la", &value)?,
+            size: parse_field("size", &value)?,
         })
     }
 }
