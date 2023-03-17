@@ -171,8 +171,7 @@ impl Ord for Value {
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Meta {
     pub key: String,
-    pub expires: u32,
-    pub last_access: u32,
+    pub expires: i64, // Signed because Memcached uses '-1' for keys that don't expire (set with TTL 0)
     pub size: u64,
 }
 
@@ -183,7 +182,6 @@ impl TryFrom<HashMap<String, String>> for Meta {
         Ok(Meta {
             key: parse_field("key", &value)?,
             expires: parse_field("exp", &value)?,
-            last_access: parse_field("la", &value)?,
             size: parse_field("size", &value)?,
         })
     }
