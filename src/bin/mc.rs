@@ -82,7 +82,12 @@ struct GetCommand {
 
 /// Show keys for all items in the cache.
 #[derive(Debug, Args)]
-struct KeysCommand;
+struct KeysCommand {
+    /// Print key name, expiration as a UNIX timestamp, and value size in bytes as tab separated
+    /// values instead of only the key name.
+    #[arg(long)]
+    details: bool,
+}
 
 /// Set a value in the cache.
 ///
@@ -163,14 +168,14 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 }
             }
         }
-        Action::Keys(_) => {
+        Action::Keys(c) => {
             let mut metas = client.metas().await.unwrap_or_else(|e| {
                 tracing::error!(message = "unable to list keys", host = opts.host, error = %e);
                 process::exit(1);
             });
 
             metas.sort();
-            if let Err(e) = print_keys(&metas).await {
+            if let Err(e) = print_keys(&metas, c.details).await {
                 tracing::warn!(message = "error writing output", error = %e);
             }
         }
@@ -210,10 +215,16 @@ async fn print_data(val: &Value) -> io::Result<()> {
     output.flush().await
 }
 
-async fn print_keys(metas: &[Meta]) -> io::Result<()> {
+async fn print_keys(metas: &[Meta], show_details: bool) -> io::Result<()> {
     let mut output = BufWriter::new(tokio::io::stdout());
     for meta in metas {
-        output.write_all(format!("{}\n", meta.key).as_bytes()).await?;
+        let line = if show_details {
+            format!("{}\t{}\t{}\n", meta.key, meta.expires, meta.size)
+        } else {
+            format!("{}\n", meta.key)
+        };
+
+        output.write_all(line.as_bytes()).await?;
     }
 
     output.flush().await

@@ -1,8 +1,9 @@
 # Changelog
 
-## v0.4.0 - ????-??-??
+## v0.4.0 - 2023-03-17
 
 - Add the ability to use mTLS connections to Memcached for `mc` and `mtop`. #13
+- Add `--details` flag to `mc keys` to show item expiration time and size. #14
 
 ## v0.3.0 - 2023-03-04
 
