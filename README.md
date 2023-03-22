@@ -61,21 +61,23 @@ Get the sources:
 git clone https://github.com/56quarters/mtop.git && cd mtop
 ```
 
-Build a binary:
+Install from local sources:
 
 ```
-cargo build --release
-./target/release/mtop --help
+cargo install --path .
 ```
 
-Build a completely static binary (Linux only):
+Install a completely static binary from local sources (Linux only):
 
 ```
-cargo build --target=x86_64-unknown-linux-musl --release
-./target/x86_64-unknown-linux-musl/release/mtop --help
+cargo install --path . --target=x86_64-unknown-linux-musl
 ```
 
-These binaries should then be copied on to your `$PATH`.
+To uninstall:
+
+```
+cargo uninstall mtop
+```
 
 ## Usage
 
