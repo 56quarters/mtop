@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Exit the `mtop` UI on `CTRL-c` in addition to `q`. #19
+
 ## v0.4.1 - 2023-03-22
 
 - Fixed an issue where `mc keys` would fail for items without a TTL. #16

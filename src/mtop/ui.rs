@@ -1,5 +1,5 @@
 use crate::queue::{BlockingStatsQueue, StatsDelta};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use std::time::Duration;
 use std::{io, panic};
@@ -42,8 +42,11 @@ where
 
         if event::poll(DRAW_INTERVAL)? {
             if let Event::Key(key) = event::read()? {
+                let ctrl = key.modifiers.intersects(KeyModifiers::CONTROL);
+
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('c') if ctrl => return Ok(()),
                     KeyCode::Right | KeyCode::Char('l') => app.next(),
                     KeyCode::Left | KeyCode::Char('h') => app.previous(),
                     _ => {}
