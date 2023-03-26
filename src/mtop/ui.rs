@@ -12,6 +12,7 @@ use tui::{backend::CrosstermBackend, Frame, Terminal};
 
 const DRAW_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Disable text output and enable drawing of a UI on standard out.
 pub fn initialize_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -19,12 +20,15 @@ pub fn initialize_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>
     Terminal::new(CrosstermBackend::new(stdout))
 }
 
+/// Re-enable text output on standard out
 pub fn reset_terminal() -> io::Result<()> {
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, LeaveAlternateScreen)?;
     terminal::disable_raw_mode()
 }
 
+/// Replace the existing panic handler with one that re-enables text output on
+/// standard out before running the default panic handler.
 pub fn install_panic_handler() {
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |p| {
@@ -33,6 +37,8 @@ pub fn install_panic_handler() {
     }));
 }
 
+/// Draw the state of `app` on `terminal` until the user exits. Drawing happens
+/// every second unless there is user input, in which case it happens immediately.
 pub fn run_app<B>(terminal: &mut Terminal<B>, mut app: Application) -> io::Result<()>
 where
     B: Backend,
@@ -47,8 +53,8 @@ where
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Char('c') if ctrl => return Ok(()),
-                    KeyCode::Right | KeyCode::Char('l') => app.next(),
-                    KeyCode::Left | KeyCode::Char('h') => app.previous(),
+                    KeyCode::Right | KeyCode::Char('l') => app.next_host(),
+                    KeyCode::Left | KeyCode::Char('h') => app.previous_host(),
                     _ => {}
                 }
             }
@@ -56,6 +62,7 @@ where
     }
 }
 
+/// Draw the current state of `app` on the given frame `f`
 fn render<B>(f: &mut Frame<B>, app: &mut Application)
 where
     B: Backend,
@@ -292,6 +299,9 @@ fn system_cpu_gauge(m: &StatsDelta) -> Gauge {
         .label(label)
 }
 
+/// Holds the current state of the application such as stats data and currently
+/// selected host to render in the UI.
+#[derive(Debug)]
 pub struct Application {
     stats: BlockingStatsQueue,
     hosts: Vec<String>,
@@ -307,11 +317,13 @@ impl Application {
         }
     }
 
-    pub fn next(&mut self) {
+    /// Select the next host, as ordered by `hosts`
+    pub fn next_host(&mut self) {
         self.selected_host = (self.selected_host + 1) % self.hosts.len();
     }
 
-    pub fn previous(&mut self) {
+    /// Select the previous host, as ordered by `hosts`
+    pub fn previous_host(&mut self) {
         if self.selected_host > 0 {
             self.selected_host -= 1;
         } else {
@@ -319,28 +331,34 @@ impl Application {
         }
     }
 
+    /// Get the hostnames of all hosts we have stats for
     pub fn hosts(&self) -> &[String] {
         &self.hosts
     }
 
+    /// Get the index of the currently selected hosts, relative to `hosts`
     pub fn selected_host(&self) -> usize {
         self.selected_host
     }
 
+    /// Get the hostname of the currently selected host
     pub fn current_host(&self) -> Option<String> {
         self.hosts.get(self.selected_host).cloned()
     }
 
+    /// Get most recent and least recent stats for the currently selected host
     pub fn current_delta(&self) -> Option<StatsDelta> {
         self.current_host().and_then(|h| self.stats.read_delta(&h))
     }
 }
 
+#[derive(Debug)]
 struct Scale {
     factor: f64,
     suffix: &'static str,
 }
 
+#[derive(Debug)]
 struct UnitFormatter {
     scales: Vec<Scale>,
 }
