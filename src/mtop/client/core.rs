@@ -452,7 +452,8 @@ impl Memcached {
     }
 
     /// Get a `Meta` object for every item in the cache which includes its key and expiration
-    /// time as a UNIX timestamp.
+    /// time as a UNIX timestamp. Expiration time will be `-1` if the item was set with an
+    /// infinite TTL.
     pub async fn metas(&mut self) -> Result<Vec<Meta>, MtopError> {
         self.send(Command::CrawlerMetadump).await?;
         let mut out = Vec::new();
@@ -553,6 +554,7 @@ impl Memcached {
         }
     }
 
+    /// Send a simple command to verify our connection to the server is working.
     pub async fn ping(&mut self) -> Result<(), MtopError> {
         self.send(Command::Version).await?;
         if let Some(v) = self.read.next_line().await? {
@@ -564,6 +566,7 @@ impl Memcached {
         Ok(())
     }
 
+    /// Store the provided item in the cache, regardless of whether it already exists.
     pub async fn set(&mut self, key: String, flags: u64, ttl: u32, data: Vec<u8>) -> Result<(), MtopError> {
         self.send(Command::Set(&key, flags, ttl, &data)).await?;
         if let Some(v) = self.read.next_line().await? {
@@ -573,6 +576,7 @@ impl Memcached {
         }
     }
 
+    /// Update the TTL of an item in the cache if it exists, return an error otherwise.
     pub async fn touch(&mut self, key: String, ttl: u32) -> Result<(), MtopError> {
         self.send(Command::Touch(&key, ttl)).await?;
         if let Some(v) = self.read.next_line().await? {
@@ -582,6 +586,7 @@ impl Memcached {
         }
     }
 
+    /// Delete an item in the cache if it exists, return an error otherwise.
     pub async fn delete(&mut self, key: String) -> Result<(), MtopError> {
         self.send(Command::Delete(&key)).await?;
         if let Some(v) = self.read.next_line().await? {
