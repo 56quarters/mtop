@@ -370,27 +370,28 @@ enum Command<'a> {
 }
 
 impl<'a> Command<'a> {
-    fn try_into_bytes(self) -> io::Result<Vec<u8>> {
+    fn into_bytes(self) -> Vec<u8> {
         let buf = match self {
             Self::CrawlerMetadump => "lru_crawler metadump all\r\n".to_owned().into_bytes(),
             Self::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
             Self::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
             Self::Stats => "stats\r\n".to_owned().into_bytes(),
             Self::Set(key, flags, ttl, data) => {
-                let mut buf = Vec::new();
+                let mut set = Vec::with_capacity(key.len() + data.len() + 32);
                 io::Write::write_all(
-                    &mut buf,
+                    &mut set,
                     format!("set {} {} {} {}\r\n", key, flags, ttl, data.len()).as_bytes(),
-                )?;
-                io::Write::write_all(&mut buf, data)?;
-                io::Write::write_all(&mut buf, "\r\n".as_bytes())?;
-                buf
+                )
+                .unwrap();
+                io::Write::write_all(&mut set, data).unwrap();
+                io::Write::write_all(&mut set, "\r\n".as_bytes()).unwrap();
+                set
             }
             Self::Touch(key, ttl) => format!("touch {} {}\r\n", key, ttl).into_bytes(),
             Self::Version => "version\r\n".to_owned().into_bytes(),
         };
 
-        Ok(buf)
+        buf
     }
 }
 
@@ -624,7 +625,7 @@ impl Memcached {
     }
 
     async fn send<'a>(&'a mut self, cmd: Command<'a>) -> Result<(), MtopError> {
-        let cmd_bytes = cmd.try_into_bytes()?;
+        let cmd_bytes = cmd.into_bytes();
         self.write.write_all(&cmd_bytes).await?;
         Ok(self.write.flush().await?)
     }
