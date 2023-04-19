@@ -9,8 +9,8 @@ use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio_rustls::rustls::{Certificate, ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerName};
-use tokio_rustls::webpki::TrustAnchor;
 use tokio_rustls::TlsConnector;
+use webpki::TrustAnchor;
 
 pub struct PooledMemcached {
     inner: Memcached,
