@@ -1,6 +1,6 @@
 # Changelog
 
-## unreleased
+## v0.4.2 - 2023-04-18
 
 - Exit the `mtop` UI on `CTRL-c` in addition to `q`. #19
 
