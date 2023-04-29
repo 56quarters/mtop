@@ -12,6 +12,7 @@ use tokio_rustls::rustls::{Certificate, ClientConfig, OwnedTrustAnchor, PrivateK
 use tokio_rustls::TlsConnector;
 use webpki::TrustAnchor;
 
+#[derive(Debug)]
 pub struct PooledMemcached {
     inner: Memcached,
     host: String,

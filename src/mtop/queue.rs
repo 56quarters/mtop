@@ -37,7 +37,7 @@ impl StatsQueue {
                 // the entire measurement queue, skip this insert instead (less disruptive to users
                 // to miss a measurement than cause the UI to reset).
                 tracing::debug!(
-                    message = "server uptime did not advanced, dropping measurement",
+                    message = "server uptime did not advance, dropping measurement",
                     old_uptime = prev.uptime,
                     current_uptime = m.uptime,
                 );
