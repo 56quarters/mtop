@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io;
+use std::ops::Deref;
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, Lines};
 
@@ -67,58 +68,58 @@ pub struct Stats {
     pub evictions: u64,
 }
 
-impl TryFrom<HashMap<String, String>> for Stats {
+impl TryFrom<&HashMap<String, String>> for Stats {
     type Error = MtopError;
 
-    fn try_from(value: HashMap<String, String>) -> Result<Self, Self::Error> {
+    fn try_from(value: &HashMap<String, String>) -> Result<Self, Self::Error> {
         Ok(Stats {
-            pid: parse_field("pid", &value)?,
-            uptime: parse_field("uptime", &value)?,
-            server_time: parse_field("time", &value)?,
-            version: parse_field("version", &value)?,
+            pid: parse_field("pid", value)?,
+            uptime: parse_field("uptime", value)?,
+            server_time: parse_field("time", value)?,
+            version: parse_field("version", value)?,
 
-            rusage_user: parse_field("rusage_user", &value)?,
-            rusage_system: parse_field("rusage_system", &value)?,
+            rusage_user: parse_field("rusage_user", value)?,
+            rusage_system: parse_field("rusage_system", value)?,
 
-            max_connections: parse_field("max_connections", &value)?,
-            curr_connections: parse_field("curr_connections", &value)?,
-            total_connections: parse_field("total_connections", &value)?,
-            rejected_connections: parse_field("rejected_connections", &value)?,
+            max_connections: parse_field("max_connections", value)?,
+            curr_connections: parse_field("curr_connections", value)?,
+            total_connections: parse_field("total_connections", value)?,
+            rejected_connections: parse_field("rejected_connections", value)?,
 
-            cmd_get: parse_field("cmd_get", &value)?,
-            cmd_set: parse_field("cmd_set", &value)?,
-            cmd_flush: parse_field("cmd_flush", &value)?,
-            cmd_touch: parse_field("cmd_touch", &value)?,
-            cmd_meta: parse_field("cmd_meta", &value)?,
+            cmd_get: parse_field("cmd_get", value)?,
+            cmd_set: parse_field("cmd_set", value)?,
+            cmd_flush: parse_field("cmd_flush", value)?,
+            cmd_touch: parse_field("cmd_touch", value)?,
+            cmd_meta: parse_field("cmd_meta", value)?,
 
-            get_hits: parse_field("get_hits", &value)?,
-            get_misses: parse_field("get_misses", &value)?,
-            get_expired: parse_field("get_expired", &value)?,
-            get_flushed: parse_field("get_flushed", &value)?,
+            get_hits: parse_field("get_hits", value)?,
+            get_misses: parse_field("get_misses", value)?,
+            get_expired: parse_field("get_expired", value)?,
+            get_flushed: parse_field("get_flushed", value)?,
 
-            store_too_large: parse_field("store_too_large", &value)?,
-            store_no_memory: parse_field("store_no_memory", &value)?,
+            store_too_large: parse_field("store_too_large", value)?,
+            store_no_memory: parse_field("store_no_memory", value)?,
 
-            delete_hits: parse_field("delete_hits", &value)?,
-            delete_misses: parse_field("delete_misses", &value)?,
+            delete_hits: parse_field("delete_hits", value)?,
+            delete_misses: parse_field("delete_misses", value)?,
 
-            incr_hits: parse_field("incr_hits", &value)?,
-            incr_misses: parse_field("incr_misses", &value)?,
+            incr_hits: parse_field("incr_hits", value)?,
+            incr_misses: parse_field("incr_misses", value)?,
 
-            decr_hits: parse_field("decr_hits", &value)?,
-            decr_misses: parse_field("decr_misses", &value)?,
+            decr_hits: parse_field("decr_hits", value)?,
+            decr_misses: parse_field("decr_misses", value)?,
 
-            touch_hits: parse_field("touch_hits", &value)?,
-            touch_misses: parse_field("touch_misses", &value)?,
+            touch_hits: parse_field("touch_hits", value)?,
+            touch_misses: parse_field("touch_misses", value)?,
 
-            bytes_read: parse_field("bytes_read", &value)?,
-            bytes_written: parse_field("bytes_written", &value)?,
-            bytes: parse_field("bytes", &value)?,
-            max_bytes: parse_field("limit_maxbytes", &value)?,
+            bytes_read: parse_field("bytes_read", value)?,
+            bytes_written: parse_field("bytes_written", value)?,
+            bytes: parse_field("bytes", value)?,
+            max_bytes: parse_field("limit_maxbytes", value)?,
 
-            curr_items: parse_field("curr_items", &value)?,
-            total_items: parse_field("total_items", &value)?,
-            evictions: parse_field("evictions", &value)?,
+            curr_items: parse_field("curr_items", value)?,
+            total_items: parse_field("total_items", value)?,
+            evictions: parse_field("evictions", value)?,
         })
     }
 }
@@ -171,18 +172,18 @@ impl Ord for Value {
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Meta {
     pub key: String,
-    pub expires: i64, // Signed because Memcached uses '-1' for keys that don't expire (set with TTL 0)
+    pub expires: i64, // Signed because Memcached uses '-1' for infinite/no TTL
     pub size: u64,
 }
 
-impl TryFrom<HashMap<String, String>> for Meta {
+impl TryFrom<&HashMap<String, String>> for Meta {
     type Error = MtopError;
 
-    fn try_from(value: HashMap<String, String>) -> Result<Self, Self::Error> {
+    fn try_from(value: &HashMap<String, String>) -> Result<Self, Self::Error> {
         Ok(Meta {
-            key: parse_field("key", &value)?,
-            expires: parse_field("exp", &value)?,
-            size: parse_field("size", &value)?,
+            key: parse_field("key", value)?,
+            expires: parse_field("exp", value)?,
+            size: parse_field("size", value)?,
         })
     }
 }
@@ -434,7 +435,7 @@ impl Memcached {
             }
         }
 
-        Stats::try_from(raw)
+        Stats::try_from(&raw)
     }
 
     fn parse_stat_line(line: &str) -> Result<(String, String), MtopError> {
@@ -458,6 +459,7 @@ impl Memcached {
     pub async fn metas(&mut self) -> Result<Vec<Meta>, MtopError> {
         self.send(Command::CrawlerMetadump).await?;
         let mut out = Vec::new();
+        let mut raw = HashMap::new();
 
         loop {
             let line = self.read.next_line().await?;
@@ -471,7 +473,7 @@ impl Memcached {
                         return Err(MtopError::from(err));
                     }
 
-                    let item = Self::parse_crawler_meta(v)?;
+                    let item = Self::parse_crawler_meta(v, &mut raw)?;
                     out.push(item);
                 }
             }
@@ -480,8 +482,9 @@ impl Memcached {
         Ok(out)
     }
 
-    fn parse_crawler_meta(line: &str) -> Result<Meta, MtopError> {
-        let mut raw = HashMap::new();
+    fn parse_crawler_meta(line: &str, raw: &mut HashMap<String, String>) -> Result<Meta, MtopError> {
+        // Avoid allocating a new HashMap to parse every meta entry just to throw it away
+        raw.clear();
 
         for p in line.split(' ') {
             let (key, val) = p
@@ -493,7 +496,7 @@ impl Memcached {
             raw.insert(key.to_owned(), decoded.into_owned());
         }
 
-        Meta::try_from(raw)
+        Meta::try_from(raw.deref())
     }
 
     /// Get a map of the requested keys and their corresponding `Value` in the cache
@@ -628,5 +631,11 @@ impl Memcached {
         let cmd_bytes = cmd.into_bytes();
         self.write.write_all(&cmd_bytes).await?;
         Ok(self.write.flush().await?)
+    }
+}
+
+impl fmt::Debug for Memcached {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Memcached {{ read: <...>, write: <...> }}")
     }
 }
