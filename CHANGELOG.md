@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.0 - 2023-04-30
+
+- Minor performance improvement when running `mc keys`. #26
+- Build binary artifacts for tags using `cargo-dist`. #27
+
 ## v0.4.2 - 2023-04-18
 
 - Exit the `mtop` UI on `CTRL-c` in addition to `q`. #19
