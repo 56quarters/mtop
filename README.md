@@ -25,7 +25,8 @@ There are multiple ways to install `mtop` listed below.
 
 ### Binaries
 
-TBD
+Binaries are published for GNU/Linux (x86_64), Windows (x86_64), and MacOS (x86_64 and aarch64)
+for [each release](https://github.com/56quarters/mtop/releases).
 
 ### Cargo
 
