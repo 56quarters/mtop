@@ -124,51 +124,6 @@ impl TryFrom<&HashMap<String, String>> for Stats {
     }
 }
 
-/// Parse the named field from a map of fields and their values or return `MtopError::Internal`
-/// if it cannot be parsed.
-fn parse_field<T>(key: &str, map: &HashMap<String, String>) -> Result<T, MtopError>
-where
-    T: FromStr,
-    <T as FromStr>::Err: fmt::Display + Send + Sync + error::Error + 'static,
-{
-    map.get(key)
-        .ok_or_else(|| MtopError::internal(format!("field {} missing", key)))
-        .and_then(|v| {
-            v.parse()
-                .map_err(|e| MtopError::internal_cause(format!("field {} value '{}'", key, v), e))
-        })
-}
-
-/// Parse a single value or return `MtopError::Internal` if it cannot be parsed.
-fn parse_value<T>(val: &str, line: &str) -> Result<T, MtopError>
-where
-    T: FromStr + fmt::Display,
-    <T as FromStr>::Err: fmt::Display + Send + Sync + error::Error + 'static,
-{
-    val.parse()
-        .map_err(|e| MtopError::internal_cause(format!("parsing {} from '{}'", val, line), e))
-}
-
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
-pub struct Value {
-    pub key: String,
-    pub cas: u64,
-    pub flags: u64,
-    pub data: Vec<u8>,
-}
-
-impl PartialOrd for Value {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.key.partial_cmp(&other.key)
-    }
-}
-
-impl Ord for Value {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.key.cmp(&other.key)
-    }
-}
-
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Meta {
     pub key: String,
@@ -198,6 +153,48 @@ impl Ord for Meta {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key.cmp(&other.key)
     }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub struct Value {
+    pub key: String,
+    pub cas: u64,
+    pub flags: u64,
+    pub data: Vec<u8>,
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.key.partial_cmp(&other.key)
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+fn parse_field<T>(key: &str, map: &HashMap<String, String>) -> Result<T, MtopError>
+where
+    T: FromStr,
+    <T as FromStr>::Err: fmt::Display + Send + Sync + error::Error + 'static,
+{
+    map.get(key)
+        .ok_or_else(|| MtopError::internal(format!("field {} missing", key)))
+        .and_then(|v| {
+            v.parse()
+                .map_err(|e| MtopError::internal_cause(format!("field {} value '{}'", key, v), e))
+        })
+}
+
+fn parse_value<T>(val: &str, line: &str) -> Result<T, MtopError>
+where
+    T: FromStr + fmt::Display,
+    <T as FromStr>::Err: fmt::Display + Send + Sync + error::Error + 'static,
+{
+    val.parse()
+        .map_err(|e| MtopError::internal_cause(format!("parsing {} from '{}'", val, line), e))
 }
 
 #[derive(Debug, PartialOrd, PartialEq, Copy, Clone)]
@@ -370,14 +367,14 @@ enum Command<'a> {
     Version,
 }
 
-impl<'a> Command<'a> {
-    fn into_bytes(self) -> Vec<u8> {
-        let buf = match self {
-            Self::CrawlerMetadump => "lru_crawler metadump all\r\n".to_owned().into_bytes(),
-            Self::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
-            Self::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
-            Self::Stats => "stats\r\n".to_owned().into_bytes(),
-            Self::Set(key, flags, ttl, data) => {
+impl<'a> From<Command<'a>> for Vec<u8> {
+    fn from(value: Command<'a>) -> Self {
+        let buf = match value {
+            Command::CrawlerMetadump => "lru_crawler metadump all\r\n".to_owned().into_bytes(),
+            Command::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
+            Command::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
+            Command::Stats => "stats\r\n".to_owned().into_bytes(),
+            Command::Set(key, flags, ttl, data) => {
                 let mut set = Vec::with_capacity(key.len() + data.len() + 32);
                 io::Write::write_all(
                     &mut set,
@@ -388,8 +385,8 @@ impl<'a> Command<'a> {
                 io::Write::write_all(&mut set, "\r\n".as_bytes()).unwrap();
                 set
             }
-            Self::Touch(key, ttl) => format!("touch {} {}\r\n", key, ttl).into_bytes(),
-            Self::Version => "version\r\n".to_owned().into_bytes(),
+            Command::Touch(key, ttl) => format!("touch {} {}\r\n", key, ttl).into_bytes(),
+            Command::Version => "version\r\n".to_owned().into_bytes(),
         };
 
         buf
@@ -628,7 +625,7 @@ impl Memcached {
     }
 
     async fn send<'a>(&'a mut self, cmd: Command<'a>) -> Result<(), MtopError> {
-        let cmd_bytes = cmd.into_bytes();
+        let cmd_bytes: Vec<u8> = cmd.into();
         self.write.write_all(&cmd_bytes).await?;
         Ok(self.write.flush().await?)
     }
