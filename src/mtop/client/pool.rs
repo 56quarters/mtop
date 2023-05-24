@@ -177,21 +177,18 @@ impl MemcachedPool {
 
     async fn connect(&self, host: &str) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.config {
-            let server = self.server_name(host)?;
+            let server = match &self.server {
+                Some(v) => v.clone(),
+                None => host
+                    .split_once(':')
+                    .ok_or_else(|| MtopError::configuration(format!("invalid server name '{}'", host)))
+                    .and_then(|(hostname, _)| Self::host_to_server_name(hostname))?,
+            };
+
             tracing::debug!(message = "using server name for TLS validation", server_name = ?server);
             tls_connect(host, server, cfg.clone()).await
         } else {
             plain_connect(host).await
-        }
-    }
-
-    fn server_name(&self, host: &str) -> Result<ServerName, MtopError> {
-        if let Some(n) = &self.server {
-            Ok(n.clone())
-        } else {
-            host.split_once(':')
-                .ok_or_else(|| MtopError::configuration(format!("invalid server name '{}'", host)))
-                .and_then(|(hostname, _)| Self::host_to_server_name(hostname))
         }
     }
 
