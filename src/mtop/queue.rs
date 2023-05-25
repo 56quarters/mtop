@@ -25,12 +25,12 @@ impl StatsQueue {
         }
     }
 
-    pub async fn insert(&self, host: String, m: Stats) {
+    pub async fn insert(&self, host: String, stats: Stats) {
         let mut map = self.queues.lock().await;
         let q = map.entry(host).or_insert_with(VecDeque::new);
 
         if let Some(prev) = q.back() {
-            if m.uptime == prev.uptime {
+            if stats.uptime == prev.uptime {
                 // The most recent entry in the queue has the same uptime as the measurement we're
                 // inserting now. This can happen when the server is under heavy load and it isn't
                 // able to update the variable it uses to keep track of uptime. Instead of clearing
@@ -39,10 +39,10 @@ impl StatsQueue {
                 tracing::debug!(
                     message = "server uptime did not advance, dropping measurement",
                     old_uptime = prev.uptime,
-                    current_uptime = m.uptime,
+                    current_uptime = stats.uptime,
                 );
                 return;
-            } else if m.uptime < prev.uptime {
+            } else if stats.uptime < prev.uptime {
                 // The most recent entry in the queue has a higher uptime than the measurement
                 // we're inserting now. This means there was a restart and counters are all reset
                 // to 0. Clear the existing queue to avoid underflow (since we assume counters can
@@ -50,10 +50,10 @@ impl StatsQueue {
                 tracing::debug!(
                     message = "server uptime reset detected, clearing measurement queue",
                     old_uptime = prev.uptime,
-                    current_uptime = m.uptime
+                    current_uptime = stats.uptime
                 );
                 q.clear();
-            } else if m.server_time <= prev.server_time {
+            } else if stats.server_time <= prev.server_time {
                 // Make sure that any calculations that depend on the number of seconds elapsed
                 // since the last measurement don't divide by zero. Realistically this shouldn't
                 // happen unless we get really unlucky with the frequency of updates or the
@@ -62,13 +62,13 @@ impl StatsQueue {
                 tracing::debug!(
                     message = "server timestamp did not advance, dropping measurement",
                     old_timestamp = prev.server_time,
-                    current_timestamp = m.server_time
+                    current_timestamp = stats.server_time
                 );
                 return;
             }
         }
 
-        q.push_back(m);
+        q.push_back(stats);
         if q.len() > self.max_size {
             q.pop_front();
         }
