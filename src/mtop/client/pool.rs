@@ -217,14 +217,18 @@ impl MemcachedPool {
 }
 
 async fn plain_connect(host: &str) -> Result<Memcached, MtopError> {
-    let tcp_stream = TcpStream::connect(host).await?;
+    let tcp_stream = TcpStream::connect(host)
+        .await
+        .map_err(|e| MtopError::from((host.to_string(), e)))?;
     let (read, write) = tcp_stream.into_split();
     Ok(Memcached::new(read, write))
 }
 
 async fn tls_connect(host: &str, server: ServerName, config: Arc<ClientConfig>) -> Result<Memcached, MtopError> {
     let connector = TlsConnector::from(config);
-    let tcp_stream = TcpStream::connect(host).await?;
+    let tcp_stream = TcpStream::connect(host)
+        .await
+        .map_err(|e| MtopError::from((host.to_string(), e)))?;
     let tls_stream = connector.connect(server, tcp_stream).await?;
     let (read, write) = tokio::io::split(tls_stream);
     Ok(Memcached::new(read, write))

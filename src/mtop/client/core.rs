@@ -297,6 +297,15 @@ impl error::Error for MtopError {
     }
 }
 
+impl From<(String, io::Error)> for MtopError {
+    fn from((s, e): (String, io::Error)) -> Self {
+        MtopError {
+            kind: ErrorKind::IO,
+            repr: ErrorRepr::MessageCause(s, Box::new(e)),
+        }
+    }
+}
+
 impl From<io::Error> for MtopError {
     fn from(e: io::Error) -> Self {
         MtopError {
