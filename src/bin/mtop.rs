@@ -113,9 +113,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             let mut interval = tokio::time::interval(DEFAULT_STATS_INTERVAL);
             loop {
                 let _ = interval.tick().await;
-                if let Err(e) = update_task.update().await {
-                    tracing::warn!(message = "failed to fetch stats", "err" = %e);
-                }
+                update_task.update().await;
             }
         }
         .with_subscriber(file_subscriber),
@@ -175,14 +173,26 @@ impl UpdateTask {
         Ok(())
     }
 
-    pub async fn update(&self) -> Result<(), MtopError> {
+    pub async fn update(&self) {
         for host in self.hosts.iter() {
-            let mut client = self.pool.get(host).await?;
-            let stats = client.stats().instrument(tracing::span!(Level::DEBUG, "stats")).await?;
+            let mut client = match self.pool.get(host).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(message = "failed to get connection", host = host, "err" = %e);
+                    continue;
+                }
+            };
+
+            let stats = match client.stats().instrument(tracing::span!(Level::DEBUG, "stats")).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(message = "failed to fetch status from host", host = host, "err" = %e);
+                    continue;
+                }
+            };
+
             self.queue.insert(host.to_owned(), stats).await;
             self.pool.put(client).await;
         }
-
-        Ok(())
     }
 }
