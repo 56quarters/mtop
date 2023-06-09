@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Fix a bug where stats for some servers were not updated if another server returned an error. #34
+
 ## v0.5.0 - 2023-04-30
 
 - Minor performance improvement when running `mc keys`. #26
