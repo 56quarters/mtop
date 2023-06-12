@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error;
 use std::fmt;
 use std::io;
@@ -125,9 +125,97 @@ impl TryFrom<&HashMap<String, String>> for Stats {
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub struct Slab {
+    pub id: u64,
+    pub chunk_size: u64,
+    pub chunks_per_page: u64,
+    pub total_pages: u64,
+    pub total_chunks: u64,
+    pub used_chunks: u64,
+    pub free_chunks: u64,
+}
+
+impl PartialOrd for Slab {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.id.partial_cmp(&other.id)
+    }
+}
+
+impl Ord for Slab {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub struct Slabs {
+    pub slabs: Vec<Slab>,
+}
+
+impl Slabs {
+    pub fn find_for_size(&self, size: u64) -> Option<&Slab> {
+        // Find the slab with an appropriate chunk size for an item with the given
+        // size. If there is no slab with a chunk size that fits the item, return the
+        // last (hence largest) slab class since this is what Memcached does internally.
+        self.slabs
+            .get(self.slabs.partition_point(|s| s.chunk_size < size))
+            .or_else(|| self.slabs.last())
+    }
+}
+
+impl TryFrom<&HashMap<String, String>> for Slabs {
+    type Error = MtopError;
+
+    fn try_from(value: &HashMap<String, String>) -> Result<Self, Self::Error> {
+        // Parse the slab IDs from each of the raw stats. We have to do this because
+        // Memcached isn't guaranteed to use a particular slab ID if there are no items
+        // to store in that size class. Otherwise, we could just loop from one to
+        // $active_slabs + 1.
+        let mut ids = BTreeSet::new();
+        for k in value.keys() {
+            let key_id: Option<u64> = k
+                .split_once(':')
+                .map(|(raw, _rest)| raw)
+                .and_then(|raw| raw.parse().ok());
+
+            if let Some(id) = key_id {
+                ids.insert(id);
+            }
+        }
+
+        let mut slabs = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            slabs.push(Slab {
+                id,
+                chunk_size: parse_field(&format!("{}:chunk_size", id), value)?,
+                chunks_per_page: parse_field(&format!("{}:chunks_per_page", id), value)?,
+                total_pages: parse_field(&format!("{}:total_pages", id), value)?,
+                total_chunks: parse_field(&format!("{}:total_chunks", id), value)?,
+                used_chunks: parse_field(&format!("{}:used_chunks", id), value)?,
+                free_chunks: parse_field(&format!("{}:free_chunks", id), value)?,
+            })
+        }
+
+        Ok(Self { slabs })
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub struct Sizes {
+    pub counts: BTreeMap<u64, u64>,
+}
+
+impl From<BTreeMap<u64, u64>> for Sizes {
+    fn from(counts: BTreeMap<u64, u64>) -> Self {
+        Self { counts }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Meta {
     pub key: String,
-    pub expires: i64, // Signed because Memcached uses '-1' for infinite/no TTL
+    pub expires: i64, /* Signed because Memcached uses '-1' for infinite/no TTL */
     pub size: u64,
 }
 
@@ -371,6 +459,8 @@ enum Command<'a> {
     Delete(&'a str),
     Gets(&'a [String]),
     Stats,
+    StatsSizes,
+    StatsSlabs,
     Set(&'a str, u64, u32, &'a [u8]),
     Touch(&'a str, u32),
     Version,
@@ -383,6 +473,8 @@ impl<'a> From<Command<'a>> for Vec<u8> {
             Command::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
             Command::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
             Command::Stats => "stats\r\n".to_owned().into_bytes(),
+            Command::StatsSizes => "stats sizes\r\n".to_owned().into_bytes(),
+            Command::StatsSlabs => "stats slabs\r\n".to_owned().into_bytes(),
             Command::Set(key, flags, ttl, data) => {
                 let mut set = Vec::with_capacity(key.len() + data.len() + 32);
                 io::Write::write_all(
@@ -436,7 +528,7 @@ impl Memcached {
                 Some("END") | None => break,
                 Some(v) => {
                     let (key, val) = Self::parse_stat_line(v)?;
-                    raw.insert(key, val);
+                    raw.insert(key.to_owned(), val.to_owned());
                 }
             }
         }
@@ -444,11 +536,64 @@ impl Memcached {
         Stats::try_from(&raw)
     }
 
-    fn parse_stat_line(line: &str) -> Result<(String, String), MtopError> {
+    /// Get a `Sizes` object with the number of items in each size bucket (in bytes). This
+    /// method requires that the `track_sizes` extended option is enabled for the Memcached
+    /// server. If it is not, a configuration error will be returned.
+    pub async fn sizes(&mut self) -> Result<Sizes, MtopError> {
+        self.send(Command::StatsSizes).await?;
+        let mut counts = BTreeMap::new();
+
+        // Collect each of the returned `STAT` lines into key-value pairs and create
+        // a single Sizes object from them with each of the expected fields.
+        loop {
+            let line = self.read.next_line().await?;
+            match line.as_deref() {
+                Some("END") | None => break,
+                Some(v) => {
+                    let (key, val) = Self::parse_stat_line(v)?;
+                    // Special case for when tracking of item sizes is disabled by the
+                    // server. Turn that into a configuration error so that we can tell
+                    // the user the setting they need to use on the server.
+                    if key == "sizes_status" && val == "disabled" {
+                        return Err(MtopError::configuration("sizes_status disabled"));
+                    }
+
+                    let size = parse_value(key, v)?;
+                    let count = parse_value(val, v)?;
+                    counts.insert(size, count);
+                }
+            }
+        }
+
+        Ok(Sizes::from(counts))
+    }
+
+    /// Get a `Slabs` object with information about each set of `Slab`s maintained by
+    /// the Memcached server. You can think of each `Slab` as a class of objects that
+    /// are stored together in memory.
+    pub async fn slabs(&mut self) -> Result<Slabs, MtopError> {
+        self.send(Command::StatsSlabs).await?;
+        let mut raw = HashMap::new();
+
+        loop {
+            let line = self.read.next_line().await?;
+            match line.as_deref() {
+                Some("END") | None => break,
+                Some(v) => {
+                    let (key, val) = Self::parse_stat_line(v)?;
+                    raw.insert(key.to_owned(), val.to_owned());
+                }
+            }
+        }
+
+        Slabs::try_from(&raw)
+    }
+
+    fn parse_stat_line(line: &str) -> Result<(&str, &str), MtopError> {
         let mut parts = line.splitn(3, ' ');
 
         match (parts.next(), parts.next(), parts.next()) {
-            (Some("STAT"), Some(key), Some(val)) => Ok((key.to_owned(), val.to_owned())),
+            (Some("STAT"), Some(key), Some(val)) => Ok((key, val)),
             _ => {
                 if let Some(err) = Self::parse_error(line) {
                     Err(MtopError::from(err))
