@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "mtop"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "clap",
  "crossterm 0.26.1",
