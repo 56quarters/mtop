@@ -790,3 +790,369 @@ impl fmt::Debug for Memcached {
         write!(f, "Memcached {{ read: <...>, write: <...> }}")
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::{ErrorKind, Memcached, Meta, Slab};
+    use std::io::Cursor;
+
+    /// Create a new `Memcached` instance to read the provided server response.
+    macro_rules! client {
+        () => ({
+            Memcached::new(Cursor::new(Vec::new()), Vec::new())
+        });
+        ($($line:expr),+ $(,)?) => ({
+            let writes = Vec::new();
+            let mut reads = Vec::new();
+            $(reads.extend_from_slice($line.as_bytes());)+
+            Memcached::new(Cursor::new(reads), writes)
+        })
+    }
+
+    #[tokio::test]
+    async fn test_get_no_keys() {
+        let mut client = client!();
+        let res = client.get(&[]).await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Internal, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_get_error() {
+        let mut client = client!("SERVER_ERROR backend failure\r\n");
+        let keys = vec!["foo".to_owned(), "baz".to_owned()];
+        let res = client.get(&keys).await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_get_miss() {
+        let mut client = client!("END\r\n");
+        let keys = vec!["foo".to_owned(), "baz".to_owned()];
+        let res = client.get(&keys).await.unwrap();
+
+        assert!(res.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_hit() {
+        let mut client = client!(
+            "VALUE foo 32 3 1\r\n",
+            "bar\r\n",
+            "VALUE baz 64 3 2\r\n",
+            "qux\r\n",
+            "END\r\n",
+        );
+        let keys = vec!["foo".to_owned(), "baz".to_owned()];
+        let res = client.get(&keys).await.unwrap();
+
+        let val1 = res.get("foo").unwrap();
+        assert_eq!("foo", val1.key);
+        assert_eq!("bar".as_bytes(), val1.data);
+        assert_eq!(32, val1.flags);
+        assert_eq!(1, val1.cas);
+
+        let val2 = res.get("baz").unwrap();
+        assert_eq!("baz", val2.key);
+        assert_eq!("qux".as_bytes(), val2.data);
+        assert_eq!(64, val2.flags);
+        assert_eq!(2, val2.cas);
+    }
+
+    #[tokio::test]
+    async fn test_stats_empty() {
+        let mut client = client!("END\r\n");
+        let res = client.stats().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Internal, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_stats_error() {
+        let mut client = client!("SERVER_ERROR backend failure\r\n");
+        let res = client.stats().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_stats_success() {
+        let mut client = client!(
+            "STAT pid 1525\r\n",
+            "STAT uptime 271984\r\n",
+            "STAT time 1687212809\r\n",
+            "STAT version 1.6.14\r\n",
+            "STAT libevent 2.1.12-stable\r\n",
+            "STAT pointer_size 64\r\n",
+            "STAT rusage_user 17.544323\r\n",
+            "STAT rusage_system 11.830461\r\n",
+            "STAT max_connections 1024\r\n",
+            "STAT curr_connections 1\r\n",
+            "STAT total_connections 3\r\n",
+            "STAT rejected_connections 0\r\n",
+            "STAT connection_structures 2\r\n",
+            "STAT response_obj_oom 0\r\n",
+            "STAT response_obj_count 1\r\n",
+            "STAT response_obj_bytes 32768\r\n",
+            "STAT read_buf_count 4\r\n",
+            "STAT read_buf_bytes 65536\r\n",
+            "STAT read_buf_bytes_free 16384\r\n",
+            "STAT read_buf_oom 0\r\n",
+            "STAT reserved_fds 20\r\n",
+            "STAT cmd_get 1\r\n",
+            "STAT cmd_set 0\r\n",
+            "STAT cmd_flush 0\r\n",
+            "STAT cmd_touch 0\r\n",
+            "STAT cmd_meta 0\r\n",
+            "STAT get_hits 0\r\n",
+            "STAT get_misses 1\r\n",
+            "STAT get_expired 0\r\n",
+            "STAT get_flushed 0\r\n",
+            "STAT delete_misses 0\r\n",
+            "STAT delete_hits 0\r\n",
+            "STAT incr_misses 0\r\n",
+            "STAT incr_hits 0\r\n",
+            "STAT decr_misses 0\r\n",
+            "STAT decr_hits 0\r\n",
+            "STAT cas_misses 0\r\n",
+            "STAT cas_hits 0\r\n",
+            "STAT cas_badval 0\r\n",
+            "STAT touch_hits 0\r\n",
+            "STAT touch_misses 0\r\n",
+            "STAT store_too_large 0\r\n",
+            "STAT store_no_memory 0\r\n",
+            "STAT auth_cmds 0\r\n",
+            "STAT auth_errors 0\r\n",
+            "STAT bytes_read 16\r\n",
+            "STAT bytes_written 7\r\n",
+            "STAT limit_maxbytes 67108864\r\n",
+            "STAT accepting_conns 1\r\n",
+            "STAT listen_disabled_num 0\r\n",
+            "STAT time_in_listen_disabled_us 0\r\n",
+            "STAT threads 4\r\n",
+            "STAT conn_yields 0\r\n",
+            "STAT hash_power_level 16\r\n",
+            "STAT hash_bytes 524288\r\n",
+            "STAT hash_is_expanding 0\r\n",
+            "STAT slab_reassign_rescues 0\r\n",
+            "STAT slab_reassign_chunk_rescues 0\r\n",
+            "STAT slab_reassign_evictions_nomem 0\r\n",
+            "STAT slab_reassign_inline_reclaim 0\r\n",
+            "STAT slab_reassign_busy_items 0\r\n",
+            "STAT slab_reassign_busy_deletes 0\r\n",
+            "STAT slab_reassign_running 0\r\n",
+            "STAT slabs_moved 0\r\n",
+            "STAT lru_crawler_running 0\r\n",
+            "STAT lru_crawler_starts 105\r\n",
+            "STAT lru_maintainer_juggles 271976\r\n",
+            "STAT malloc_fails 0\r\n",
+            "STAT log_worker_dropped 0\r\n",
+            "STAT log_worker_written 0\r\n",
+            "STAT log_watcher_skipped 0\r\n",
+            "STAT log_watcher_sent 0\r\n",
+            "STAT log_watchers 0\r\n",
+            "STAT unexpected_napi_ids 0\r\n",
+            "STAT round_robin_fallback 0\r\n",
+            "STAT bytes 0\r\n",
+            "STAT curr_items 0\r\n",
+            "STAT total_items 0\r\n",
+            "STAT slab_global_page_pool 0\r\n",
+            "STAT expired_unfetched 0\r\n",
+            "STAT evicted_unfetched 0\r\n",
+            "STAT evicted_active 0\r\n",
+            "STAT evictions 0\r\n",
+            "STAT reclaimed 0\r\n",
+            "STAT crawler_reclaimed 0\r\n",
+            "STAT crawler_items_checked 0\r\n",
+            "STAT lrutail_reflocked 0\r\n",
+            "STAT moves_to_cold 0\r\n",
+            "STAT moves_to_warm 0\r\n",
+            "STAT moves_within_lru 0\r\n",
+            "STAT direct_reclaims 0\r\n",
+            "STAT lru_bumps_dropped 0\r\n",
+        );
+        let res = client.stats().await.unwrap();
+
+        assert_eq!(0, res.cmd_set);
+        assert_eq!(1, res.cmd_get);
+        assert_eq!(1, res.get_misses);
+        assert_eq!(0, res.get_hits);
+    }
+
+    #[tokio::test]
+    async fn test_sizes_empty() {
+        let mut client = client!("END\r\n");
+        let res = client.sizes().await.unwrap();
+
+        assert!(res.counts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sizes_disabled() {
+        let mut client = client!("STAT sizes_status disabled\r\n", "END\r\n");
+        let res = client.sizes().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Configuration, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_sizes_error() {
+        let mut client = client!("SERVER_ERROR backend failure\r\n");
+        let res = client.sizes().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_sizes_success() {
+        let mut client = client!(
+            "STAT 320 1\r\n",
+            "STAT 352 3\r\n",
+            "STAT 384 2\r\n",
+            "STAT 480 1\r\n",
+            "END\r\n",
+        );
+        let res = client.sizes().await.unwrap();
+
+        assert_eq!(1, res.counts[&320u64]);
+        assert_eq!(3, res.counts[&352u64]);
+        assert_eq!(2, res.counts[&384u64]);
+        assert_eq!(1, res.counts[&480u64]);
+    }
+
+    #[tokio::test]
+    async fn test_slabs_empty() {
+        let mut client = client!("STAT active_slabs 0\r\n", "STAT total_malloced 0\r\n", "END\r\n");
+        let res = client.slabs().await.unwrap();
+
+        assert!(res.slabs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_slabs_error() {
+        let mut client = client!("ERROR Too many open connections\r\n");
+        let res = client.slabs().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_slabs_success() {
+        let mut client = client!(
+            "STAT 6:chunk_size 304\r\n",
+            "STAT 6:chunks_per_page 3449\r\n",
+            "STAT 6:total_pages 1\r\n",
+            "STAT 6:total_chunks 3449\r\n",
+            "STAT 6:used_chunks 1\r\n",
+            "STAT 6:free_chunks 3448\r\n",
+            "STAT 6:free_chunks_end 0\r\n",
+            "STAT 6:get_hits 951\r\n",
+            "STAT 6:cmd_set 100\r\n",
+            "STAT 6:delete_hits 0\r\n",
+            "STAT 6:incr_hits 0\r\n",
+            "STAT 6:decr_hits 0\r\n",
+            "STAT 6:cas_hits 0\r\n",
+            "STAT 6:cas_badval 0\r\n",
+            "STAT 6:touch_hits 0\r\n",
+            "STAT 7:chunk_size 384\r\n",
+            "STAT 7:chunks_per_page 2730\r\n",
+            "STAT 7:total_pages 1\r\n",
+            "STAT 7:total_chunks 2730\r\n",
+            "STAT 7:used_chunks 5\r\n",
+            "STAT 7:free_chunks 2725\r\n",
+            "STAT 7:free_chunks_end 0\r\n",
+            "STAT 7:get_hits 4792\r\n",
+            "STAT 7:cmd_set 520\r\n",
+            "STAT 7:delete_hits 0\r\n",
+            "STAT 7:incr_hits 0\r\n",
+            "STAT 7:decr_hits 0\r\n",
+            "STAT 7:cas_hits 0\r\n",
+            "STAT 7:cas_badval 0\r\n",
+            "STAT 7:touch_hits 0\r\n",
+            "STAT active_slabs 2\r\n",
+            "STAT total_malloced 30408704\r\n",
+        );
+        let res = client.slabs().await.unwrap();
+
+        let expected = vec![
+            Slab {
+                id: 6,
+                chunk_size: 304,
+                chunks_per_page: 3449,
+                total_pages: 1,
+                total_chunks: 3449,
+                used_chunks: 1,
+                free_chunks: 3448,
+            },
+            Slab {
+                id: 7,
+                chunk_size: 384,
+                chunks_per_page: 2730,
+                total_pages: 1,
+                total_chunks: 2730,
+                used_chunks: 5,
+                free_chunks: 2725,
+            },
+        ];
+
+        assert_eq!(expected, res.slabs);
+    }
+
+    #[tokio::test]
+    async fn test_metas_empty() {
+        let mut client = client!();
+        let res = client.metas().await.unwrap();
+
+        assert!(res.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_metas_error() {
+        let mut client = client!("BUSY crawler is busy\r\n",);
+        let res = client.metas().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_metas_success() {
+        let mut client = client!(
+            "key=memcached%2Fmurmur3_hash.c exp=1687216956 la=1687216656 cas=259502 fetch=yes cls=17 size=2912\r\n",
+            "key=memcached%2Fmd5.h exp=1687216956 la=1687216656 cas=259731 fetch=yes cls=17 size=3593\r\n",
+            "END\r\n",
+        );
+        let res = client.metas().await.unwrap();
+
+        let expected = vec![
+            Meta {
+                key: "memcached/murmur3_hash.c".to_string(),
+                expires: 1687216956,
+                size: 2912,
+            },
+            Meta {
+                key: "memcached/md5.h".to_string(),
+                expires: 1687216956,
+                size: 3593,
+            },
+        ];
+
+        assert_eq!(expected, res);
+    }
+}
