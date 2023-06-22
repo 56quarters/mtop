@@ -41,6 +41,7 @@ pub struct TLSConfig {
     pub server_name: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct MemcachedPool {
     clients: Mutex<HashMap<String, Memcached>>,
     config: Option<Arc<ClientConfig>>,

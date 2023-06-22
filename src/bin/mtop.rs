@@ -148,6 +148,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct UpdateTask {
     hosts: Vec<String>,
     pool: MemcachedPool,
