@@ -1,4 +1,4 @@
-use crate::client::Stats;
+use crate::client::{SlabItems, Slabs, Stats};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -6,31 +6,38 @@ use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct StatsDelta {
-    pub previous: Stats,
-    pub current: Stats,
+    pub previous: ServerStats,
+    pub current: ServerStats,
     pub seconds: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerStats {
+    pub stats: Stats,
+    pub slabs: Slabs,
+    pub items: SlabItems,
 }
 
 #[derive(Debug)]
 pub struct StatsQueue {
-    queues: Mutex<HashMap<String, VecDeque<Stats>>>,
+    queues: Mutex<HashMap<String, VecDeque<ServerStats>>>,
     max_size: usize,
 }
 
 impl StatsQueue {
     pub fn new(max_size: usize) -> Self {
-        StatsQueue {
+        Self {
             max_size,
             queues: Mutex::new(HashMap::new()),
         }
     }
 
-    pub async fn insert(&self, host: String, stats: Stats) {
+    pub async fn insert(&self, host: String, stats: Stats, slabs: Slabs, items: SlabItems) {
         let mut map = self.queues.lock().await;
         let q = map.entry(host).or_insert_with(VecDeque::new);
 
         if let Some(prev) = q.back() {
-            if stats.uptime == prev.uptime {
+            if stats.uptime == prev.stats.uptime {
                 // The most recent entry in the queue has the same uptime as the measurement we're
                 // inserting now. This can happen when the server is under heavy load and it isn't
                 // able to update the variable it uses to keep track of uptime. Instead of clearing
@@ -38,22 +45,22 @@ impl StatsQueue {
                 // to miss a measurement than cause the UI to reset).
                 tracing::debug!(
                     message = "server uptime did not advance, dropping measurement",
-                    old_uptime = prev.uptime,
+                    old_uptime = prev.stats.uptime,
                     current_uptime = stats.uptime,
                 );
                 return;
-            } else if stats.uptime < prev.uptime {
+            } else if stats.uptime < prev.stats.uptime {
                 // The most recent entry in the queue has a higher uptime than the measurement
                 // we're inserting now. This means there was a restart and counters are all reset
                 // to 0. Clear the existing queue to avoid underflow (since we assume counters can
                 // only increase).
                 tracing::debug!(
                     message = "server uptime reset detected, clearing measurement queue",
-                    old_uptime = prev.uptime,
+                    old_uptime = prev.stats.uptime,
                     current_uptime = stats.uptime
                 );
                 q.clear();
-            } else if stats.server_time <= prev.server_time {
+            } else if stats.server_time <= prev.stats.server_time {
                 // Make sure that any calculations that depend on the number of seconds elapsed
                 // since the last measurement don't divide by zero. Realistically this shouldn't
                 // happen unless we get really unlucky with the frequency of updates or the
@@ -61,14 +68,14 @@ impl StatsQueue {
                 // defensive.
                 tracing::debug!(
                     message = "server timestamp did not advance, dropping measurement",
-                    old_timestamp = prev.server_time,
+                    old_timestamp = prev.stats.server_time,
                     current_timestamp = stats.server_time
                 );
                 return;
             }
         }
 
-        q.push_back(stats);
+        q.push_back(ServerStats { stats, slabs, items });
         if q.len() > self.max_size {
             q.pop_front();
         }
@@ -80,7 +87,7 @@ impl StatsQueue {
             // The delta is only valid if there are more than two entries in the queue. This
             // avoids division by zero errors (since the time for the entries would be the same).
             (Some(previous), Some(current)) if q.len() >= 2 => {
-                let seconds = current.server_time - previous.server_time;
+                let seconds = (current.stats.server_time - previous.stats.server_time) as u64;
                 Some(StatsDelta {
                     previous: previous.clone(),
                     current: current.clone(),
@@ -100,11 +107,11 @@ pub struct BlockingStatsQueue {
 
 impl BlockingStatsQueue {
     pub fn new(queue: Arc<StatsQueue>, handle: Handle) -> Self {
-        BlockingStatsQueue { queue, handle }
+        Self { queue, handle }
     }
 
-    pub fn insert(&self, host: String, m: Stats) {
-        self.handle.block_on(self.queue.insert(host, m))
+    pub fn insert(&self, host: String, stats: Stats, slabs: Slabs, items: SlabItems) {
+        self.handle.block_on(self.queue.insert(host, stats, slabs, items))
     }
 
     pub fn read_delta(&self, host: &str) -> Option<StatsDelta> {

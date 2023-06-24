@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Add UI to `mtop` for per-slab metrics. #41
+
 ## v0.5.1 - 2023-06-12
 
 - Fix a bug where stats for some servers were not updated if another server returned an error. #34

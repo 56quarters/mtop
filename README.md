@@ -12,12 +12,13 @@ mtop: `top` for Memcached.
 
 * Display real-time statistics about your `memcached` servers such as
   * Memory usage/limit
+  * Per-slab memory usage
   * Current/max connections
   * Hit ratio
   * Gets/Sets/Evictions
   * Bytes transmitted and received
   * Server CPU usage
-* Support for monitoring multiple servers: `mtop example1:11211 example2:11211 example3:11211`
+* Support for easily switching between multiple servers
 
 ## Install
 
@@ -135,8 +136,11 @@ mtop --tls-enabled --tls-ca memcached-ca-cert.pem --tls-cert memcached-client-ce
 Within the `mtop` UI, there are a few keys that control behavior.
 
 * `q` to quit.
+* `m` to toggle between the default UI and per-slab UI.
 * `l` or `right-arrow` to select the next host.
 * `h` or `left-arrow` to select the previous host.
+* `j` or `down-arrow` to select the next slab row.
+* `k` or `up-arrow` to select the previous slab row.
 
 ## Limitations
 

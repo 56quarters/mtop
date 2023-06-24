@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
         // Run the terminal reset unconditionally but prefer to return an error from the
         // application, if available, for logging.
-        mtop::ui::run_app(&mut term, app).and(mtop::ui::reset_terminal())
+        mtop::ui::run(&mut term, app).and(mtop::ui::reset_terminal())
     })
     .await;
 
@@ -186,12 +186,28 @@ impl UpdateTask {
             let stats = match client.stats().instrument(tracing::span!(Level::DEBUG, "stats")).await {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!(message = "failed to fetch status from host", host = host, "err" = %e);
+                    tracing::warn!(message = "failed to fetch stats from host", host = host, "err" = %e);
                     continue;
                 }
             };
 
-            self.queue.insert(host.to_owned(), stats).await;
+            let slabs = match client.slabs().instrument(tracing::span!(Level::DEBUG, "slabs")).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(message = "failed to fetch slabs from host", host = host, "err" = %e);
+                    continue;
+                }
+            };
+
+            let items = match client.items().instrument(tracing::span!(Level::DEBUG, "items")).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(message = "failed to fetch items from host", host = host, "err" = %e);
+                    continue;
+                }
+            };
+
+            self.queue.insert(host.to_owned(), stats, slabs, items).await;
             self.pool.put(client).await;
         }
     }
