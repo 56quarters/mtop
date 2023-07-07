@@ -946,7 +946,7 @@ impl fmt::Debug for Memcached {
 
 #[cfg(test)]
 mod test {
-    use super::{ErrorKind, Memcached, Meta, Slab};
+    use super::{ErrorKind, Memcached, Meta, Slab, SlabItem, SlabItems};
     use std::io::Cursor;
 
     /// Create a new `Memcached` instance to read the provided server response.
@@ -1238,13 +1238,94 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_items_empty() {}
+    async fn test_items_empty() {
+        let mut client = client!();
+        let res = client.items().await.unwrap();
+
+        assert!(res.is_empty());
+    }
 
     #[tokio::test]
-    async fn test_items_error() {}
+    async fn test_items_error() {
+        let mut client = client!("ERROR Too many open connections\r\n");
+        let res = client.items().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+    }
 
     #[tokio::test]
-    async fn test_items_success() {}
+    async fn test_items_success() {
+        let mut client = client!(
+            "STAT items:39:number 3\r\n",
+            "STAT items:39:number_hot 0\r\n",
+            "STAT items:39:number_warm 1\r\n",
+            "STAT items:39:number_cold 2\r\n",
+            "STAT items:39:age_hot 0\r\n",
+            "STAT items:39:age_warm 7\r\n",
+            "STAT items:39:age 8\r\n",
+            "STAT items:39:mem_requested 1535788\r\n",
+            "STAT items:39:evicted 1646\r\n",
+            "STAT items:39:evicted_nonzero 1646\r\n",
+            "STAT items:39:evicted_time 0\r\n",
+            "STAT items:39:outofmemory 9\r\n",
+            "STAT items:39:tailrepairs 0\r\n",
+            "STAT items:39:reclaimed 13\r\n",
+            "STAT items:39:expired_unfetched 4\r\n",
+            "STAT items:39:evicted_unfetched 202\r\n",
+            "STAT items:39:evicted_active 6\r\n",
+            "STAT items:39:crawler_reclaimed 0\r\n",
+            "STAT items:39:crawler_items_checked 40\r\n",
+            "STAT items:39:lrutail_reflocked 17365\r\n",
+            "STAT items:39:moves_to_cold 8703\r\n",
+            "STAT items:39:moves_to_warm 7285\r\n",
+            "STAT items:39:moves_within_lru 3651\r\n",
+            "STAT items:39:direct_reclaims 1949\r\n",
+            "STAT items:39:hits_to_hot 894\r\n",
+            "STAT items:39:hits_to_warm 4079\r\n",
+            "STAT items:39:hits_to_cold 8043\r\n",
+            "STAT items:39:hits_to_temp 0\r\n",
+            "END\r\n",
+        );
+        let res = client.items().await.unwrap();
+
+        let expected = SlabItems {
+            items: vec![SlabItem {
+                id: 39,
+                number: 3,
+                number_hot: 0,
+                number_warm: 1,
+                number_cold: 2,
+                age_hot: 0,
+                age_warm: 7,
+                age: 8,
+                mem_requested: 1535788,
+                evicted: 1646,
+                evicted_nonzero: 1646,
+                evicted_time: 0,
+                out_of_memory: 9,
+                tail_repairs: 0,
+                reclaimed: 13,
+                expired_unfetched: 4,
+                evicted_unfetched: 202,
+                evicted_active: 6,
+                crawler_reclaimed: 0,
+                crawler_items_checked: 40,
+                lrutail_reflocked: 17365,
+                moves_to_cold: 8703,
+                moves_to_warm: 7285,
+                moves_within_lru: 3651,
+                direct_reclaims: 1949,
+                hits_to_hot: 894,
+                hits_to_warm: 4079,
+                hits_to_cold: 8043,
+                hits_to_temp: 0,
+            }],
+        };
+
+        assert_eq!(expected, res);
+    }
 
     #[tokio::test]
     async fn test_metas_empty() {
