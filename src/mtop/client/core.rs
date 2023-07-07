@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::error;
 use std::fmt;
 use std::io;
@@ -10,9 +10,10 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Stats {
     // Server info
-    pub pid: u64,
+    pub pid: i64,
     pub uptime: u64,
-    pub server_time: u64,
+    pub server_time: i64,
+    pub threads: u64,
     pub version: String,
 
     // CPU
@@ -77,6 +78,7 @@ impl TryFrom<&HashMap<String, String>> for Stats {
             uptime: parse_field("uptime", value)?,
             server_time: parse_field("time", value)?,
             version: parse_field("version", value)?,
+            threads: parse_field("threads", value)?,
 
             rusage_user: parse_field("rusage_user", value)?,
             rusage_system: parse_field("rusage_system", value)?,
@@ -124,7 +126,7 @@ impl TryFrom<&HashMap<String, String>> for Stats {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
 pub struct Slab {
     pub id: u64,
     pub chunk_size: u64,
@@ -133,6 +135,14 @@ pub struct Slab {
     pub total_chunks: u64,
     pub used_chunks: u64,
     pub free_chunks: u64,
+    pub get_hits: u64,
+    pub cmd_set: u64,
+    pub delete_hits: u64,
+    pub incr_hits: u64,
+    pub decr_hits: u64,
+    pub cas_hits: u64,
+    pub cas_badval: u64,
+    pub touch_hits: u64,
 }
 
 impl PartialOrd for Slab {
@@ -149,10 +159,22 @@ impl Ord for Slab {
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Slabs {
-    pub slabs: Vec<Slab>,
+    slabs: Vec<Slab>,
 }
 
 impl Slabs {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Slab> {
+        self.slabs.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.slabs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slabs.is_empty()
+    }
+
     pub fn find_for_size(&self, size: u64) -> Option<&Slab> {
         // Find the slab with an appropriate chunk size for an item with the given
         // size. If there is no slab with a chunk size that fits the item, return the
@@ -160,6 +182,15 @@ impl Slabs {
         self.slabs
             .get(self.slabs.partition_point(|s| s.chunk_size < size))
             .or_else(|| self.slabs.last())
+    }
+}
+
+impl IntoIterator for Slabs {
+    type Item = Slab;
+    type IntoIter = std::vec::IntoIter<Slab>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.slabs.into_iter()
     }
 }
 
@@ -194,6 +225,14 @@ impl TryFrom<&HashMap<String, String>> for Slabs {
                 total_chunks: parse_field(&format!("{}:total_chunks", id), value)?,
                 used_chunks: parse_field(&format!("{}:used_chunks", id), value)?,
                 free_chunks: parse_field(&format!("{}:free_chunks", id), value)?,
+                get_hits: parse_field(&format!("{}:get_hits", id), value)?,
+                cmd_set: parse_field(&format!("{}:cmd_set", id), value)?,
+                delete_hits: parse_field(&format!("{}:delete_hits", id), value)?,
+                incr_hits: parse_field(&format!("{}:incr_hits", id), value)?,
+                decr_hits: parse_field(&format!("{}:decr_hits", id), value)?,
+                cas_hits: parse_field(&format!("{}:cas_hits", id), value)?,
+                cas_badval: parse_field(&format!("{}:cas_badval", id), value)?,
+                touch_hits: parse_field(&format!("{}:touch_hits", id), value)?,
             })
         }
 
@@ -201,18 +240,141 @@ impl TryFrom<&HashMap<String, String>> for Slabs {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
-pub struct Sizes {
-    pub counts: BTreeMap<u64, u64>,
+#[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
+pub struct SlabItem {
+    pub id: u64,
+    pub number: u64,
+    pub number_hot: u64,
+    pub number_warm: u64,
+    pub number_cold: u64,
+    pub age_hot: u64,
+    pub age_warm: u64,
+    pub age: u64,
+    pub mem_requested: u64,
+    pub evicted: u64,
+    pub evicted_nonzero: u64,
+    pub evicted_time: u64,
+    pub out_of_memory: u64,
+    pub tail_repairs: u64,
+    pub reclaimed: u64,
+    pub expired_unfetched: u64,
+    pub evicted_unfetched: u64,
+    pub evicted_active: u64,
+    pub crawler_reclaimed: u64,
+    pub crawler_items_checked: u64,
+    pub lrutail_reflocked: u64,
+    pub moves_to_cold: u64,
+    pub moves_to_warm: u64,
+    pub moves_within_lru: u64,
+    pub direct_reclaims: u64,
+    pub hits_to_hot: u64,
+    pub hits_to_warm: u64,
+    pub hits_to_cold: u64,
+    pub hits_to_temp: u64,
 }
 
-impl From<BTreeMap<u64, u64>> for Sizes {
-    fn from(counts: BTreeMap<u64, u64>) -> Self {
-        Self { counts }
+impl PartialOrd for SlabItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.id.partial_cmp(&other.id)
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+impl Ord for SlabItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
+pub struct SlabItems {
+    items: Vec<SlabItem>,
+}
+
+impl SlabItems {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &SlabItem> {
+        self.items.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+impl IntoIterator for SlabItems {
+    type Item = SlabItem;
+    type IntoIter = std::vec::IntoIter<SlabItem>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+impl TryFrom<&HashMap<String, String>> for SlabItems {
+    type Error = MtopError;
+
+    fn try_from(value: &HashMap<String, String>) -> Result<Self, Self::Error> {
+        // Parse the slab IDs from each of the raw stats. We have to do this because
+        // Memcached isn't guaranteed to use a particular slab ID if there are no items
+        // to store in that size class. Otherwise, we could just loop from one to
+        // $active_slabs + 1.
+        let mut ids = BTreeSet::new();
+        for k in value.keys() {
+            let key_id: Option<u64> = k
+                .trim_start_matches("items:")
+                .split_once(':')
+                .map(|(raw, _rest)| raw)
+                .and_then(|raw| raw.parse().ok());
+
+            if let Some(id) = key_id {
+                ids.insert(id);
+            }
+        }
+
+        let mut items = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            items.push(SlabItem {
+                id,
+                number: parse_field(&format!("items:{}:number", id), value)?,
+                number_hot: parse_field(&format!("items:{}:number_hot", id), value)?,
+                number_warm: parse_field(&format!("items:{}:number_warm", id), value)?,
+                number_cold: parse_field(&format!("items:{}:number_cold", id), value)?,
+                age_hot: parse_field(&format!("items:{}:age_hot", id), value)?,
+                age_warm: parse_field(&format!("items:{}:age_warm", id), value)?,
+                age: parse_field(&format!("items:{}:age", id), value)?,
+                mem_requested: parse_field(&format!("items:{}:mem_requested", id), value)?,
+                evicted: parse_field(&format!("items:{}:evicted", id), value)?,
+                evicted_nonzero: parse_field(&format!("items:{}:evicted_nonzero", id), value)?,
+                evicted_time: parse_field(&format!("items:{}:evicted_time", id), value)?,
+                out_of_memory: parse_field(&format!("items:{}:outofmemory", id), value)?,
+                tail_repairs: parse_field(&format!("items:{}:tailrepairs", id), value)?,
+                reclaimed: parse_field(&format!("items:{}:reclaimed", id), value)?,
+                expired_unfetched: parse_field(&format!("items:{}:expired_unfetched", id), value)?,
+                evicted_unfetched: parse_field(&format!("items:{}:evicted_unfetched", id), value)?,
+                evicted_active: parse_field(&format!("items:{}:evicted_active", id), value)?,
+                crawler_reclaimed: parse_field(&format!("items:{}:crawler_reclaimed", id), value)?,
+                crawler_items_checked: parse_field(&format!("items:{}:crawler_items_checked", id), value)?,
+                lrutail_reflocked: parse_field(&format!("items:{}:lrutail_reflocked", id), value)?,
+                moves_to_cold: parse_field(&format!("items:{}:moves_to_cold", id), value)?,
+                moves_to_warm: parse_field(&format!("items:{}:moves_to_warm", id), value)?,
+                moves_within_lru: parse_field(&format!("items:{}:moves_within_lru", id), value)?,
+                direct_reclaims: parse_field(&format!("items:{}:direct_reclaims", id), value)?,
+                hits_to_hot: parse_field(&format!("items:{}:hits_to_hot", id), value)?,
+                hits_to_warm: parse_field(&format!("items:{}:hits_to_warm", id), value)?,
+                hits_to_cold: parse_field(&format!("items:{}:hits_to_cold", id), value)?,
+                hits_to_temp: parse_field(&format!("items:{}:hits_to_temp", id), value)?,
+            })
+        }
+
+        Ok(Self { items })
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
 pub struct Meta {
     pub key: String,
     pub expires: i64, /* Signed because Memcached uses '-1' for infinite/no TTL */
@@ -243,7 +405,7 @@ impl Ord for Meta {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
 pub struct Value {
     pub key: String,
     pub cas: u64,
@@ -459,7 +621,7 @@ enum Command<'a> {
     Delete(&'a str),
     Gets(&'a [String]),
     Stats,
-    StatsSizes,
+    StatsItems,
     StatsSlabs,
     Set(&'a str, u64, u32, &'a [u8]),
     Touch(&'a str, u32),
@@ -473,7 +635,7 @@ impl<'a> From<Command<'a>> for Vec<u8> {
             Command::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
             Command::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
             Command::Stats => "stats\r\n".to_owned().into_bytes(),
-            Command::StatsSizes => "stats sizes\r\n".to_owned().into_bytes(),
+            Command::StatsItems => "stats items\r\n".to_owned().into_bytes(),
             Command::StatsSlabs => "stats slabs\r\n".to_owned().into_bytes(),
             Command::Set(key, flags, ttl, data) => {
                 let mut set = Vec::with_capacity(key.len() + data.len() + 32);
@@ -536,41 +698,10 @@ impl Memcached {
         Stats::try_from(&raw)
     }
 
-    /// Get a `Sizes` object with the number of items in each size bucket (in bytes). This
-    /// method requires that the `track_sizes` extended option is enabled for the Memcached
-    /// server. If it is not, a configuration error will be returned.
-    pub async fn sizes(&mut self) -> Result<Sizes, MtopError> {
-        self.send(Command::StatsSizes).await?;
-        let mut counts = BTreeMap::new();
-
-        // Collect each of the returned `STAT` lines into key-value pairs and create
-        // a single Sizes object from them with each of the expected fields.
-        loop {
-            let line = self.read.next_line().await?;
-            match line.as_deref() {
-                Some("END") | None => break,
-                Some(v) => {
-                    let (key, val) = Self::parse_stat_line(v)?;
-                    // Special case for when tracking of item sizes is disabled by the
-                    // server. Turn that into a configuration error so that we can tell
-                    // the user the setting they need to use on the server.
-                    if key == "sizes_status" && val == "disabled" {
-                        return Err(MtopError::configuration("sizes_status disabled"));
-                    }
-
-                    let size = parse_value(key, v)?;
-                    let count = parse_value(val, v)?;
-                    counts.insert(size, count);
-                }
-            }
-        }
-
-        Ok(Sizes::from(counts))
-    }
-
     /// Get a `Slabs` object with information about each set of `Slab`s maintained by
     /// the Memcached server. You can think of each `Slab` as a class of objects that
-    /// are stored together in memory.
+    /// are stored together in memory. Note that `Slab` IDs may not be contiguous based
+    /// on the size of items actually stored by the server.
     pub async fn slabs(&mut self) -> Result<Slabs, MtopError> {
         self.send(Command::StatsSlabs).await?;
         let mut raw = HashMap::new();
@@ -587,6 +718,28 @@ impl Memcached {
         }
 
         Slabs::try_from(&raw)
+    }
+
+    /// Get a `SlabsItems` object with information about the `SlabItem` items stored in
+    /// each slab class maintained by the Memcached server. The ID of each `SlabItem`
+    /// corresponds to a `Slab` maintained by the server. Note that `SlabItem` IDs may
+    /// not be contiguous based on the size of items actually stored by the server.
+    pub async fn items(&mut self) -> Result<SlabItems, MtopError> {
+        self.send(Command::StatsItems).await?;
+        let mut raw = HashMap::new();
+
+        loop {
+            let line = self.read.next_line().await?;
+            match line.as_deref() {
+                Some("END") | None => break,
+                Some(v) => {
+                    let (key, val) = Self::parse_stat_line(v)?;
+                    raw.insert(key.to_owned(), val.to_owned());
+                }
+            }
+        }
+
+        SlabItems::try_from(&raw)
     }
 
     fn parse_stat_line(line: &str) -> Result<(&str, &str), MtopError> {
@@ -989,51 +1142,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_sizes_empty() {
-        let mut client = client!("END\r\n");
-        let res = client.sizes().await.unwrap();
-
-        assert!(res.counts.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_sizes_disabled() {
-        let mut client = client!("STAT sizes_status disabled\r\n", "END\r\n");
-        let res = client.sizes().await;
-
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Configuration, err.kind());
-    }
-
-    #[tokio::test]
-    async fn test_sizes_error() {
-        let mut client = client!("SERVER_ERROR backend failure\r\n");
-        let res = client.sizes().await;
-
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Protocol, err.kind());
-    }
-
-    #[tokio::test]
-    async fn test_sizes_success() {
-        let mut client = client!(
-            "STAT 320 1\r\n",
-            "STAT 352 3\r\n",
-            "STAT 384 2\r\n",
-            "STAT 480 1\r\n",
-            "END\r\n",
-        );
-        let res = client.sizes().await.unwrap();
-
-        assert_eq!(1, res.counts[&320u64]);
-        assert_eq!(3, res.counts[&352u64]);
-        assert_eq!(2, res.counts[&384u64]);
-        assert_eq!(1, res.counts[&480u64]);
-    }
-
-    #[tokio::test]
     async fn test_slabs_empty() {
         let mut client = client!("STAT active_slabs 0\r\n", "STAT total_malloced 0\r\n", "END\r\n");
         let res = client.slabs().await.unwrap();
@@ -1098,6 +1206,14 @@ mod test {
                 total_chunks: 3449,
                 used_chunks: 1,
                 free_chunks: 3448,
+                get_hits: 951,
+                cmd_set: 100,
+                delete_hits: 0,
+                incr_hits: 0,
+                decr_hits: 0,
+                cas_hits: 0,
+                cas_badval: 0,
+                touch_hits: 0,
             },
             Slab {
                 id: 7,
@@ -1107,11 +1223,28 @@ mod test {
                 total_chunks: 2730,
                 used_chunks: 5,
                 free_chunks: 2725,
+                get_hits: 4792,
+                cmd_set: 520,
+                delete_hits: 0,
+                incr_hits: 0,
+                decr_hits: 0,
+                cas_hits: 0,
+                cas_badval: 0,
+                touch_hits: 0,
             },
         ];
 
         assert_eq!(expected, res.slabs);
     }
+
+    #[tokio::test]
+    async fn test_items_empty() {}
+
+    #[tokio::test]
+    async fn test_items_error() {}
+
+    #[tokio::test]
+    async fn test_items_success() {}
 
     #[tokio::test]
     async fn test_metas_empty() {
