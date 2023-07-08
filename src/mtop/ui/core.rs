@@ -651,12 +651,6 @@ impl UnitFormatter {
         }
     }
 
-    // TODO: Handle seconds -> 1h39m45s
-
-    fn seconds(&self, val: u64) -> String {
-        todo!()
-    }
-
     fn bytes(&self, val: u64) -> String {
         if val == 0 {
             return val.to_string();
