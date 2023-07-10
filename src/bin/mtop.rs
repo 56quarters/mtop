@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{error, process};
+use tokio::net::lookup_host;
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::instrument::WithSubscriber;
@@ -16,6 +17,7 @@ const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 // memcached server have the exact same "time" value (which has one-second granularity).
 const DEFAULT_STATS_INTERVAL: Duration = Duration::from_millis(1073);
 const NUM_MEASUREMENTS: usize = 10;
+const DNS_HOST_PREFIX: &str = "dns+";
 
 /// mtop: top for memcached
 #[derive(Debug, Parser)]
@@ -100,9 +102,15 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         process::exit(1);
     });
 
-    // Run the initial connection to each server once in the main thread to make
-    // bad hostnames easier to spot.
-    let update_task = UpdateTask::new(&opts.hosts, pool, measurements_ref);
+    // Do DNS lookups on any "dns+" hostnames to expand them to multiple IPs based on A records.
+    let hosts = expand_hosts(&opts.hosts).await.unwrap_or_else(|e| {
+        tracing::error!(message = "unable to resolve host names", hosts = ?opts.hosts, error = %e);
+        process::exit(1);
+    });
+
+    // Run the initial connection to each server once in the main thread to make bad hostnames
+    // easier to spot.
+    let update_task = UpdateTask::new(&hosts, pool, measurements_ref);
     update_task.connect().await.unwrap_or_else(|e| {
         tracing::error!(message = "unable to connect to memcached servers", hosts = ?opts.hosts, error = %e);
         process::exit(1);
@@ -125,7 +133,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         mtop::ui::install_panic_handler();
 
         let blocking_measurements = BlockingStatsQueue::new(measurements_ref, Handle::current());
-        let app = mtop::ui::Application::new(&opts.hosts, blocking_measurements);
+        let app = mtop::ui::Application::new(&hosts, blocking_measurements);
 
         // Run the terminal reset unconditionally but prefer to return an error from the
         // application, if available, for logging.
@@ -146,6 +154,24 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+async fn expand_hosts(hosts: &[String]) -> Result<Vec<String>, MtopError> {
+    let mut out = Vec::with_capacity(hosts.len());
+
+    for host in hosts {
+        if host.starts_with(DNS_HOST_PREFIX) {
+            let name = host.trim_start_matches(DNS_HOST_PREFIX);
+            for addr in lookup_host(name).await? {
+                out.push(addr.to_string());
+            }
+        } else {
+            out.push(host.clone());
+        }
+    }
+
+    out.sort();
+    Ok(out)
 }
 
 #[derive(Debug)]
@@ -175,6 +201,7 @@ impl UpdateTask {
     }
 
     pub async fn update(&self) {
+        // TODO: Spawn a separate task for each of these and join!() them.
         for host in self.hosts.iter() {
             let mut client = match self.pool.get(host).await {
                 Ok(c) => c,

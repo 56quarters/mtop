@@ -106,6 +106,14 @@ mtop localhost:11211
 mtop cache01.example.com:11211 cache02.example.com:11211 cache03.example.com:11211
 ```
 
+### Connecting to multiple servers with a single DNS name
+
+In this example, a DNS lookup for `memcached.local` returns three DNS `A` records.
+
+```
+mtop dns+memcached.local:11211
+```
+
 ### Connecting to a port-forwarded Kubernetes pod
 
 ```
