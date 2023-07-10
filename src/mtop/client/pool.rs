@@ -107,7 +107,7 @@ impl MemcachedPool {
             (Some(cert), Some(key)) => {
                 tracing::debug!(message = "using key and cert for client authentication");
                 builder
-                    .with_single_cert(cert, key)
+                    .with_client_auth_cert(cert, key)
                     .map_err(|e| MtopError::configuration_cause("unable to use client cert or key", e))?
             }
             _ => {
