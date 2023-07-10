@@ -1,6 +1,6 @@
 # Changelog
 
-## unreleased
+## v0.6.0 - 2023-07-10
 
 - Add UI to `mtop` for per-slab metrics. #41
 - Add support for `dns+` hostname prefix to resolve a DNS name to multiple hosts. #43
