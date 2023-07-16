@@ -1,11 +1,10 @@
 use clap::{Parser, ValueHint};
-use mtop::client::{MemcachedPool, MtopError, TLSConfig};
+use mtop::client::{MemcachedPool, MtopError, SlabItems, Slabs, Stats, TLSConfig};
 use mtop::queue::{BlockingStatsQueue, StatsQueue};
-use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{error, process};
+use std::{env, error, process};
 use tokio::net::lookup_host;
 use tokio::runtime::Handle;
 use tokio::task;
@@ -78,14 +77,14 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     // Create a file subscriber for log messages generated while the UI is running
     // since we can't log to stdout or stderr.
     let log_file = opts.log_file.unwrap_or_else(default_log_file);
-    let file_subscriber = mtop::tracing::file_subscriber(opts.log_level, log_file).unwrap_or_else(|e| {
-        tracing::error!(message = "failed to initialize file logging", error = %e);
-        process::exit(1);
-    });
+    let file_subscriber = mtop::tracing::file_subscriber(opts.log_level, log_file)
+        .map(Arc::new)
+        .unwrap_or_else(|e| {
+            tracing::error!(message = "failed to initialize file logging", error = %e);
+            process::exit(1);
+        });
 
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
-    let measurements_ref = measurements.clone();
-
     let pool = MemcachedPool::new(
         Handle::current(),
         TLSConfig {
@@ -110,7 +109,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     // Run the initial connection to each server once in the main thread to make bad hostnames
     // easier to spot.
-    let update_task = UpdateTask::new(&hosts, pool, measurements_ref);
+    let update_task = UpdateTask::new(&hosts, pool, measurements.clone(), Handle::current());
     update_task.connect().await.unwrap_or_else(|e| {
         tracing::error!(message = "unable to connect to memcached servers", hosts = ?opts.hosts, error = %e);
         process::exit(1);
@@ -124,15 +123,14 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 update_task.update().await;
             }
         }
-        .with_subscriber(file_subscriber),
+        .with_subscriber(file_subscriber.clone()),
     );
 
-    let measurements_ref = measurements.clone();
     let ui_res = task::spawn_blocking(move || {
         let mut term = mtop::ui::initialize_terminal()?;
         mtop::ui::install_panic_handler();
 
-        let blocking_measurements = BlockingStatsQueue::new(measurements_ref, Handle::current());
+        let blocking_measurements = BlockingStatsQueue::new(measurements.clone(), Handle::current());
         let app = mtop::ui::Application::new(&hosts, blocking_measurements);
 
         // Run the terminal reset unconditionally but prefer to return an error from the
@@ -177,16 +175,18 @@ async fn expand_hosts(hosts: &[String]) -> Result<Vec<String>, MtopError> {
 #[derive(Debug)]
 pub struct UpdateTask {
     hosts: Vec<String>,
-    pool: MemcachedPool,
+    pool: Arc<MemcachedPool>,
     queue: Arc<StatsQueue>,
+    handle: Handle,
 }
 
 impl UpdateTask {
-    pub fn new(hosts: &[String], pool: MemcachedPool, queue: Arc<StatsQueue>) -> Self {
+    pub fn new(hosts: &[String], pool: MemcachedPool, queue: Arc<StatsQueue>, handle: Handle) -> Self {
         UpdateTask {
             hosts: Vec::from(hosts),
-            pool,
+            pool: Arc::new(pool),
             queue,
+            handle,
         }
     }
 
@@ -200,43 +200,44 @@ impl UpdateTask {
         Ok(())
     }
 
+    async fn update_host(host: String, pool: Arc<MemcachedPool>) -> Result<(Stats, Slabs, SlabItems), MtopError> {
+        let mut client = pool.get(&host).await?;
+        let stats = client
+            .stats()
+            .instrument(tracing::span!(Level::DEBUG, "client.stats"))
+            .await?;
+        let slabs = client
+            .slabs()
+            .instrument(tracing::span!(Level::DEBUG, "client.slabs"))
+            .await?;
+        let items = client
+            .items()
+            .instrument(tracing::span!(Level::DEBUG, "client.items"))
+            .await?;
+        pool.put(client).await;
+        Ok((stats, slabs, items))
+    }
+
     pub async fn update(&self) {
-        // TODO: Spawn a separate task for each of these and join!() them.
-        for host in self.hosts.iter() {
-            let mut client = match self.pool.get(host).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(message = "failed to get connection", host = host, "err" = %e);
-                    continue;
-                }
-            };
+        let mut tasks = Vec::with_capacity(self.hosts.len());
+        for host in self.hosts.clone() {
+            tasks.push((
+                host.clone(),
+                self.handle.spawn(Self::update_host(host, self.pool.clone())),
+            ));
+        }
 
-            let stats = match client.stats().instrument(tracing::span!(Level::DEBUG, "stats")).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(message = "failed to fetch stats from host", host = host, "err" = %e);
-                    continue;
+        for (host, task) in tasks {
+            match task.await {
+                Err(e) => tracing::error!(message = "failed to run server update task", "host" = host, "err" = %e),
+                Ok(Err(e)) => tracing::warn!(message = "failed to update stats for server", "host" = host, "err" = %e),
+                Ok(Ok((stats, slabs, items))) => {
+                    self.queue
+                        .insert(host, stats, slabs, items)
+                        .instrument(tracing::span!(Level::DEBUG, "queue.insert"))
+                        .await;
                 }
-            };
-
-            let slabs = match client.slabs().instrument(tracing::span!(Level::DEBUG, "slabs")).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(message = "failed to fetch slabs from host", host = host, "err" = %e);
-                    continue;
-                }
-            };
-
-            let items = match client.items().instrument(tracing::span!(Level::DEBUG, "items")).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(message = "failed to fetch items from host", host = host, "err" = %e);
-                    continue;
-                }
-            };
-
-            self.queue.insert(host.to_owned(), stats, slabs, items).await;
-            self.pool.put(client).await;
+            }
         }
     }
 }

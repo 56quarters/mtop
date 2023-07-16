@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Fetch stats from each server in `mtop` in parallel. #46
+
 ## v0.6.0 - 2023-07-10
 
 - Add UI to `mtop` for per-slab metrics. #41
