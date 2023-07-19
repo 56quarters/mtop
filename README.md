@@ -111,6 +111,17 @@ mtop cache01.example.com:11211 cache02.example.com:11211 cache03.example.com:112
 In this example, a DNS lookup for `memcached.local` returns three DNS `A` records.
 
 ```
+dig memcached.local
+;; QUESTION SECTION:
+;memcached.local.         IN      A
+
+;; ANSWER SECTION:
+memcached.local.  0       IN      A       127.0.0.3
+memcached.local.  0       IN      A       127.0.0.2
+memcached.local.  0       IN      A       127.0.0.1
+```
+
+```
 mtop dns+memcached.local:11211
 ```
 
