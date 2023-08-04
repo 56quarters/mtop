@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Update dependencies. #49
+
 ## v0.6.1 - 2023-07-20
 
 - Fetch stats from each server in `mtop` in parallel. #46
