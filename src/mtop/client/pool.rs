@@ -165,10 +165,10 @@ impl MemcachedPool {
             }
 
             tracing::debug!(message = "adding custom CA certs for roots", num_certs = anchors.len());
-            root_cert_store.add_server_trust_anchors(anchors.into_iter());
+            root_cert_store.add_trust_anchors(anchors.into_iter());
         } else {
             tracing::debug!(message = "using default CA certs for roots");
-            root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+            root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
                 OwnedTrustAnchor::from_subject_spki_name_constraints(ta.subject, ta.spki, ta.name_constraints)
             }));
         }
