@@ -220,10 +220,10 @@ impl UpdateTask {
 
     pub async fn update(&self) {
         let mut tasks = Vec::with_capacity(self.hosts.len());
-        for host in self.hosts.clone() {
+        for host in self.hosts.iter() {
             tasks.push((
-                host.clone(),
-                self.handle.spawn(Self::update_host(host, self.pool.clone())),
+                host,
+                self.handle.spawn(Self::update_host(host.clone(), self.pool.clone())),
             ));
         }
 
@@ -233,7 +233,7 @@ impl UpdateTask {
                 Ok(Err(e)) => tracing::warn!(message = "failed to update stats for server", "host" = host, "err" = %e),
                 Ok(Ok((stats, slabs, items))) => {
                     self.queue
-                        .insert(host, stats, slabs, items)
+                        .insert(host.clone(), stats, slabs, items)
                         .instrument(tracing::span!(Level::DEBUG, "queue.insert"))
                         .await;
                 }
