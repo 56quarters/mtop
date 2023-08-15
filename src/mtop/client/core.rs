@@ -667,13 +667,9 @@ impl Memcached {
         R: AsyncRead + Send + Sync + Unpin + 'static,
         W: AsyncWrite + Send + Sync + Unpin + 'static,
     {
-        // Need to set the types here explicitly otherwise they get inferred as `BufReader<Box<R>>`
-        let buf_reader: BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>> = BufReader::new(Box::new(read));
-        let buf_writer: BufWriter<Box<dyn AsyncWrite + Send + Sync + Unpin>> = BufWriter::new(Box::new(write));
-
         Memcached {
-            read: buf_reader.lines(),
-            write: buf_writer,
+            read: BufReader::<Box<dyn AsyncRead + Send + Sync + Unpin>>::new(Box::new(read)).lines(),
+            write: BufWriter::new(Box::new(write)),
         }
     }
 
