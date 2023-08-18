@@ -270,7 +270,7 @@ fn slab_table_rows<'a>(delta: &StatsDelta, units: &UnitFormatter) -> Vec<Row<'a>
     for slab in delta.current.slabs.iter() {
         let (max_age, evicted, expired) = if let Some(i) = items.get(&slab.id) {
             (
-                format!("{}s", i.age),
+                units.seconds(i.age),
                 format!("{}", i.evicted_unfetched),
                 format!("{}", i.expired_unfetched),
             )
@@ -285,7 +285,7 @@ fn slab_table_rows<'a>(delta: &StatsDelta, units: &UnitFormatter) -> Vec<Row<'a>
                 Cell::from(format!("{}b", slab.chunk_size)),
                 Cell::from(format!("{}", slab.total_pages)),
                 Cell::from(format!("{}", slab.used_chunks)),
-                Cell::from(format!("{}", units.bytes(used))),
+                Cell::from(units.bytes(used)),
                 Cell::from(max_age),
                 Cell::from(evicted),
                 Cell::from(expired),
@@ -649,6 +649,20 @@ impl UnitFormatter {
                 },
             ],
         }
+    }
+
+    fn seconds(&self, mut secs: u64) -> String {
+        let hours = secs / 3600;
+        if hours > 0 {
+            secs = secs % 3600;
+        }
+
+        let mins = secs / 60;
+        if mins > 0 {
+            secs = secs % 60;
+        }
+
+        format!("{:0>2}:{:0>2}:{:0>2}", hours, mins, secs)
     }
 
     fn bytes(&self, val: u64) -> String {

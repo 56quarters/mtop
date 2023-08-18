@@ -3,6 +3,7 @@
 ## unreleased
 
 - Update dependencies. #49
+- Change slab `max age` display format to `HH:MM:SS`. #52
 
 ## v0.6.1 - 2023-07-20
 
