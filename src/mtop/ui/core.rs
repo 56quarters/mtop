@@ -654,12 +654,12 @@ impl UnitFormatter {
     fn seconds(&self, mut secs: u64) -> String {
         let hours = secs / 3600;
         if hours > 0 {
-            secs = secs % 3600;
+            secs %= 3600;
         }
 
         let mins = secs / 60;
         if mins > 0 {
-            secs = secs % 60;
+            secs %= 60;
         }
 
         format!("{:0>2}:{:0>2}:{:0>2}", hours, mins, secs)
