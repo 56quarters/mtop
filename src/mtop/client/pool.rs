@@ -32,7 +32,7 @@ impl DerefMut for PooledMemcached {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TLSConfig {
     pub enabled: bool,
     pub ca_path: Option<PathBuf>,
