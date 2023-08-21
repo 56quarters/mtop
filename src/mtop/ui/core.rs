@@ -639,14 +639,6 @@ impl UnitFormatter {
                     factor: 1024_f64.powi(5),
                     suffix: "P",
                 },
-                BytesScale {
-                    factor: 1024_f64.powi(6),
-                    suffix: "E",
-                },
-                BytesScale {
-                    factor: 1024_f64.powi(7),
-                    suffix: "Z",
-                },
             ],
         }
     }
@@ -677,5 +669,82 @@ impl UnitFormatter {
             .get(index)
             .map(|s| format!("{:.1}{}", val as f64 / s.factor, s.suffix))
             .unwrap_or_else(|| val.to_string())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::UnitFormatter;
+
+    #[test]
+    fn test_unit_formatter_seconds_more_than_an_hour() {
+        let units = UnitFormatter::new();
+        assert_eq!("02:01:41", units.seconds(7301));
+    }
+
+    #[test]
+    fn test_unit_formatter_seconds_more_than_an_two_hour_digits() {
+        let units = UnitFormatter::new();
+        assert_eq!("101:01:15", units.seconds(363675));
+    }
+
+    #[test]
+    fn test_unit_formatter_seconds_more_than_a_minute() {
+        let units = UnitFormatter::new();
+        assert_eq!("00:02:15", units.seconds(135));
+    }
+
+    #[test]
+    fn test_unit_formatter_seconds_less_than_a_minute() {
+        let units = UnitFormatter::new();
+        assert_eq!("00:00:45", units.seconds(45));
+    }
+
+    #[test]
+    fn test_unit_formatter_seconds_zero() {
+        let units = UnitFormatter::new();
+        assert_eq!("00:00:00", units.seconds(0));
+    }
+
+    #[test]
+    fn test_unit_formatter_bytes_zero() {
+        let units = UnitFormatter::new();
+        assert_eq!("0", units.bytes(0));
+    }
+
+    #[test]
+    fn test_unit_formatter_bytes_b() {
+        let units = UnitFormatter::new();
+        assert_eq!("15.0b", units.bytes(15));
+    }
+
+    #[test]
+    fn test_unit_formatter_bytes_kb() {
+        let units = UnitFormatter::new();
+        assert_eq!("15.1k", units.bytes(15462));
+    }
+
+    #[test]
+    fn test_unit_formatter_bytes_mb() {
+        let units = UnitFormatter::new();
+        assert_eq!("15.1M", units.bytes(15833498));
+    }
+
+    #[test]
+    fn test_unit_formatter_bytes_gb() {
+        let units = UnitFormatter::new();
+        assert_eq!("15.1G", units.bytes(16213501542));
+    }
+
+    #[test]
+    fn test_unit_formatter_bytes_tb() {
+        let units = UnitFormatter::new();
+        assert_eq!("15.1T", units.bytes(16602625579418));
+    }
+
+    #[test]
+    fn test_unit_formatter_bytes_pb() {
+        let units = UnitFormatter::new();
+        assert_eq!("15.1P", units.bytes(17001088593323622));
     }
 }
