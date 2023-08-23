@@ -1,4 +1,4 @@
-use crate::client::core::{Memcached, MtopError};
+use crate::core::{Memcached, MtopError};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader as StdBufReader;
@@ -94,10 +94,6 @@ impl MemcachedPool {
             None
         };
 
-        if client_cert.is_some() != client_key.is_some() {
-            // TODO: Return an error? Can we get clap to do this?
-        }
-
         let trust_store = Self::trust_store(ca)?;
         let builder = ClientConfig::builder()
             .with_safe_defaults()
@@ -168,7 +164,7 @@ impl MemcachedPool {
             root_cert_store.add_trust_anchors(anchors.into_iter());
         } else {
             tracing::debug!(message = "using default CA certs for roots");
-            root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+            root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
                 OwnedTrustAnchor::from_subject_spki_name_constraints(ta.subject, ta.spki, ta.name_constraints)
             }));
         }

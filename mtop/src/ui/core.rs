@@ -1,8 +1,8 @@
-use crate::client::SlabItem;
 use crate::queue::{BlockingStatsQueue, StatsDelta};
 use crate::ui::compat::{StatefulTabs, TabState};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use mtop_client::SlabItem;
 use std::collections::HashMap;
 use std::time::Duration;
 use std::{io, panic};
