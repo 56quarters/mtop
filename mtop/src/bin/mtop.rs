@@ -1,6 +1,6 @@
 use clap::{Parser, ValueHint};
-use mtop::client::{MemcachedPool, MtopError, SlabItems, Slabs, Stats, TLSConfig};
 use mtop::queue::{BlockingStatsQueue, StatsQueue};
+use mtop_client::{MemcachedPool, MtopError, SlabItems, Slabs, Stats, TLSConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,12 +49,12 @@ struct MtopConfig {
 
     /// Optional client certificate to use to authenticate with the Memcached server. Note that
     /// this may or may not be required based on how the Memcached server is configured.
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, requires = "tls_key", value_hint = ValueHint::FilePath)]
     tls_cert: Option<PathBuf>,
 
     /// Optional client key to use to authenticate with the Memcached server. Note that this may
     /// or may not be required based on how the Memcached server is configured.
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, requires = "tls_cert", value_hint = ValueHint::FilePath)]
     tls_key: Option<PathBuf>,
 
     /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least

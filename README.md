@@ -6,7 +6,7 @@
 
 mtop: `top` for Memcached.
 
-![mtop](/images/mtop.png)
+![mtop](mtop.png)
 
 ## Features
 
@@ -43,7 +43,7 @@ cargo install mtop
 To install as a completely static binary (Linux only):
 
 ```
-cargo install --target=x86_64-unknown-linux-musl mtop 
+cargo install --target x86_64-unknown-linux-musl mtop 
 ```
 
 To uninstall:
@@ -66,13 +66,13 @@ git clone https://github.com/56quarters/mtop.git && cd mtop
 Install from local sources:
 
 ```
-cargo install --path .
+cargo install --path mtop
 ```
 
 Install a completely static binary from local sources (Linux only):
 
 ```
-cargo install --path . --target=x86_64-unknown-linux-musl
+cargo install --path mtop --target x86_64-unknown-linux-musl
 ```
 
 To uninstall:

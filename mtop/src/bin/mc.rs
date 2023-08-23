@@ -1,5 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
-use mtop::client::{MemcachedPool, Meta, TLSConfig, Value};
+use mtop_client::{MemcachedPool, Meta, TLSConfig, Value};
 use std::error;
 use std::io;
 use std::path::PathBuf;
@@ -40,12 +40,12 @@ struct McConfig {
 
     /// Optional client certificate to use to authenticate with the Memcached server. Note that
     /// this may or may not be required based on how the Memcached server is configured.
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, requires = "tls_key", value_hint = ValueHint::FilePath)]
     tls_cert: Option<PathBuf>,
 
     /// Optional client key to use to authenticate with the Memcached server. Note that this may
     /// or may not be required based on how the Memcached server is configured.
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, requires = "tls_cert", value_hint = ValueHint::FilePath)]
     tls_key: Option<PathBuf>,
 
     #[command(subcommand)]

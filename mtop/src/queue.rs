@@ -1,4 +1,4 @@
-use crate::client::{SlabItems, Slabs, Stats};
+use mtop_client::{SlabItems, Slabs, Stats};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::runtime::Handle;
