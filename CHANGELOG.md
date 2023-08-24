@@ -1,6 +1,6 @@
 # Changelog
 
-## unreleased
+## v0.6.3 - 2023-08-24
 
 - Split Memcached client into a separate crate. #58
 - Require `--tls-cert` flag if `--tls-key` is present and vice versa in `mtop` and `mc`. #58
