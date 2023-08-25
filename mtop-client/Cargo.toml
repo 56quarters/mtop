@@ -2,7 +2,7 @@
 name = "mtop-client"
 version = "0.6.3"
 authors = ["Nick Pillitteri"]
-description = "mtop: top for Memcached"
+description = "Memcached client for mtop"
 homepage = "https://github.com/56quarters/mtop"
 repository = "https://github.com/56quarters/mtop"
 readme = "../README.md"
