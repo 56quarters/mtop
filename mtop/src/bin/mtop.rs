@@ -120,7 +120,10 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             let mut interval = tokio::time::interval(DEFAULT_STATS_INTERVAL);
             loop {
                 let _ = interval.tick().await;
-                update_task.update().await;
+                update_task
+                    .update()
+                    .instrument(tracing::span!(Level::DEBUG, "periodic.update"))
+                    .await;
             }
         }
         .with_subscriber(file_subscriber.clone()),
@@ -201,7 +204,10 @@ impl UpdateTask {
     }
 
     async fn update_host(host: String, pool: Arc<MemcachedPool>) -> Result<(Stats, Slabs, SlabItems), MtopError> {
-        let mut client = pool.get(&host).await?;
+        let mut client = pool
+            .get(&host)
+            .instrument(tracing::span!(Level::DEBUG, "client.connect"))
+            .await?;
         let stats = client
             .stats()
             .instrument(tracing::span!(Level::DEBUG, "client.stats"))
@@ -229,8 +235,8 @@ impl UpdateTask {
 
         for (host, task) in tasks {
             match task.await {
-                Err(e) => tracing::error!(message = "failed to run server update task", "host" = host, "err" = %e),
-                Ok(Err(e)) => tracing::warn!(message = "failed to update stats for server", "host" = host, "err" = %e),
+                Err(e) => tracing::error!(message = "failed to run server update task", host = host, err = %e),
+                Ok(Err(e)) => tracing::warn!(message = "failed to update stats for server", host = host, err = %e),
                 Ok(Ok((stats, slabs, items))) => {
                     self.queue
                         .insert(host.clone(), stats, slabs, items)
