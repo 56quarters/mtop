@@ -32,6 +32,23 @@ impl DerefMut for PooledMemcached {
     }
 }
 
+#[derive(Debug)]
+pub struct PoolConfig {
+    pub check_on_get: bool,
+    pub check_on_put: bool,
+    pub tls: TLSConfig,
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
+            check_on_get: true,
+            check_on_put: true,
+            tls: TLSConfig::default(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TLSConfig {
     pub enabled: bool,
@@ -44,32 +61,34 @@ pub struct TLSConfig {
 #[derive(Debug)]
 pub struct MemcachedPool {
     clients: Mutex<HashMap<String, Memcached>>,
-    config: Option<Arc<ClientConfig>>,
+    client_config: Option<Arc<ClientConfig>>,
     server: Option<ServerName>,
+    config: PoolConfig,
 }
 
 impl MemcachedPool {
-    pub async fn new(handle: Handle, tls: TLSConfig) -> Result<Self, MtopError> {
-        let server = if let Some(s) = &tls.server_name {
+    pub async fn new(handle: Handle, config: PoolConfig) -> Result<Self, MtopError> {
+        let server = if let Some(s) = &config.tls.server_name {
             Some(Self::host_to_server_name(s)?)
         } else {
             None
         };
 
-        let config = if tls.enabled {
-            Some(Arc::new(Self::config(handle, &tls).await?))
+        let client_config = if config.tls.enabled {
+            Some(Arc::new(Self::client_config(handle, &config.tls).await?))
         } else {
             None
         };
 
         Ok(MemcachedPool {
             clients: Mutex::new(HashMap::new()),
-            config,
+            client_config,
             server,
+            config,
         })
     }
 
-    async fn config(handle: Handle, tls: &TLSConfig) -> Result<ClientConfig, MtopError> {
+    async fn client_config(handle: Handle, tls: &TLSConfig) -> Result<ClientConfig, MtopError> {
         let ca = if let Some(p) = &tls.ca_path {
             let certs = Self::load_cert(&handle, p).await?;
             tracing::debug!(message = "loaded CA certs", num_certs = certs.len(), path = ?p);
@@ -173,7 +192,7 @@ impl MemcachedPool {
     }
 
     async fn connect(&self, host: &str) -> Result<Memcached, MtopError> {
-        if let Some(cfg) = &self.config {
+        if let Some(cfg) = &self.client_config {
             let server = match &self.server {
                 Some(v) => v.clone(),
                 None => host
@@ -196,10 +215,14 @@ impl MemcachedPool {
 
     pub async fn get(&self, host: &str) -> Result<PooledMemcached, MtopError> {
         let mut map = self.clients.lock().await;
-        let inner = match map.remove(host) {
+        let mut inner = match map.remove(host) {
             Some(c) => c,
             None => self.connect(host).await?,
         };
+
+        if self.config.check_on_get {
+            inner.ping().await?;
+        }
 
         Ok(PooledMemcached {
             inner,
@@ -207,9 +230,11 @@ impl MemcachedPool {
         })
     }
 
-    pub async fn put(&self, client: PooledMemcached) {
-        let mut map = self.clients.lock().await;
-        map.insert(client.host, client.inner);
+    pub async fn put(&self, mut client: PooledMemcached) {
+        if !self.config.check_on_put || client.ping().await.is_ok() {
+            let mut map = self.clients.lock().await;
+            map.insert(client.host, client.inner);
+        }
     }
 }
 

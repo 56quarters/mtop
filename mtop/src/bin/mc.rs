@@ -1,5 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
-use mtop_client::{MemcachedPool, Meta, TLSConfig, Value};
+use mtop_client::{MemcachedPool, Meta, PoolConfig, TLSConfig, Value};
 use std::error;
 use std::io;
 use std::path::PathBuf;
@@ -130,12 +130,15 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     let pool = MemcachedPool::new(
         Handle::current(),
-        TLSConfig {
-            enabled: opts.tls_enabled,
-            ca_path: opts.tls_ca,
-            cert_path: opts.tls_cert,
-            key_path: opts.tls_key,
-            server_name: opts.tls_server_name,
+        PoolConfig {
+            tls: TLSConfig {
+                enabled: opts.tls_enabled,
+                ca_path: opts.tls_ca,
+                cert_path: opts.tls_cert,
+                key_path: opts.tls_key,
+                server_name: opts.tls_server_name,
+            },
+            ..Default::default()
         },
     )
     .await
