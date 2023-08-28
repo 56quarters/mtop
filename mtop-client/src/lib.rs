@@ -5,4 +5,4 @@ pub use crate::core::{
     ErrorKind, Memcached, Meta, MtopError, ProtocolError, ProtocolErrorKind, Slab, SlabItem, SlabItems, Slabs, Stats,
     Value,
 };
-pub use crate::pool::{MemcachedPool, PooledMemcached, TLSConfig};
+pub use crate::pool::{MemcachedPool, PoolConfig, PooledMemcached, TLSConfig};

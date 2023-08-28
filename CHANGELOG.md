@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Perform health checks on Memcached connections in the connection pool. #63
+
 ## v0.6.3 - 2023-08-24
 
 - Split Memcached client into a separate crate. #58

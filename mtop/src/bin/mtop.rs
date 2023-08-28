@@ -1,6 +1,6 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, StatsQueue};
-use mtop_client::{MemcachedPool, MtopError, SlabItems, Slabs, Stats, TLSConfig};
+use mtop_client::{MemcachedPool, MtopError, PoolConfig, SlabItems, Slabs, Stats, TLSConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -87,12 +87,15 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
     let pool = MemcachedPool::new(
         Handle::current(),
-        TLSConfig {
-            enabled: opts.tls_enabled,
-            ca_path: opts.tls_ca,
-            cert_path: opts.tls_cert,
-            key_path: opts.tls_key,
-            server_name: opts.tls_server_name,
+        PoolConfig {
+            tls: TLSConfig {
+                enabled: opts.tls_enabled,
+                ca_path: opts.tls_ca,
+                cert_path: opts.tls_cert,
+                key_path: opts.tls_key,
+                server_name: opts.tls_server_name,
+            },
+            ..Default::default()
         },
     )
     .await
