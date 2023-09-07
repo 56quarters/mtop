@@ -954,9 +954,8 @@ impl fmt::Debug for Memcached {
 
 #[cfg(test)]
 mod test {
-    use std::io::Cursor;
-
     use super::{ErrorKind, Memcached, Meta, Slab, SlabItem, SlabItems};
+    use std::io::Cursor;
 
     /// Create a new `Memcached` instance to read the provided server response.
     macro_rules! client {
