@@ -3,6 +3,7 @@
 ## unreleased
 
 - Perform health checks on Memcached connections in the connection pool. #63
+- Improve performance of metadata parsing, e.g. `mc keys`. #64
 
 ## v0.6.3 - 2023-08-24
 
