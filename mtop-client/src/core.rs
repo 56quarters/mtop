@@ -381,6 +381,13 @@ pub struct Meta {
     pub size: u64,
 }
 
+impl Meta {
+    // Meta information is returned from the server as multiple key-value pairs per
+    // line. We only care about a subset of those keys. Define them here to avoid doing
+    // extra work when parsing the server response.
+    const KEYS: &'static [&'static str] = &["key", "exp", "size"];
+}
+
 impl TryFrom<&HashMap<String, String>> for Meta {
     type Error = MtopError;
 
@@ -631,7 +638,7 @@ enum Command<'a> {
 impl<'a> From<Command<'a>> for Vec<u8> {
     fn from(value: Command<'a>) -> Self {
         let buf = match value {
-            Command::CrawlerMetadump => "lru_crawler metadump all\r\n".to_owned().into_bytes(),
+            Command::CrawlerMetadump => "lru_crawler metadump hash\r\n".to_owned().into_bytes(),
             Command::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
             Command::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
             Command::Stats => "stats\r\n".to_owned().into_bytes(),
@@ -790,9 +797,14 @@ impl Memcached {
             let (key, val) = p
                 .split_once('=')
                 .ok_or_else(|| MtopError::internal(format!("unexpected metadump format '{}'", line)))?;
+
+            // Avoid spending time decoding values or allocating for data we don't care about
+            if !Meta::KEYS.contains(&key) {
+                continue;
+            }
+
             let decoded = urlencoding::decode(val)
                 .map_err(|e| MtopError::internal_cause(format!("unexpected metadump encoding '{}'", line), e))?;
-
             raw.insert(key.to_owned(), decoded.into_owned());
         }
 
@@ -942,8 +954,9 @@ impl fmt::Debug for Memcached {
 
 #[cfg(test)]
 mod test {
-    use super::{ErrorKind, Memcached, Meta, Slab, SlabItem, SlabItems};
     use std::io::Cursor;
+
+    use super::{ErrorKind, Memcached, Meta, Slab, SlabItem, SlabItems};
 
     /// Create a new `Memcached` instance to read the provided server response.
     macro_rules! client {
