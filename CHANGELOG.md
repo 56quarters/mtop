@@ -1,6 +1,6 @@
 # Changelog
 
-## unreleased
+## v0.6.4 - 2023-09-09
 
 - Perform health checks on Memcached connections in the connection pool. #63
 - Improve performance of metadata parsing, e.g. `mc keys`. #64
