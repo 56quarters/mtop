@@ -1,11 +1,12 @@
 use crate::core::{Memcached, MtopError};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::File;
 use std::io::BufReader as StdBufReader;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio_rustls::rustls::{Certificate, ClientConfig, OwnedTrustAnchor, PrivateKey, RootCertStore, ServerName};
@@ -238,20 +239,34 @@ impl MemcachedPool {
     }
 }
 
-async fn plain_connect(host: &str) -> Result<Memcached, MtopError> {
-    let tcp_stream = TcpStream::connect(host)
-        .await
-        .map_err(|e| MtopError::from((host.to_string(), e)))?;
+async fn plain_connect<A>(host: A) -> Result<Memcached, MtopError>
+where
+    A: ToSocketAddrs + fmt::Display,
+{
+    let tcp_stream = tcp_stream(host).await?;
     let (read, write) = tcp_stream.into_split();
     Ok(Memcached::new(read, write))
 }
 
-async fn tls_connect(host: &str, server: ServerName, config: Arc<ClientConfig>) -> Result<Memcached, MtopError> {
+async fn tls_connect<A>(host: A, server: ServerName, config: Arc<ClientConfig>) -> Result<Memcached, MtopError>
+where
+    A: ToSocketAddrs + fmt::Display,
+{
+    let tcp_stream = tcp_stream(host).await?;
     let connector = TlsConnector::from(config);
-    let tcp_stream = TcpStream::connect(host)
-        .await
-        .map_err(|e| MtopError::from((host.to_string(), e)))?;
     let tls_stream = connector.connect(server, tcp_stream).await?;
     let (read, write) = tokio::io::split(tls_stream);
     Ok(Memcached::new(read, write))
+}
+
+async fn tcp_stream<A>(host: A) -> Result<TcpStream, MtopError>
+where
+    A: ToSocketAddrs + fmt::Display,
+{
+    TcpStream::connect(&host)
+        .await
+        // The client buffers and flushes writes so we don't need delay here to
+        // avoid lots of tiny packets.
+        .and_then(|s| s.set_nodelay(true).map(|_| s))
+        .map_err(|e| MtopError::from((host.to_string(), e)))
 }
