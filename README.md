@@ -182,3 +182,14 @@ mtop is available under the terms of the [GPL, version 3](LICENSE).
 
 Any contribution intentionally submitted  for inclusion in the work by you
 shall be licensed as above, without any additional terms or conditions.
+
+## Releasing
+
+Steps for releasing new versions of `mtop` are described below.
+
+* Open and merge a PR incrementing the version of `mtop` in all `Cargo.toml` files and update `CHANGELOG.md`.
+* Update local `master` from Github remote.
+* Create but do not push a tag of the format `v1.2.3`
+* Run `cargo package` and `cargo publish` for the `mtop-client` crate.
+* Run `cargo pacakge` and `cargo publish` for the `mtop` crate.
+* Push tags to all remotes `git push --tags origin`, `git push --tags github`
