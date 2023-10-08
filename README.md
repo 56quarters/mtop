@@ -29,6 +29,10 @@ There are multiple ways to install `mtop` listed below.
 Binaries are published for GNU/Linux (x86_64), Windows (x86_64), and MacOS (x86_64 and aarch64)
 for [each release](https://github.com/56quarters/mtop/releases).
 
+### Docker
+
+Docker images for x86_64 are published for each commit to `master` and each [tagged release](https://hub.docker.com/r/56quarters/mtop).
+
 ### Cargo
 
 `mtop` along with its dependencies can be downloaded and built from source using the
