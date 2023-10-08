@@ -31,7 +31,7 @@ for [each release](https://github.com/56quarters/mtop/releases).
 
 ### Docker
 
-Docker images for x86_64 are published for each [tagged release](https://hub.docker.com/r/56quarters/mtop).
+Docker images for GNU/Linux (x86_64, arm64) are published for [each release](https://hub.docker.com/r/56quarters/mtop).
 
 ### Cargo
 
