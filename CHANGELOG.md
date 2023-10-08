@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Build Docker images for each release. #72
+
 ## v0.6.7 - 2023-09-09
 
 - Perform health checks on Memcached connections in the connection pool. #63
