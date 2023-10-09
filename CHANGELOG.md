@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+
+- Build Docker images for arm64 architecture. #78
+
 ## v0.6.8 - 2023-10-07
 
 - Build Docker images for each release. #72
