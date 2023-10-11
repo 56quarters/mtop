@@ -1,6 +1,6 @@
 [package]
 name = "mtop"
-version = "0.6.8"
+version = "0.6.9"
 authors = ["Nick Pillitteri"]
 description = "mtop: top for Memcached"
 homepage = "https://github.com/56quarters/mtop"
@@ -17,7 +17,7 @@ tokio = { version = "1.14.0", features = ["full"] }
 tracing = "0.1.11"
 tracing-subscriber = "0.3.16"
 tui = "0.19.0"
-mtop-client = { path = "../mtop-client", version = "0.6.8" }
+mtop-client = { path = "../mtop-client", version = "0.6.9" }
 
 [lib]
 name = "mtop"
