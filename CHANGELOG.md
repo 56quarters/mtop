@@ -1,6 +1,6 @@
 # Changelog
 
-## ## v0.6.9 - 2023-10-11
+## v0.6.9 - 2023-10-11
 
 - Build Docker images for arm64 architecture. #78
 
