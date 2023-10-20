@@ -3,15 +3,15 @@ use crate::ui::compat::{StatefulTabs, TabState};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use mtop_client::SlabItem;
+use ratatui::backend::Backend;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Gauge, Row, Table, TableState, Tabs};
+use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::collections::HashMap;
 use std::time::Duration;
 use std::{io, panic};
-use tui::backend::Backend;
-use tui::layout::{Constraint, Direction, Layout, Rect};
-use tui::style::{Color, Modifier, Style};
-use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, Cell, Gauge, Row, Table, TableState, Tabs};
-use tui::{backend::CrosstermBackend, Frame, Terminal};
 
 const DRAW_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -227,7 +227,7 @@ fn host_tabs(hosts: &[String]) -> StatefulTabs {
         .iter()
         .map(|t| {
             let (first, rest) = t.split_at(1);
-            Spans::from(vec![
+            Line::from(vec![
                 Span::styled(first, Style::default().fg(Color::Cyan)),
                 Span::styled(rest, Style::default()),
             ])

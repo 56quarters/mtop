@@ -147,7 +147,7 @@ pub struct Slab {
 
 impl PartialOrd for Slab {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.id.partial_cmp(&other.id)
+        Some(self.cmp(other))
     }
 }
 
@@ -275,7 +275,7 @@ pub struct SlabItem {
 
 impl PartialOrd for SlabItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.id.partial_cmp(&other.id)
+        Some(self.cmp(other))
     }
 }
 
@@ -402,7 +402,7 @@ impl TryFrom<&HashMap<String, String>> for Meta {
 
 impl PartialOrd for Meta {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.key.partial_cmp(&other.key)
+        Some(self.cmp(other))
     }
 }
 
@@ -422,7 +422,7 @@ pub struct Value {
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.key.partial_cmp(&other.key)
+        Some(self.cmp(other))
     }
 }
 
