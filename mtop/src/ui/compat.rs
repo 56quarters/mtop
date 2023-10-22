@@ -1,6 +1,6 @@
-use tui::buffer::Buffer;
-use tui::layout::Rect;
-use tui::widgets::{StatefulWidget, Tabs, Widget};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::widgets::{StatefulWidget, Tabs, Widget};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TabState {
