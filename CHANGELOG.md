@@ -3,6 +3,8 @@
 ## v0.7.0 - unreleased
 
 - Build binaries for Linux Musl libc target. #83
+- Move "Bytes tx" under "Gets" and "Bytes rx" under "Sets". #84
+- Create a `check` subcommand for `mc` to test connections to a server. #86
 
 ## v0.6.9 - 2023-10-11
 
