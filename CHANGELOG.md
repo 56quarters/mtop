@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.0 - unreleased
+
+- Build binaries for Linux Musl libc target. #83
+
 ## v0.6.9 - 2023-10-11
 
 - Build Docker images for arm64 architecture. #78
