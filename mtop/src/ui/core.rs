@@ -180,11 +180,11 @@ where
     let items = items_gauge(delta);
     f.render_widget(items, gauge_row_2[3]);
 
-    let bytes_read = bytes_read_gauge(delta, &units);
-    f.render_widget(bytes_read, gauge_row_3[0]);
-
     let bytes_written = bytes_written_gauge(delta, &units);
-    f.render_widget(bytes_written, gauge_row_3[1]);
+    f.render_widget(bytes_written, gauge_row_3[0]);
+
+    let bytes_read = bytes_read_gauge(delta, &units);
+    f.render_widget(bytes_read, gauge_row_3[1]);
 
     let user_cpu = user_cpu_gauge(delta);
     f.render_widget(user_cpu, gauge_row_3[2]);
