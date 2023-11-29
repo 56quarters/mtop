@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.7.0 - unreleased
+## v0.7.0 - 2023-11-28
 
 - Build binaries for Linux Musl libc target. #83
 - Move "Bytes tx" under "Gets" and "Bytes rx" under "Sets". #84
