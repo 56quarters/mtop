@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "mtop"
-version = "0.6.9"
+version = "0.7.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "mtop-client"
-version = "0.6.9"
+version = "0.7.0"
 dependencies = [
  "rustls-pemfile",
  "rustls-webpki",
