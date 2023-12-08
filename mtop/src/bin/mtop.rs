@@ -1,11 +1,12 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, StatsQueue};
-use mtop_client::{MemcachedPool, MtopError, PoolConfig, SlabItems, Slabs, Stats, TLSConfig};
+use mtop_client::{MemcachedPool, MtopError, PoolConfig, SlabItems, Slabs, Stats, TLSConfig, Timeout};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{env, error, process};
-use tokio::net::lookup_host;
+use tokio::net::ToSocketAddrs;
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::instrument::WithSubscriber;
@@ -15,6 +16,7 @@ const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 // Update interval of more than a second to minimize the chance that stats returned by the
 // memcached server have the exact same "time" value (which has one-second granularity).
 const DEFAULT_STATS_INTERVAL: Duration = Duration::from_millis(1073);
+const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const NUM_MEASUREMENTS: usize = 10;
 const DNS_HOST_PREFIX: &str = "dns+";
 
@@ -26,6 +28,10 @@ struct MtopConfig {
     /// (case insensitive).
     #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
     log_level: Level,
+
+    /// Timeout for connecting to Memcached and fetching statistics, in seconds.
+    #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
+    timeout_secs: u64,
 
     /// File to log errors to since they cannot be logged to the console. If the path is not
     /// writable, mtop will not start.
@@ -84,6 +90,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             process::exit(1);
         });
 
+    let timeout = Duration::from_secs(opts.timeout_secs);
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
     let pool = MemcachedPool::new(
         Handle::current(),
@@ -105,14 +112,14 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     });
 
     // Do DNS lookups on any "dns+" hostnames to expand them to multiple IPs based on A records.
-    let hosts = expand_hosts(&opts.hosts).await.unwrap_or_else(|e| {
+    let hosts = expand_hosts(&opts.hosts, timeout).await.unwrap_or_else(|e| {
         tracing::error!(message = "unable to resolve host names", hosts = ?opts.hosts, error = %e);
         process::exit(1);
     });
 
     // Run the initial connection to each server once in the main thread to make bad hostnames
     // easier to spot.
-    let update_task = UpdateTask::new(&hosts, pool, measurements.clone(), Handle::current());
+    let update_task = UpdateTask::new(&hosts, pool, measurements.clone(), timeout, Handle::current());
     update_task.connect().await.unwrap_or_else(|e| {
         tracing::error!(message = "unable to connect to memcached servers", hosts = ?opts.hosts, error = %e);
         process::exit(1);
@@ -125,7 +132,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 let _ = interval.tick().await;
                 update_task
                     .update()
-                    .instrument(tracing::span!(Level::DEBUG, "periodic.update"))
+                    .instrument(tracing::span!(Level::INFO, "periodic.update"))
                     .await;
             }
         }
@@ -160,13 +167,17 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     Ok(())
 }
 
-async fn expand_hosts(hosts: &[String]) -> Result<Vec<String>, MtopError> {
+async fn expand_hosts(hosts: &[String], timeout: Duration) -> Result<Vec<String>, MtopError> {
     let mut out = Vec::with_capacity(hosts.len());
 
     for host in hosts {
         if host.starts_with(DNS_HOST_PREFIX) {
             let name = host.trim_start_matches(DNS_HOST_PREFIX);
-            for addr in lookup_host(name).await? {
+            for addr in lookup_host(name)
+                .timeout(timeout, "lookup_host")
+                .instrument(tracing::span!(Level::INFO, "lookup_host"))
+                .await?
+            {
                 out.push(addr.to_string());
             }
         } else {
@@ -178,61 +189,85 @@ async fn expand_hosts(hosts: &[String]) -> Result<Vec<String>, MtopError> {
     Ok(out)
 }
 
+async fn lookup_host<T>(host: T) -> Result<impl Iterator<Item = SocketAddr>, MtopError>
+where
+    T: ToSocketAddrs,
+{
+    // This function only exists to translate io::Error to MtopError so we can .timeout()
+    Ok(tokio::net::lookup_host(host).await?)
+}
+
 #[derive(Debug)]
-pub struct UpdateTask {
+struct UpdateTask {
     hosts: Vec<String>,
     pool: Arc<MemcachedPool>,
     queue: Arc<StatsQueue>,
+    timeout: Duration,
     handle: Handle,
 }
 
 impl UpdateTask {
-    pub fn new(hosts: &[String], pool: MemcachedPool, queue: Arc<StatsQueue>, handle: Handle) -> Self {
+    fn new(hosts: &[String], pool: MemcachedPool, queue: Arc<StatsQueue>, timeout: Duration, handle: Handle) -> Self {
         UpdateTask {
             hosts: Vec::from(hosts),
             pool: Arc::new(pool),
             queue,
+            timeout,
             handle,
         }
     }
 
-    pub async fn connect(&self) -> Result<(), MtopError> {
+    async fn connect(&self) -> Result<(), MtopError> {
         for host in self.hosts.iter() {
-            let mut client = self.pool.get(host).await?;
-            client.ping().await?;
+            let client = self
+                .pool
+                .get(host)
+                .timeout(self.timeout, "client.connect")
+                .instrument(tracing::span!(Level::INFO, "client.connect"))
+                .await?;
             self.pool.put(client).await;
         }
 
         Ok(())
     }
 
-    async fn update_host(host: String, pool: Arc<MemcachedPool>) -> Result<(Stats, Slabs, SlabItems), MtopError> {
+    async fn update_host(
+        host: String,
+        pool: Arc<MemcachedPool>,
+        timeout: Duration,
+    ) -> Result<(Stats, Slabs, SlabItems), MtopError> {
         let mut client = pool
             .get(&host)
-            .instrument(tracing::span!(Level::DEBUG, "client.connect"))
+            .timeout(timeout, "client.connect")
+            .instrument(tracing::span!(Level::INFO, "client.connect"))
             .await?;
         let stats = client
             .stats()
-            .instrument(tracing::span!(Level::DEBUG, "client.stats"))
+            .timeout(timeout, "client.stats")
+            .instrument(tracing::span!(Level::INFO, "client.stats"))
             .await?;
         let slabs = client
             .slabs()
-            .instrument(tracing::span!(Level::DEBUG, "client.slabs"))
+            .timeout(timeout, "client.slabs")
+            .instrument(tracing::span!(Level::INFO, "client.slabs"))
             .await?;
         let items = client
             .items()
-            .instrument(tracing::span!(Level::DEBUG, "client.items"))
+            .timeout(timeout, "client.items")
+            .instrument(tracing::span!(Level::INFO, "client.items"))
             .await?;
+
         pool.put(client).await;
         Ok((stats, slabs, items))
     }
 
-    pub async fn update(&self) {
+    async fn update(&self) {
         let mut tasks = Vec::with_capacity(self.hosts.len());
         for host in self.hosts.iter() {
             tasks.push((
                 host,
-                self.handle.spawn(Self::update_host(host.clone(), self.pool.clone())),
+                self.handle
+                    .spawn(Self::update_host(host.clone(), self.pool.clone(), self.timeout)),
             ));
         }
 
@@ -243,7 +278,7 @@ impl UpdateTask {
                 Ok(Ok((stats, slabs, items))) => {
                     self.queue
                         .insert(host.clone(), stats, slabs, items)
-                        .instrument(tracing::span!(Level::DEBUG, "queue.insert"))
+                        .instrument(tracing::span!(Level::INFO, "queue.insert"))
                         .await;
                 }
             }

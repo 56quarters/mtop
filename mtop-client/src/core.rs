@@ -5,6 +5,7 @@ use std::fmt;
 use std::io;
 use std::ops::Deref;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, Lines};
 
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -526,6 +527,16 @@ impl MtopError {
         MtopError {
             kind: ErrorKind::Configuration,
             repr: ErrorRepr::MessageCause(msg.into(), Box::new(e)),
+        }
+    }
+
+    pub fn timeout<D>(t: Duration, operation: D) -> MtopError
+    where
+        D: fmt::Display,
+    {
+        MtopError {
+            kind: ErrorKind::IO,
+            repr: ErrorRepr::Message(format!("operation {} timed out after {:?}", operation, t)),
         }
     }
 
