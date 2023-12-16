@@ -295,6 +295,7 @@ dependencies = [
 name = "mtop-client"
 version = "0.7.0"
 dependencies = [
+ "pin-project-lite",
  "rustls-pemfile",
  "rustls-webpki",
  "tokio",

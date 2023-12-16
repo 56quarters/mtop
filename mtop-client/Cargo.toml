@@ -11,6 +11,7 @@ keywords = ["top", "memcached"]
 edition = "2021"
 
 [dependencies]
+pin-project-lite = "0.2.13"
 rustls-pemfile = "1.0.2"
 rustls-webpki = "0.101.2"
 tokio = { version = "1.14.0", features = ["full"] }

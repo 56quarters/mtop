@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.1 - unreleased
+
+- Add default 5 second timeout to network operations done by `mtop`. #90
+
 ## v0.7.0 - 2023-11-28
 
 - Build binaries for Linux Musl libc target. #83
