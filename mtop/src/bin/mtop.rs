@@ -64,7 +64,9 @@ struct MtopConfig {
     tls_key: Option<PathBuf>,
 
     /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least
-    /// once and may be used multiple times (separated by spaces).
+    /// once and may be used multiple times (separated by spaces). Hostnames may be prefixed by
+    /// the string 'dns+'. When prefixed, the hostname will be resolved to A or AAAA records and
+    /// each IP address will be connected to at the provided port.
     #[arg(required = true, value_hint = ValueHint::Hostname)]
     hosts: Vec<String>,
 }
