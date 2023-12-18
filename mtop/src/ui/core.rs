@@ -69,10 +69,7 @@ where
 }
 
 /// Draw the current state of `app` on the given frame `f`
-fn render<B>(f: &mut Frame<B>, app: &mut Application)
-where
-    B: Backend,
-{
+fn render(f: &mut Frame, app: &mut Application) {
     let host = app.host();
     let hosts = app.hosts();
     let inner_host_area = render_host_area(f, host, hosts, app.state.tabs());
@@ -85,10 +82,7 @@ where
     }
 }
 
-fn render_host_area<B>(f: &mut Frame<B>, host: String, hosts: Vec<String>, state: &mut TabState) -> Rect
-where
-    B: Backend,
-{
+fn render_host_area(f: &mut Frame, host: String, hosts: Vec<String>, state: &mut TabState) -> Rect {
     let (tab_area, host_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -110,10 +104,7 @@ where
     inner_host_area
 }
 
-fn render_stats_gauges<B>(f: &mut Frame<B>, area: Rect, delta: &StatsDelta)
-where
-    B: Backend,
-{
+fn render_stats_gauges(f: &mut Frame, area: Rect, delta: &StatsDelta) {
     let units = UnitFormatter::new();
     // Split up the host area into three rows. These will be further split
     // into 3 or 4 sections horizontally
@@ -193,10 +184,7 @@ where
     f.render_widget(system_cpu, gauge_row_3[3]);
 }
 
-fn render_slabs_table<B>(f: &mut Frame<B>, area: Rect, delta: &StatsDelta, state: &mut TableState)
-where
-    B: Backend,
-{
+fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut TableState) {
     let units = UnitFormatter::new();
     let header_style = Style::default().bg(Color::Blue);
     let selected_style = Style::default().bg(Color::Red).fg(Color::LightYellow);
