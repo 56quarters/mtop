@@ -3,6 +3,7 @@
 ## v0.7.1 - unreleased
 
 - Add default 5 second timeout to network operations done by `mtop`. #90
+- TLS related dependency updates. #93
 
 ## v0.7.0 - 2023-11-28
 
