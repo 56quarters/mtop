@@ -1,6 +1,7 @@
 use crate::core::{Memcached, MtopError};
 use std::collections::HashMap;
 use std::fs::File;
+use std::future::Future;
 use std::io::BufReader as StdBufReader;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -35,6 +36,7 @@ impl DerefMut for PooledMemcached {
 
 #[derive(Debug)]
 pub struct PoolConfig {
+    pub max_idle_per_host: usize,
     pub check_on_get: bool,
     pub check_on_put: bool,
     pub tls: TLSConfig,
@@ -43,6 +45,7 @@ pub struct PoolConfig {
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
+            max_idle_per_host: 4,
             check_on_get: true,
             check_on_put: true,
             tls: TLSConfig::default(),
@@ -61,7 +64,7 @@ pub struct TLSConfig {
 
 #[derive(Debug)]
 pub struct MemcachedPool {
-    clients: Mutex<HashMap<String, Memcached>>,
+    clients: Mutex<HashMap<String, Vec<Memcached>>>,
     client_config: Option<Arc<ClientConfig>>,
     server: Option<ServerName<'static>>,
     config: PoolConfig,
@@ -204,11 +207,25 @@ impl MemcachedPool {
             .map_err(|e| MtopError::configuration_cause(format!("invalid server name '{}'", host), e))
     }
 
+    /// Get an existing connection to the given host from the pool or establish a new one
+    /// based on the configuration set when this pool was created (plaintext or TLS with
+    /// optional client certificate).
     pub async fn get(&self, host: &str) -> Result<PooledMemcached, MtopError> {
+        self.get_with_connect(host, self.connect(host)).await
+    }
+
+    /// Get an existing connection to the given host from the pool or establish a new one
+    /// using the provided `Future` which is expected to create a `Memcached` instance. Note
+    /// that this method relies on the fact that futures do nothing unless polled to avoid
+    /// making a connection when not required.
+    async fn get_with_connect<F>(&self, host: &str, connect: F) -> Result<PooledMemcached, MtopError>
+    where
+        F: Future<Output = Result<Memcached, MtopError>>,
+    {
         let mut map = self.clients.lock().await;
-        let mut inner = match map.remove(host) {
+        let mut inner = match map.get_mut(host).and_then(|v| v.pop()) {
             Some(c) => c,
-            None => self.connect(host).await?,
+            None => connect.await?,
         };
 
         if self.config.check_on_get {
@@ -221,10 +238,17 @@ impl MemcachedPool {
         })
     }
 
+    /// Return a connection to the pool if there are currently fewer than `max_idle_per_host`
+    /// connections to the host this client is for. If there are more connections, the returned
+    /// client is closed immediately.
     pub async fn put(&self, mut client: PooledMemcached) {
         if !self.config.check_on_put || client.ping().await.is_ok() {
             let mut map = self.clients.lock().await;
-            map.insert(client.host, client.inner);
+            let conns = map.entry(client.host).or_insert_with(Vec::new);
+
+            if conns.len() < self.config.max_idle_per_host {
+                conns.push(client.inner);
+            }
         }
     }
 }
@@ -259,4 +283,91 @@ where
         // avoid lots of tiny packets.
         .and_then(|s| s.set_nodelay(true).map(|_| s))
         .map_err(|e| MtopError::from((host.to_string(), e)))
+}
+
+#[cfg(test)]
+mod test {
+    use super::{MemcachedPool, PoolConfig, PooledMemcached};
+    use crate::core::{ErrorKind, Memcached, MtopError};
+    use std::io::{self, Cursor};
+    use tokio::runtime::Handle;
+
+    /// Create a new `Memcached` instance to read the provided server response.
+    macro_rules! client {
+        ($($line:expr),+ $(,)?) => ({
+            let writes = Vec::new();
+            let mut reads = Vec::new();
+            $(reads.extend_from_slice($line.as_bytes());)+
+            Memcached::new(Cursor::new(reads), writes)
+        })
+    }
+
+    #[tokio::test]
+    async fn test_get_new_connection() {
+        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
+            .await
+            .unwrap();
+
+        let connect = async {
+            Ok(client!(
+                "VERSION 1.6.20\r\n",
+                "VERSION 1.6.20\r\n",
+                "VERSION 1.6.20\r\n"
+            ))
+        };
+
+        let client = pool.get_with_connect("localhost:11211", connect).await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_existing_connection() {
+        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
+            .await
+            .unwrap();
+
+        pool.put(PooledMemcached {
+            host: "localhost:11211".to_owned(),
+            inner: client!("VERSION 1.6.20\r\n", "VERSION 1.6.20\r\n", "VERSION 1.6.20\r\n"),
+        })
+        .await;
+
+        let connect = async { panic!("should not be called!") };
+        let res = pool.get_with_connect("localhost:11211", connect).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_dead_connection() {
+        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
+            .await
+            .unwrap();
+
+        pool.put(PooledMemcached {
+            host: "localhost:11211".to_owned(),
+            inner: client!("VERSION 1.6.20\r\n", "ERROR Too many open connections\r\n"),
+        })
+        .await;
+
+        let connect = async { panic!("should not be called!") };
+        let res = pool.get_with_connect("localhost:11211", connect).await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_get_error() {
+        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
+            .await
+            .unwrap();
+
+        let connect = async { Err(MtopError::from(io::Error::new(io::ErrorKind::TimedOut, "timeout"))) };
+        let res = pool.get_with_connect("localhost:11211", connect).await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::IO, err.kind());
+    }
 }
