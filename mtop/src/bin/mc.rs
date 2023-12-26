@@ -54,12 +54,31 @@ struct McConfig {
 
 #[derive(Debug, Subcommand)]
 enum Action {
+    Add(AddCommand),
     Delete(DeleteCommand),
     Get(GetCommand),
     Keys(KeysCommand),
+    Replace(ReplaceCommand),
     Set(SetCommand),
     Touch(TouchCommand),
     Check(CheckCommand),
+}
+
+/// Add a value to the cache only if it does not already exist.
+///
+/// The value will be read from standard input. You can use shell pipes or redirects to set
+/// the contents of files as values.
+#[derive(Debug, Args)]
+struct AddCommand {
+    /// Key of the item to add the value for.
+    #[arg(required = true)]
+    key: String,
+
+    /// TTL to set for the item, in seconds. If the TTL is longer than the number of seconds
+    /// in 30 days, it will be treated as a UNIX timestamp, setting the item to expire at a
+    /// particular date/time.
+    #[arg(required = true)]
+    ttl: u32,
 }
 
 /// Run health checks against the cache.
@@ -104,6 +123,23 @@ struct KeysCommand {
     /// values instead of only the key name.
     #[arg(long)]
     details: bool,
+}
+
+/// Replace a value in the cache only if it already exists.
+///
+/// The value will be read from standard input. You can use shell pipes or redirects to set
+/// the contents of files as values.
+#[derive(Debug, Args)]
+struct ReplaceCommand {
+    /// Key of the item to replace the value for.
+    #[arg(required = true)]
+    key: String,
+
+    /// TTL to set for the item, in seconds. If the TTL is longer than the number of seconds
+    /// in 30 days, it will be treated as a UNIX timestamp, setting the item to expire at a
+    /// particular date/time.
+    #[arg(required = true)]
+    ttl: u32,
 }
 
 /// Set a value in the cache.
@@ -170,6 +206,17 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     });
 
     match opts.mode {
+        Action::Add(c) => {
+            let buf = read_input().await.unwrap_or_else(|e| {
+                tracing::error!(message = "unable to read item data from stdin", error = %e);
+                process::exit(1);
+            });
+
+            if let Err(e) = client.add(&c.key, 0, c.ttl, &buf).await {
+                tracing::error!(message = "unable to add item", key = c.key, host = opts.host, error = %e);
+                process::exit(1);
+            }
+        }
         Action::Check(c) => {
             let checker = Checker::new(
                 &pool,
@@ -182,7 +229,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
             }
         }
         Action::Delete(c) => {
-            if let Err(e) = client.delete(c.key.clone()).await {
+            if let Err(e) = client.delete(&c.key).await {
                 tracing::error!(message = "unable to delete item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             }
@@ -210,19 +257,30 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 tracing::warn!(message = "error writing output", error = %e);
             }
         }
+        Action::Replace(c) => {
+            let buf = read_input().await.unwrap_or_else(|e| {
+                tracing::error!(message = "unable to read item data from stdin", error = %e);
+                process::exit(1);
+            });
+
+            if let Err(e) = client.replace(&c.key, 0, c.ttl, &buf).await {
+                tracing::error!(message = "unable to replace item", key = c.key, host = opts.host, error = %e);
+                process::exit(1);
+            }
+        }
         Action::Set(c) => {
             let buf = read_input().await.unwrap_or_else(|e| {
                 tracing::error!(message = "unable to read item data from stdin", error = %e);
                 process::exit(1);
             });
 
-            if let Err(e) = client.set(c.key.clone(), 0, c.ttl, buf).await {
+            if let Err(e) = client.set(&c.key, 0, c.ttl, &buf).await {
                 tracing::error!(message = "unable to set item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             }
         }
         Action::Touch(c) => {
-            if let Err(e) = client.touch(c.key.clone(), c.ttl).await {
+            if let Err(e) = client.touch(&c.key, c.ttl).await {
                 tracing::error!(message = "unable to touch item", key = c.key, host = opts.host, error = %e);
                 process::exit(1);
             }
