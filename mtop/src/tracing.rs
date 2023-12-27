@@ -19,7 +19,7 @@ pub fn console_subscriber(
 #[allow(clippy::type_complexity)]
 pub fn file_subscriber(
     level: tracing::Level,
-    path: PathBuf,
+    path: &PathBuf,
 ) -> Result<FmtSubscriber<DefaultFields, Format, LevelFilter, File>, io::Error> {
     if let Some(d) = path.parent() {
         fs::create_dir_all(d)?;
