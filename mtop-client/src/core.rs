@@ -832,16 +832,22 @@ impl Memcached {
 
     /// Get a map of the requested keys and their corresponding `Value` in the cache
     /// including the key, flags, and data.
-    pub async fn get(&mut self, keys: &[String]) -> Result<HashMap<String, Value>, MtopError> {
+    pub async fn get<I, K>(&mut self, keys: I) -> Result<HashMap<String, Value>, MtopError>
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        let keys: Vec<String> = keys.into_iter().map(|k| k.into()).collect();
+
         if keys.is_empty() {
             return Err(MtopError::internal("missing required keys"));
         }
 
-        if !validate_keys(keys) {
+        if !validate_keys(&keys) {
             return Err(MtopError::internal("invalid keys"));
         }
 
-        self.send(Command::Gets(keys)).await?;
+        self.send(Command::Gets(&keys)).await?;
         let mut out = HashMap::with_capacity(keys.len());
 
         loop {
@@ -1146,7 +1152,8 @@ mod test {
     #[tokio::test]
     async fn test_get_no_key() {
         let mut client = client!();
-        let res = client.get(&[]).await;
+        let keys: Vec<String> = Vec::new();
+        let res = client.get(keys).await;
 
         assert!(res.is_err());
         let err = res.unwrap_err();
