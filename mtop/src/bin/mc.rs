@@ -55,13 +55,15 @@ struct McConfig {
 #[derive(Debug, Subcommand)]
 enum Action {
     Add(AddCommand),
+    Check(CheckCommand),
+    Decr(DecrCommand),
     Delete(DeleteCommand),
     Get(GetCommand),
+    Incr(IncrCommand),
     Keys(KeysCommand),
     Replace(ReplaceCommand),
     Set(SetCommand),
     Touch(TouchCommand),
-    Check(CheckCommand),
 }
 
 /// Add a value to the cache only if it does not already exist.
@@ -97,10 +99,23 @@ struct CheckCommand {
     delay_millis: u64,
 }
 
+/// Decrement the value of an item in the cache.
+#[derive(Debug, Args)]
+struct DecrCommand {
+    /// Key of the value to decrement. If the value does not exist the command will exit with
+    /// and error status.
+    #[arg(required = true)]
+    key: String,
+
+    /// Amount to decrement the value by.
+    #[arg(required = true)]
+    delta: u64,
+}
+
 /// Delete an item in the cache.
 #[derive(Debug, Args)]
 struct DeleteCommand {
-    /// Key of the item to delete. If the item  does not exist the command will exit with an
+    /// Key of the item to delete. If the item does not exist the command will exit with an
     /// error status.
     #[arg(required = true)]
     key: String,
@@ -114,6 +129,19 @@ struct GetCommand {
     /// or another tool to examine it.
     #[arg(required = true)]
     key: String,
+}
+
+/// Increment the value of an item in the cach
+#[derive(Debug, Args)]
+struct IncrCommand {
+    /// Key of the value to increment. If the value does not exist the command will exit with
+    /// and error status.
+    #[arg(required = true)]
+    key: String,
+
+    /// Amount to increment the value by.
+    #[arg(required = true)]
+    delta: u64,
 }
 
 /// Show keys for all items in the cache.
@@ -228,6 +256,12 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 tracing::warn!(message = "error writing output", error = %e);
             }
         }
+        Action::Decr(c) => {
+            if let Err(e) = client.decr(&c.key, c.delta).await {
+                tracing::error!(message = "unable to decrement value", key = c.key, host = opts.host, error = %e);
+                process::exit(1);
+            }
+        }
         Action::Delete(c) => {
             if let Err(e) = client.delete(&c.key).await {
                 tracing::error!(message = "unable to delete item", key = c.key, host = opts.host, error = %e);
@@ -244,6 +278,12 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                 if let Err(e) = print_data(v).await {
                     tracing::warn!(message = "error writing output", error = %e);
                 }
+            }
+        }
+        Action::Incr(c) => {
+            if let Err(e) = client.incr(&c.key, c.delta).await {
+                tracing::error!(message = "unable to increment value", key = c.key, host = opts.host, error = %e);
+                process::exit(1);
             }
         }
         Action::Keys(c) => {
