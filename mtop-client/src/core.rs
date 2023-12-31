@@ -441,10 +441,10 @@ where
     <T as FromStr>::Err: fmt::Display + Send + Sync + error::Error + 'static,
 {
     map.get(key)
-        .ok_or_else(|| MtopError::internal(format!("field {} missing", key)))
+        .ok_or_else(|| MtopError::runtime(format!("field {} missing", key)))
         .and_then(|v| {
             v.parse()
-                .map_err(|e| MtopError::internal_cause(format!("field {} value '{}'", key, v), e))
+                .map_err(|e| MtopError::runtime_cause(format!("field {} value '{}'", key, v), e))
         })
 }
 
@@ -454,12 +454,12 @@ where
     <T as FromStr>::Err: fmt::Display + Send + Sync + error::Error + 'static,
 {
     val.parse()
-        .map_err(|e| MtopError::internal_cause(format!("parsing {} from '{}'", val, line), e))
+        .map_err(|e| MtopError::runtime_cause(format!("parsing {} from '{}'", val, line), e))
 }
 
 #[derive(Debug, PartialOrd, PartialEq, Copy, Clone)]
 pub enum ErrorKind {
-    Internal,
+    Runtime,
     IO,
     Protocol,
     Configuration,
@@ -468,7 +468,7 @@ pub enum ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Internal => write!(f, "internal error"),
+            Self::Runtime => write!(f, "runtime error"),
             Self::IO => write!(f, "io error"),
             Self::Protocol => write!(f, "protocol error"),
             Self::Configuration => write!(f, "configuration error"),
@@ -490,23 +490,23 @@ pub struct MtopError {
 }
 
 impl MtopError {
-    pub fn internal<S>(msg: S) -> MtopError
+    pub fn runtime<S>(msg: S) -> MtopError
     where
         S: Into<String>,
     {
         MtopError {
-            kind: ErrorKind::Internal,
+            kind: ErrorKind::Runtime,
             repr: ErrorRepr::Message(msg.into()),
         }
     }
 
-    pub fn internal_cause<S, E>(msg: S, e: E) -> MtopError
+    pub fn runtime_cause<S, E>(msg: S, e: E) -> MtopError
     where
         S: Into<String>,
         E: error::Error + Send + Sync + 'static,
     {
         MtopError {
-            kind: ErrorKind::Internal,
+            kind: ErrorKind::Runtime,
             repr: ErrorRepr::MessageCause(msg.into(), Box::new(e)),
         }
     }
@@ -773,7 +773,7 @@ impl Memcached {
                 if let Some(err) = Self::parse_error(line) {
                     Err(MtopError::from(err))
                 } else {
-                    Err(MtopError::internal(format!("unable to parse '{}'", line)))
+                    Err(MtopError::runtime(format!("unable to parse '{}'", line)))
                 }
             }
         }
@@ -815,7 +815,7 @@ impl Memcached {
         for p in line.split(' ') {
             let (key, val) = p
                 .split_once('=')
-                .ok_or_else(|| MtopError::internal(format!("unexpected metadump format '{}'", line)))?;
+                .ok_or_else(|| MtopError::runtime(format!("unexpected metadump format '{}'", line)))?;
 
             // Avoid spending time decoding values or allocating for data we don't care about
             if !Meta::KEYS.contains(&key) {
@@ -823,7 +823,7 @@ impl Memcached {
             }
 
             let decoded = urlencoding::decode(val)
-                .map_err(|e| MtopError::internal_cause(format!("unexpected metadump encoding '{}'", line), e))?;
+                .map_err(|e| MtopError::runtime_cause(format!("unexpected metadump encoding '{}'", line), e))?;
             raw.insert(key.to_owned(), decoded.into_owned());
         }
 
@@ -840,11 +840,11 @@ impl Memcached {
         let keys: Vec<String> = keys.into_iter().map(|k| k.into()).collect();
 
         if keys.is_empty() {
-            return Err(MtopError::internal("missing required keys"));
+            return Err(MtopError::runtime("missing required keys"));
         }
 
         if !validate_keys(&keys) {
-            return Err(MtopError::internal("invalid keys"));
+            return Err(MtopError::runtime("invalid keys"));
         }
 
         self.send(Command::Gets(&keys)).await?;
@@ -893,7 +893,7 @@ impl Memcached {
                 if let Some(err) = Self::parse_error(line) {
                     Err(MtopError::from(err))
                 } else {
-                    Err(MtopError::internal(format!("unable to parse '{}'", line)))
+                    Err(MtopError::runtime(format!("unable to parse '{}'", line)))
                 }
             }
         }
@@ -918,14 +918,14 @@ impl Memcached {
         V: AsRef<[u8]>,
     {
         if !validate_key(key.as_ref()) {
-            return Err(MtopError::internal("invalid key"));
+            return Err(MtopError::runtime("invalid key"));
         }
 
         self.send(Command::Set(key.as_ref(), flags, ttl, data.as_ref())).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "STORED")
         } else {
-            Err(MtopError::internal("unexpected empty response"))
+            Err(MtopError::runtime("unexpected empty response"))
         }
     }
 
@@ -936,14 +936,14 @@ impl Memcached {
         V: AsRef<[u8]>,
     {
         if !validate_key(key.as_ref()) {
-            return Err(MtopError::internal("invalid key"));
+            return Err(MtopError::runtime("invalid key"));
         }
 
         self.send(Command::Add(key.as_ref(), flags, ttl, data.as_ref())).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "STORED")
         } else {
-            Err(MtopError::internal("unexpected empty response"))
+            Err(MtopError::runtime("unexpected empty response"))
         }
     }
 
@@ -954,7 +954,7 @@ impl Memcached {
         V: AsRef<[u8]>,
     {
         if !validate_key(key.as_ref()) {
-            return Err(MtopError::internal("invalid key"));
+            return Err(MtopError::runtime("invalid key"));
         }
 
         self.send(Command::Replace(key.as_ref(), flags, ttl, data.as_ref()))
@@ -962,7 +962,7 @@ impl Memcached {
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "STORED")
         } else {
-            Err(MtopError::internal("unexpected empty response"))
+            Err(MtopError::runtime("unexpected empty response"))
         }
     }
 
@@ -972,14 +972,14 @@ impl Memcached {
         K: AsRef<str>,
     {
         if !validate_key(key.as_ref()) {
-            return Err(MtopError::internal("invalid key"));
+            return Err(MtopError::runtime("invalid key"));
         }
 
         self.send(Command::Touch(key.as_ref(), ttl)).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "TOUCHED")
         } else {
-            Err(MtopError::internal("unexpected empty response"))
+            Err(MtopError::runtime("unexpected empty response"))
         }
     }
 
@@ -989,14 +989,14 @@ impl Memcached {
         K: AsRef<str>,
     {
         if !validate_key(key.as_ref()) {
-            return Err(MtopError::internal("invalid key"));
+            return Err(MtopError::runtime("invalid key"));
         }
 
         self.send(Command::Delete(key.as_ref())).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "DELETED")
         } else {
-            Err(MtopError::internal("unexpected empty response"))
+            Err(MtopError::runtime("unexpected empty response"))
         }
     }
 
@@ -1006,7 +1006,7 @@ impl Memcached {
         } else if let Some(err) = Self::parse_error(line) {
             Err(MtopError::from(err))
         } else {
-            Err(MtopError::internal(format!("unable to parse '{}'", line)))
+            Err(MtopError::runtime(format!("unable to parse '{}'", line)))
         }
     }
 
@@ -1157,7 +1157,7 @@ mod test {
 
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Internal, err.kind());
+        assert_eq!(ErrorKind::Runtime, err.kind());
     }
 
     #[tokio::test]
@@ -1167,7 +1167,7 @@ mod test {
         let res = client.get(&["bad key".repeat(MAX_KEY_LENGTH)]).await;
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Internal, err.kind());
+        assert_eq!(ErrorKind::Runtime, err.kind());
     }
 
     #[tokio::test]
@@ -1234,7 +1234,7 @@ mod test {
 
             assert!(res.is_err());
             let err = res.unwrap_err();
-            assert_eq!(ErrorKind::Internal, err.kind());
+            assert_eq!(ErrorKind::Runtime, err.kind());
         };
     }
 
@@ -1316,7 +1316,7 @@ mod test {
 
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Internal, err.kind());
+        assert_eq!(ErrorKind::Runtime, err.kind());
     }
 
     #[tokio::test]
@@ -1351,7 +1351,7 @@ mod test {
 
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Internal, err.kind());
+        assert_eq!(ErrorKind::Runtime, err.kind());
     }
 
     #[tokio::test]
@@ -1375,7 +1375,7 @@ mod test {
 
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Internal, err.kind());
+        assert_eq!(ErrorKind::Runtime, err.kind());
     }
 
     #[tokio::test]
