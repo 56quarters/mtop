@@ -103,7 +103,7 @@ struct CheckCommand {
 #[derive(Debug, Args)]
 struct DecrCommand {
     /// Key of the value to decrement. If the value does not exist the command will exit with
-    /// and error status.
+    /// an error status.
     #[arg(required = true)]
     key: String,
 
@@ -135,7 +135,7 @@ struct GetCommand {
 #[derive(Debug, Args)]
 struct IncrCommand {
     /// Key of the value to increment. If the value does not exist the command will exit with
-    /// and error status.
+    /// an error status.
     #[arg(required = true)]
     key: String,
 

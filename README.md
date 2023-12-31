@@ -33,7 +33,7 @@ binaries for that platform and a few documentation files.
 ### Docker
 
 Docker images for GNU/Linux (amd64, arm64) are published for [each release](https://hub.docker.com/r/56quarters/mtop).
-The docker images are build with the [Dockerfile](https://github.com/56quarters/mtop/blob/master/Dockerfile) in this
+The docker images are built with the [Dockerfile](https://github.com/56quarters/mtop/blob/master/Dockerfile) in this
 repository. They do not set an entrypoint and will run `mtop --help` by default. The `mtop` and `mc` binaries are
 placed on the `PATH`, in `/usr/local/bin`.
 
