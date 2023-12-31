@@ -174,7 +174,7 @@ impl MemcachedPool {
             for cert in ca_certs {
                 root_cert_store
                     .add(cert)
-                    .map_err(|e| MtopError::internal_cause("unable to parse CA cert", e))?;
+                    .map_err(|e| MtopError::runtime_cause("unable to parse CA cert", e))?;
             }
         } else {
             tracing::debug!(message = "using default CA certs for roots");
