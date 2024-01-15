@@ -14,6 +14,24 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName}
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+/// An individual server that is part of a Memcached cluster.
+///
+/// The name of the server is expected to be a hostname or IP and port combination,
+/// something that can be successfully converted to a `SocketAddr`.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Server {
+    pub name: String,
+}
+
+impl Server {
+    pub fn new<S>(name: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Self { name: name.into() }
+    }
+}
+
 #[derive(Debug)]
 pub struct PooledMemcached {
     inner: Memcached,
@@ -46,7 +64,7 @@ impl Default for PoolConfig {
     fn default() -> Self {
         Self {
             max_idle_per_host: 4,
-            check_on_get: true,
+            check_on_get: false,
             check_on_put: true,
             tls: TLSConfig::default(),
         }
@@ -64,7 +82,7 @@ pub struct TLSConfig {
 
 #[derive(Debug)]
 pub struct MemcachedPool {
-    clients: Mutex<HashMap<String, Vec<Memcached>>>,
+    connections: Mutex<HashMap<String, Vec<Memcached>>>,
     client_config: Option<Arc<ClientConfig>>,
     server: Option<ServerName<'static>>,
     config: PoolConfig,
@@ -85,7 +103,7 @@ impl MemcachedPool {
         };
 
         Ok(MemcachedPool {
-            clients: Mutex::new(HashMap::new()),
+            connections: Mutex::new(HashMap::new()),
             client_config,
             server,
             config,
@@ -222,7 +240,7 @@ impl MemcachedPool {
     where
         F: Future<Output = Result<Memcached, MtopError>>,
     {
-        let mut map = self.clients.lock().await;
+        let mut map = self.connections.lock().await;
         let mut inner = match map.get_mut(host).and_then(|v| v.pop()) {
             Some(c) => c,
             None => connect.await?,
@@ -241,13 +259,13 @@ impl MemcachedPool {
     /// Return a connection to the pool if there are currently fewer than `max_idle_per_host`
     /// connections to the host this client is for. If there are more connections, the returned
     /// client is closed immediately.
-    pub async fn put(&self, mut client: PooledMemcached) {
-        if !self.config.check_on_put || client.ping().await.is_ok() {
-            let mut map = self.clients.lock().await;
-            let conns = map.entry(client.host).or_insert_with(Vec::new);
+    pub async fn put(&self, mut conn: PooledMemcached) {
+        if !self.config.check_on_put || conn.ping().await.is_ok() {
+            let mut map = self.connections.lock().await;
+            let conns = map.entry(conn.host).or_default();
 
             if conns.len() < self.config.max_idle_per_host {
-                conns.push(client.inner);
+                conns.push(conn.inner);
             }
         }
     }
@@ -304,9 +322,8 @@ mod test {
 
     #[tokio::test]
     async fn test_get_new_connection() {
-        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
-            .await
-            .unwrap();
+        let cfg = PoolConfig::default();
+        let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
 
         let connect = async {
             Ok(client!(
@@ -322,9 +339,8 @@ mod test {
 
     #[tokio::test]
     async fn test_get_existing_connection() {
-        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
-            .await
-            .unwrap();
+        let cfg = PoolConfig::default();
+        let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
 
         pool.put(PooledMemcached {
             host: "localhost:11211".to_owned(),
@@ -339,9 +355,14 @@ mod test {
 
     #[tokio::test]
     async fn test_get_dead_connection() {
-        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
-            .await
-            .unwrap();
+        let cfg = PoolConfig {
+            max_idle_per_host: 4,
+            check_on_get: true,
+            check_on_put: true,
+            ..Default::default()
+        };
+
+        let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
 
         pool.put(PooledMemcached {
             host: "localhost:11211".to_owned(),
@@ -359,9 +380,8 @@ mod test {
 
     #[tokio::test]
     async fn test_get_error() {
-        let pool = MemcachedPool::new(Handle::current(), PoolConfig::default())
-            .await
-            .unwrap();
+        let cfg = PoolConfig::default();
+        let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
 
         let connect = async { Err(MtopError::from(io::Error::new(io::ErrorKind::TimedOut, "timeout"))) };
         let res = pool.get_with_connect("localhost:11211", connect).await;

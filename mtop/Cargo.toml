@@ -11,7 +11,7 @@ keywords = ["top", "memcached"]
 edition = "2021"
 
 [dependencies]
-clap = { version = "4.1.8", features = ["cargo", "derive", "help", "error-context", "std", "usage", "wrap_help"], default_features = false }
+clap = { version = "4.1.8", features = ["cargo", "derive", "help", "error-context", "std", "string", "usage", "wrap_help"], default_features = false }
 crossterm = "0.27.0"
 mtop-client = { path = "../mtop-client", version = "0.7.0" }
 ratatui = "0.24.0"

@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 use std::error;
@@ -7,8 +8,6 @@ use std::ops::Deref;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, Lines};
-
-const MAX_KEY_LENGTH: usize = 250;
 
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Stats {
@@ -639,18 +638,18 @@ impl error::Error for ProtocolError {}
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 enum Command<'a> {
-    Add(&'a str, u64, u32, &'a [u8]),
+    Add(&'a Key, u64, u32, &'a [u8]),
     CrawlerMetadump,
-    Decr(&'a str, u64),
-    Delete(&'a str),
-    Gets(&'a [String]),
-    Incr(&'a str, u64),
-    Replace(&'a str, u64, u32, &'a [u8]),
+    Decr(&'a Key, u64),
+    Delete(&'a Key),
+    Gets(&'a [Key]),
+    Incr(&'a Key, u64),
+    Replace(&'a Key, u64, u32, &'a [u8]),
     Stats,
     StatsItems,
     StatsSlabs,
-    Set(&'a str, u64, u32, &'a [u8]),
-    Touch(&'a str, u32),
+    Set(&'a Key, u64, u32, &'a [u8]),
+    Touch(&'a Key, u32),
     Version,
 }
 
@@ -674,7 +673,7 @@ impl<'a> From<Command<'a>> for Vec<u8> {
     }
 }
 
-fn storage_command(verb: &str, key: &str, flags: u64, ttl: u32, data: &[u8]) -> Vec<u8> {
+fn storage_command(verb: &str, key: &Key, flags: u64, ttl: u32, data: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(key.len() + data.len() + 32);
     io::Write::write_all(
         &mut bytes,
@@ -836,22 +835,8 @@ impl Memcached {
 
     /// Get a map of the requested keys and their corresponding `Value` in the cache
     /// including the key, flags, and data.
-    pub async fn get<I, K>(&mut self, keys: I) -> Result<HashMap<String, Value>, MtopError>
-    where
-        I: IntoIterator<Item = K>,
-        K: Into<String>,
-    {
-        let keys: Vec<String> = keys.into_iter().map(|k| k.into()).collect();
-
-        if keys.is_empty() {
-            return Err(MtopError::runtime("missing required keys"));
-        }
-
-        if !validate_keys(&keys) {
-            return Err(MtopError::runtime("invalid keys"));
-        }
-
-        self.send(Command::Gets(&keys)).await?;
+    pub async fn get(&mut self, keys: &[Key]) -> Result<HashMap<String, Value>, MtopError> {
+        self.send(Command::Gets(keys)).await?;
         let mut out = HashMap::with_capacity(keys.len());
 
         loop {
@@ -905,15 +890,8 @@ impl Memcached {
 
     /// Increment the value of a key by the given delta if the value is numeric returning
     /// the new value. Returns an error if the value is _not_ numeric.
-    pub async fn incr<K>(&mut self, key: K, delta: u64) -> Result<u64, MtopError>
-    where
-        K: AsRef<str>,
-    {
-        if !validate_key(key.as_ref()) {
-            return Err(MtopError::runtime("invalid key"));
-        }
-
-        self.send(Command::Incr(key.as_ref(), delta)).await?;
+    pub async fn incr(&mut self, key: &Key, delta: u64) -> Result<u64, MtopError> {
+        self.send(Command::Incr(key, delta)).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_numeric_response(&v)
         } else {
@@ -923,15 +901,8 @@ impl Memcached {
 
     /// Decrement the value of a key by the given delta if the value is numeric returning
     /// the new value with a minimum of 0. Returns an error if the value is _not_ numeric.
-    pub async fn decr<K>(&mut self, key: K, delta: u64) -> Result<u64, MtopError>
-    where
-        K: AsRef<str>,
-    {
-        if !validate_key(key.as_ref()) {
-            return Err(MtopError::runtime("invalid key"));
-        }
-
-        self.send(Command::Decr(key.as_ref(), delta)).await?;
+    pub async fn decr(&mut self, key: &Key, delta: u64) -> Result<u64, MtopError> {
+        self.send(Command::Decr(key, delta)).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_numeric_response(&v)
         } else {
@@ -961,16 +932,11 @@ impl Memcached {
     }
 
     /// Store the provided item in the cache, regardless of whether it already exists.
-    pub async fn set<K, V>(&mut self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
+    pub async fn set<V>(&mut self, key: &Key, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
     where
-        K: AsRef<str>,
         V: AsRef<[u8]>,
     {
-        if !validate_key(key.as_ref()) {
-            return Err(MtopError::runtime("invalid key"));
-        }
-
-        self.send(Command::Set(key.as_ref(), flags, ttl, data.as_ref())).await?;
+        self.send(Command::Set(key, flags, ttl, data.as_ref())).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "STORED")
         } else {
@@ -979,16 +945,11 @@ impl Memcached {
     }
 
     /// Store the provided item in the cache only if it does not already exist.
-    pub async fn add<K, V>(&mut self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
+    pub async fn add<V>(&mut self, key: &Key, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
     where
-        K: AsRef<str>,
         V: AsRef<[u8]>,
     {
-        if !validate_key(key.as_ref()) {
-            return Err(MtopError::runtime("invalid key"));
-        }
-
-        self.send(Command::Add(key.as_ref(), flags, ttl, data.as_ref())).await?;
+        self.send(Command::Add(key, flags, ttl, data.as_ref())).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "STORED")
         } else {
@@ -997,17 +958,11 @@ impl Memcached {
     }
 
     /// Store the provided item in the cache only if it already exists.
-    pub async fn replace<K, V>(&mut self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
+    pub async fn replace<V>(&mut self, key: &Key, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
     where
-        K: AsRef<str>,
         V: AsRef<[u8]>,
     {
-        if !validate_key(key.as_ref()) {
-            return Err(MtopError::runtime("invalid key"));
-        }
-
-        self.send(Command::Replace(key.as_ref(), flags, ttl, data.as_ref()))
-            .await?;
+        self.send(Command::Replace(key, flags, ttl, data.as_ref())).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "STORED")
         } else {
@@ -1016,15 +971,8 @@ impl Memcached {
     }
 
     /// Update the TTL of an item in the cache if it exists, return an error otherwise.
-    pub async fn touch<K>(&mut self, key: K, ttl: u32) -> Result<(), MtopError>
-    where
-        K: AsRef<str>,
-    {
-        if !validate_key(key.as_ref()) {
-            return Err(MtopError::runtime("invalid key"));
-        }
-
-        self.send(Command::Touch(key.as_ref(), ttl)).await?;
+    pub async fn touch(&mut self, key: &Key, ttl: u32) -> Result<(), MtopError> {
+        self.send(Command::Touch(key, ttl)).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "TOUCHED")
         } else {
@@ -1033,15 +981,8 @@ impl Memcached {
     }
 
     /// Delete an item in the cache if it exists, return an error otherwise.
-    pub async fn delete<K>(&mut self, key: K) -> Result<(), MtopError>
-    where
-        K: AsRef<str>,
-    {
-        if !validate_key(key.as_ref()) {
-            return Err(MtopError::runtime("invalid key"));
-        }
-
-        self.send(Command::Delete(key.as_ref())).await?;
+    pub async fn delete(&mut self, key: &Key) -> Result<(), MtopError> {
+        self.send(Command::Delete(key)).await?;
         if let Some(v) = self.read.next_line().await? {
             Self::parse_simple_response(&v, "DELETED")
         } else {
@@ -1090,69 +1031,125 @@ impl fmt::Debug for Memcached {
     }
 }
 
-/// Return true if the key is legal to use with Memcached, false otherwise
-fn validate_key(key: &str) -> bool {
-    if key.len() > MAX_KEY_LENGTH {
-        return false;
-    }
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct Key(String);
 
-    for c in key.chars() {
-        if !c.is_ascii() || c.is_ascii_whitespace() || c.is_ascii_control() {
-            return false;
+impl Key {
+    const MAX_LENGTH: usize = 250;
+
+    pub fn one<T>(val: T) -> Result<Key, MtopError>
+    where
+        T: Into<String>,
+    {
+        let val = val.into();
+        if !Self::is_legal_val(&val) {
+            Err(MtopError::runtime(format!("invalid key {}", val)))
+        } else {
+            Ok(Key(val))
         }
     }
 
-    true
+    pub fn many<I, T>(vals: I) -> Result<Vec<Key>, MtopError>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<String>,
+    {
+        let mut out = Vec::new();
+        for val in vals {
+            out.push(Self::one(val)?);
+        }
+
+        Ok(out)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn is_legal_val(val: &str) -> bool {
+        if val.len() > Self::MAX_LENGTH {
+            return false;
+        }
+
+        for c in val.chars() {
+            if !c.is_ascii() || c.is_ascii_whitespace() || c.is_ascii_control() {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
-/// Return true if all keys are legal to use with Memcached, false otherwise
-fn validate_keys(keys: &[String]) -> bool {
-    for key in keys {
-        if !validate_key(key) {
-            return false;
-        }
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
+}
 
-    true
+impl AsRef<str> for Key {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for Key {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{validate_key, ErrorKind, Memcached, Meta, Slab, SlabItem, SlabItems, MAX_KEY_LENGTH};
+    use super::{ErrorKind, Key, Memcached, Meta, Slab, SlabItem, SlabItems};
     use std::io::{Cursor, Error};
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use tokio::io::AsyncWrite;
     use tokio::sync::mpsc::{self, UnboundedSender};
 
+    /////////
+    // key //
+    /////////
+
     #[test]
-    fn test_validate_key_length() {
-        let key = "abc".repeat(MAX_KEY_LENGTH);
-        assert!(!validate_key(&key));
+    fn test_key_one_length() {
+        let val = "abc".repeat(Key::MAX_LENGTH);
+        let res = Key::one(val);
+        assert!(res.is_err());
     }
 
     #[test]
-    fn test_validate_key_non_ascii() {
-        let key = "🤦";
-        assert!(!validate_key(key));
+    fn test_key_one_non_ascii() {
+        let val = "🤦";
+        let res = Key::one(val);
+        assert!(res.is_err());
     }
 
     #[test]
-    fn test_validate_key_whitespace() {
-        let key = "some thing";
-        assert!(!validate_key(key))
+    fn test_key_one_whitespace() {
+        let val = "some thing";
+        let res = Key::one(val);
+        assert!(res.is_err());
     }
 
     #[test]
-    fn test_validate_key_control_char() {
-        let key = "\x7F";
-        assert!(!validate_key(key));
+    fn test_key_one_control_char() {
+        let val = "\x7F";
+        let res = Key::one(val);
+        assert!(res.is_err());
     }
 
     #[test]
-    fn test_validate_key_success() {
-        let key = "a-reasonable-key";
-        assert!(validate_key(key));
+    fn test_key_one_success() {
+        let val = "a-reasonable-key";
+        let res = Key::one(val);
+        assert!(res.is_ok());
     }
 
     struct WriteAdapter {
@@ -1192,31 +1189,24 @@ mod test {
         })
     }
 
-    #[tokio::test]
-    async fn test_get_no_key() {
-        let (_rx, mut client) = client!();
-        let keys: Vec<String> = vec![];
-        let res = client.get(keys).await;
+    /////////
+    // get //
+    /////////
 
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Runtime, err.kind());
+    #[tokio::test]
+    async fn test_memcached_get_no_key() {
+        let (_rx, mut client) = client!();
+        let vals: Vec<String> = vec![];
+        let keys = Key::many(vals).unwrap();
+        let res = client.get(&keys).await.unwrap();
+
+        assert!(res.is_empty());
     }
 
     #[tokio::test]
-    async fn test_get_bad_key() {
-        let (_rx, mut client) = client!();
-
-        let res = client.get(&["bad key".repeat(MAX_KEY_LENGTH)]).await;
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Runtime, err.kind());
-    }
-
-    #[tokio::test]
-    async fn test_get_error() {
+    async fn test_memcached_get_error() {
         let (_rx, mut client) = client!("SERVER_ERROR backend failure\r\n");
-        let keys = vec!["foo".to_owned(), "baz".to_owned()];
+        let keys = Key::many(vec!["foo", "baz"]).unwrap();
         let res = client.get(&keys).await;
 
         assert!(res.is_err());
@@ -1225,16 +1215,16 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_get_miss() {
+    async fn test_memcached_get_miss() {
         let (_rx, mut client) = client!("END\r\n");
-        let keys = vec!["foo".to_owned(), "baz".to_owned()];
+        let keys = Key::many(vec!["foo", "baz"]).unwrap();
         let res = client.get(&keys).await.unwrap();
 
         assert!(res.is_empty());
     }
 
     #[tokio::test]
-    async fn test_get_hit() {
+    async fn test_memcached_get_hit() {
         let (_rx, mut client) = client!(
             "VALUE foo 32 3 1\r\n",
             "bar\r\n",
@@ -1242,7 +1232,7 @@ mod test {
             "qux\r\n",
             "END\r\n",
         );
-        let keys = vec!["foo".to_owned(), "baz".to_owned()];
+        let keys = Key::many(vec!["foo", "baz"]).unwrap();
         let res = client.get(&keys).await.unwrap();
 
         let val1 = res.get("foo").unwrap();
@@ -1258,20 +1248,15 @@ mod test {
         assert_eq!(2, val2.cas);
     }
 
-    #[tokio::test]
-    async fn test_incr_bad_key() {
-        let (_rx, mut client) = client!();
-        let res = client.incr("bad key", 1).await;
-
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Runtime, err.kind());
-    }
+    //////////
+    // incr //
+    //////////
 
     #[tokio::test]
-    async fn test_incr_bad_val() {
+    async fn test_memcached_incr_bad_val() {
         let (mut rx, mut client) = client!("CLIENT_ERROR cannot increment or decrement non-numeric value\r\n");
-        let res = client.incr("test", 2).await;
+        let key = Key::one("test").unwrap();
+        let res = client.incr(&key, 2).await;
 
         assert!(res.is_err());
         let err = res.unwrap_err();
@@ -1283,9 +1268,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_incr_success() {
+    async fn test_memcached_incr_success() {
         let (mut rx, mut client) = client!("3\r\n");
-        let res = client.incr("test", 2).await.unwrap();
+        let key = Key::one("test").unwrap();
+        let res = client.incr(&key, 2).await.unwrap();
 
         assert_eq!(3, res);
         let bytes = rx.recv().await.unwrap();
@@ -1293,20 +1279,15 @@ mod test {
         assert_eq!("incr test 2\r\n", command);
     }
 
-    #[tokio::test]
-    async fn test_decr_bad_key() {
-        let (_rx, mut client) = client!();
-        let res = client.decr("bad key", 1).await;
-
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Runtime, err.kind());
-    }
+    //////////
+    // decr //
+    //////////
 
     #[tokio::test]
-    async fn test_decr_bad_val() {
+    async fn test_memcached_decr_bad_val() {
         let (mut rx, mut client) = client!("CLIENT_ERROR cannot increment or decrement non-numeric value\r\n");
-        let res = client.decr("test", 1).await;
+        let key = Key::one("test").unwrap();
+        let res = client.decr(&key, 1).await;
 
         assert!(res.is_err());
         let err = res.unwrap_err();
@@ -1318,9 +1299,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_decr_success() {
+    async fn test_memcached_decr_success() {
         let (mut rx, mut client) = client!("3\r\n");
-        let res = client.decr("test", 1).await.unwrap();
+        let key = Key::one("test").unwrap();
+        let res = client.decr(&key, 1).await.unwrap();
 
         assert_eq!(3, res);
         let bytes = rx.recv().await.unwrap();
@@ -1331,7 +1313,9 @@ mod test {
     macro_rules! test_store_command_success {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("STORED\r\n");
-            let res = client.$method("test", 0, 300, "val".as_bytes()).await;
+            let res = client
+                .$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes())
+                .await;
 
             assert!(res.is_ok());
             let bytes = rx.recv().await.unwrap();
@@ -1340,21 +1324,12 @@ mod test {
         };
     }
 
-    macro_rules! test_store_command_bad_key {
-        ($method:ident) => {
-            let (_rx, mut client) = client!();
-            let res = client.$method("bad key", 0, 300, "val".as_bytes()).await;
-
-            assert!(res.is_err());
-            let err = res.unwrap_err();
-            assert_eq!(ErrorKind::Runtime, err.kind());
-        };
-    }
-
     macro_rules! test_store_command_error {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("NOT_STORED\r\n");
-            let res = client.$method("test", 0, 300, "val".as_bytes()).await;
+            let res = client
+                .$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes())
+                .await;
 
             assert!(res.is_err());
             let err = res.unwrap_err();
@@ -1366,55 +1341,57 @@ mod test {
         };
     }
 
+    /////////
+    // set //
+    /////////
+
     #[tokio::test]
-    async fn test_set_success() {
+    async fn test_memcached_set_success() {
         test_store_command_success!(set, "set");
     }
 
     #[tokio::test]
-    async fn test_set_bad_key() {
-        test_store_command_bad_key!(set);
-    }
-
-    #[tokio::test]
-    async fn test_set_error() {
+    async fn test_memcached_set_error() {
         test_store_command_error!(set, "set");
     }
 
+    /////////
+    // add //
+    /////////
+
     #[tokio::test]
-    async fn test_add_success() {
+    async fn test_memcached_add_success() {
         test_store_command_success!(add, "add");
     }
 
     #[tokio::test]
-    async fn test_add_bad_key() {
-        test_store_command_bad_key!(add);
-    }
-
-    #[tokio::test]
-    async fn test_add_error() {
+    async fn test_memcached_add_error() {
         test_store_command_error!(add, "add");
     }
 
+    /////////////
+    // replace //
+    /////////////
+
     #[tokio::test]
-    async fn test_replace_success() {
+    async fn test_memcached_replace_success() {
         test_store_command_success!(replace, "replace");
     }
 
     #[tokio::test]
-    async fn test_replace_bad_key() {
-        test_store_command_bad_key!(replace);
-    }
-
-    #[tokio::test]
-    async fn test_replace_error() {
+    async fn test_memcached_replace_error() {
         test_store_command_error!(replace, "replace");
     }
 
+    ///////////
+    // touch //
+    ///////////
+
     #[tokio::test]
-    async fn test_touch_success() {
+    async fn test_memcached_touch_success() {
         let (mut rx, mut client) = client!("TOUCHED\r\n");
-        let res = client.touch("test", 300).await;
+        let key = Key::one("test").unwrap();
+        let res = client.touch(&key, 300).await;
 
         assert!(res.is_ok());
         let bytes = rx.recv().await.unwrap();
@@ -1423,19 +1400,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_touch_bad_key() {
-        let (_rx, mut client) = client!();
-        let res = client.touch("bad key", 300).await;
-
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Runtime, err.kind());
-    }
-
-    #[tokio::test]
-    async fn test_touch_error() {
+    async fn test_memcached_touch_error() {
         let (mut rx, mut client) = client!("NOT_FOUND\r\n");
-        let res = client.touch("test", 300).await;
+        let key = Key::one("test").unwrap();
+        let res = client.touch(&key, 300).await;
 
         assert!(res.is_err());
         let err = res.unwrap_err();
@@ -1446,10 +1414,15 @@ mod test {
         assert_eq!("touch test 300\r\n", command);
     }
 
+    ////////////
+    // delete //
+    ////////////
+
     #[tokio::test]
-    async fn test_delete_success() {
+    async fn test_memcached_delete_success() {
         let (mut rx, mut client) = client!("DELETED\r\n");
-        let res = client.delete("test").await;
+        let key = Key::one("test").unwrap();
+        let res = client.delete(&key).await;
 
         assert!(res.is_ok());
         let bytes = rx.recv().await.unwrap();
@@ -1458,19 +1431,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_delete_bad_key() {
-        let (_rx, mut client) = client!();
-        let res = client.delete("bad key").await;
-
-        assert!(res.is_err());
-        let err = res.unwrap_err();
-        assert_eq!(ErrorKind::Runtime, err.kind());
-    }
-
-    #[tokio::test]
-    async fn test_delete_error() {
+    async fn test_memcached_delete_error() {
         let (mut rx, mut client) = client!("NOT_FOUND\r\n");
-        let res = client.delete("test").await;
+        let key = Key::one("test").unwrap();
+        let res = client.delete(&key).await;
 
         assert!(res.is_err());
         let err = res.unwrap_err();
@@ -1481,8 +1445,12 @@ mod test {
         assert_eq!("delete test\r\n", command);
     }
 
+    ///////////
+    // stats //
+    ///////////
+
     #[tokio::test]
-    async fn test_stats_empty() {
+    async fn test_memcached_stats_empty() {
         let (_rx, mut client) = client!("END\r\n");
         let res = client.stats().await;
 
@@ -1492,7 +1460,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_stats_error() {
+    async fn test_memcached_stats_error() {
         let (_rx, mut client) = client!("SERVER_ERROR backend failure\r\n");
         let res = client.stats().await;
 
@@ -1502,7 +1470,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_stats_success() {
+    async fn test_memcached_stats_success() {
         let (_rx, mut client) = client!(
             "STAT pid 1525\r\n",
             "STAT uptime 271984\r\n",
@@ -1596,6 +1564,7 @@ mod test {
             "STAT moves_within_lru 0\r\n",
             "STAT direct_reclaims 0\r\n",
             "STAT lru_bumps_dropped 0\r\n",
+            "END\r\n",
         );
         let res = client.stats().await.unwrap();
 
@@ -1605,8 +1574,12 @@ mod test {
         assert_eq!(0, res.get_hits);
     }
 
+    ///////////
+    // slabs //
+    ///////////
+
     #[tokio::test]
-    async fn test_slabs_empty() {
+    async fn test_memcached_slabs_empty() {
         let (_rx, mut client) = client!("STAT active_slabs 0\r\n", "STAT total_malloced 0\r\n", "END\r\n");
         let res = client.slabs().await.unwrap();
 
@@ -1614,7 +1587,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_slabs_error() {
+    async fn test_memcached_slabs_error() {
         let (_rx, mut client) = client!("ERROR Too many open connections\r\n");
         let res = client.slabs().await;
 
@@ -1624,7 +1597,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_slabs_success() {
+    async fn test_memcached_slabs_success() {
         let (_rx, mut client) = client!(
             "STAT 6:chunk_size 304\r\n",
             "STAT 6:chunks_per_page 3449\r\n",
@@ -1658,6 +1631,7 @@ mod test {
             "STAT 7:touch_hits 0\r\n",
             "STAT active_slabs 2\r\n",
             "STAT total_malloced 30408704\r\n",
+            "END\r\n",
         );
         let res = client.slabs().await.unwrap();
 
@@ -1701,8 +1675,12 @@ mod test {
         assert_eq!(expected, res.slabs);
     }
 
+    ///////////
+    // items //
+    ///////////
+
     #[tokio::test]
-    async fn test_items_empty() {
+    async fn test_memcached_items_empty() {
         let (_rx, mut client) = client!();
         let res = client.items().await.unwrap();
 
@@ -1710,7 +1688,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_items_error() {
+    async fn test_memcached_items_error() {
         let (_rx, mut client) = client!("ERROR Too many open connections\r\n");
         let res = client.items().await;
 
@@ -1720,7 +1698,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_items_success() {
+    async fn test_memcached_items_success() {
         let (_rx, mut client) = client!(
             "STAT items:39:number 3\r\n",
             "STAT items:39:number_hot 0\r\n",
@@ -1791,8 +1769,12 @@ mod test {
         assert_eq!(expected, res);
     }
 
+    //////////
+    // meta //
+    //////////
+
     #[tokio::test]
-    async fn test_metas_empty() {
+    async fn test_memcached_metas_empty() {
         let (_rx, mut client) = client!();
         let res = client.metas().await.unwrap();
 
@@ -1800,7 +1782,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_metas_error() {
+    async fn test_memcached_metas_error() {
         let (_rx, mut client) = client!("BUSY crawler is busy\r\n",);
         let res = client.metas().await;
 
@@ -1810,7 +1792,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_metas_success() {
+    async fn test_memcached_metas_success() {
         let (_rx, mut client) = client!(
             "key=memcached%2Fmurmur3_hash.c exp=1687216956 la=1687216656 cas=259502 fetch=yes cls=17 size=2912\r\n",
             "key=memcached%2Fmd5.h exp=1687216956 la=1687216656 cas=259731 fetch=yes cls=17 size=3593\r\n",

@@ -1,15 +1,19 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::check::{Checker, MeasurementBundle};
-use mtop_client::{MemcachedPool, Meta, PoolConfig, TLSConfig, Value};
+use mtop_client::{
+    MemcachedClient, MemcachedPool, Meta, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig, Timeout, Value,
+};
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::time::Duration;
-use std::{env, error, io, process};
+use std::{env, io};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::runtime::Handle;
-use tracing::Level;
+use tracing::{Instrument, Level};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_HOST: &str = "localhost:11211";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// mc: memcached command line utility
 #[derive(Debug, Parser)]
@@ -203,132 +207,234 @@ struct TouchCommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
+async fn main() -> ExitCode {
     let opts = McConfig::parse();
 
-    let console_subscriber = mtop::tracing::console_subscriber(opts.log_level)?;
+    let console_subscriber =
+        mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
-    let pool = MemcachedPool::new(
+    let client = match new_client(&opts).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to initialize memcached client", host = opts.host, err = %e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Hardcoded timeout so that we can ensure the host is actually up.
+    if let Err(e) = connect(&client, CONNECT_TIMEOUT).await {
+        tracing::error!(message = "unable to connect", host = opts.host, err = %e);
+        return ExitCode::FAILURE;
+    };
+
+    match &opts.mode {
+        Action::Add(cmd) => run_add(&opts, cmd, &client).await,
+        Action::Check(cmd) => run_check(&opts, cmd, &client).await,
+        Action::Decr(cmd) => run_decr(&opts, cmd, &client).await,
+        Action::Delete(cmd) => run_delete(&opts, cmd, &client).await,
+        Action::Get(cmd) => run_get(&opts, cmd, &client).await,
+        Action::Incr(cmd) => run_incr(&opts, cmd, &client).await,
+        Action::Keys(cmd) => run_keys(&opts, cmd, &client).await,
+        Action::Replace(cmd) => run_replace(&opts, cmd, &client).await,
+        Action::Set(cmd) => run_set(&opts, cmd, &client).await,
+        Action::Touch(cmd) => run_touch(&opts, cmd, &client).await,
+    }
+}
+
+async fn new_client(opts: &McConfig) -> Result<MemcachedClient, MtopError> {
+    let tls = TLSConfig {
+        enabled: opts.tls_enabled,
+        ca_path: opts.tls_ca.clone(),
+        cert_path: opts.tls_cert.clone(),
+        key_path: opts.tls_key.clone(),
+        server_name: opts.tls_server_name.clone(),
+    };
+
+    MemcachedPool::new(
         Handle::current(),
         PoolConfig {
-            tls: TLSConfig {
-                enabled: opts.tls_enabled,
-                ca_path: opts.tls_ca,
-                cert_path: opts.tls_cert,
-                key_path: opts.tls_key,
-                server_name: opts.tls_server_name,
-            },
+            tls,
             ..Default::default()
         },
     )
     .await
-    .unwrap_or_else(|e| {
-        tracing::error!(message = "unable to initialize memcached client", host = opts.host, error = %e);
-        process::exit(1);
-    });
+    .map(|pool| {
+        let selector = SelectorRendezvous::new(vec![Server::new(&opts.host)]);
+        MemcachedClient::new(Handle::current(), selector, pool)
+    })
+}
 
-    let mut client = pool.get(&opts.host).await.unwrap_or_else(|e| {
-        tracing::error!(message = "unable to connect", host = opts.host, error = %e);
-        process::exit(1);
-    });
+async fn connect(client: &MemcachedClient, timeout: Duration) -> Result<(), MtopError> {
+    let pings = client
+        .ping()
+        .timeout(timeout, "client.ping")
+        .instrument(tracing::span!(Level::INFO, "client.ping"))
+        .await?;
 
-    match opts.mode {
-        Action::Add(c) => {
-            let buf = read_input().await.unwrap_or_else(|e| {
-                tracing::error!(message = "unable to read item data from stdin", error = %e);
-                process::exit(1);
-            });
+    if let Some((_server, err)) = pings.errors.into_iter().next() {
+        return Err(err);
+    }
 
-            if let Err(e) = client.add(&c.key, 0, c.ttl, &buf).await {
-                tracing::error!(message = "unable to add item", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            }
-        }
-        Action::Check(c) => {
-            let checker = Checker::new(
-                &pool,
-                Duration::from_millis(c.delay_millis),
-                Duration::from_secs(c.timeout_secs),
-            );
-            let results = checker.run(&opts.host, Duration::from_secs(c.time_secs)).await;
-            if let Err(e) = print_check_results(&results).await {
-                tracing::warn!(message = "error writing output", error = %e);
-            }
-        }
-        Action::Decr(c) => {
-            if let Err(e) = client.decr(&c.key, c.delta).await {
-                tracing::error!(message = "unable to decrement value", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            }
-        }
-        Action::Delete(c) => {
-            if let Err(e) = client.delete(&c.key).await {
-                tracing::error!(message = "unable to delete item", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            }
-        }
-        Action::Get(c) => {
-            let results = client.get(&[c.key.clone()]).await.unwrap_or_else(|e| {
-                tracing::error!(message = "unable to get item", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            });
+    Ok(())
+}
 
-            if let Some(v) = results.get(&c.key) {
-                if let Err(e) = print_data(v).await {
-                    tracing::warn!(message = "error writing output", error = %e);
-                }
-            }
+async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) -> ExitCode {
+    let buf = match read_input().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to read item data from stdin", err = %e);
+            return ExitCode::FAILURE;
         }
-        Action::Incr(c) => {
-            if let Err(e) = client.incr(&c.key, c.delta).await {
-                tracing::error!(message = "unable to increment value", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            }
-        }
-        Action::Keys(c) => {
-            let mut metas = client.metas().await.unwrap_or_else(|e| {
-                tracing::error!(message = "unable to list keys", host = opts.host, error = %e);
-                process::exit(1);
-            });
+    };
 
-            metas.sort();
-            if let Err(e) = print_keys(&metas, c.details).await {
-                tracing::warn!(message = "error writing output", error = %e);
-            }
-        }
-        Action::Replace(c) => {
-            let buf = read_input().await.unwrap_or_else(|e| {
-                tracing::error!(message = "unable to read item data from stdin", error = %e);
-                process::exit(1);
-            });
+    if let Err(e) = client.add(&cmd.key, 0, cmd.ttl, &buf).await {
+        tracing::error!(message = "unable to add item", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
 
-            if let Err(e) = client.replace(&c.key, 0, c.ttl, &buf).await {
-                tracing::error!(message = "unable to replace item", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            }
-        }
-        Action::Set(c) => {
-            let buf = read_input().await.unwrap_or_else(|e| {
-                tracing::error!(message = "unable to read item data from stdin", error = %e);
-                process::exit(1);
-            });
+async fn run_check(opts: &McConfig, cmd: &CheckCommand, client: &MemcachedClient) -> ExitCode {
+    let checker = Checker::new(
+        client,
+        Duration::from_millis(cmd.delay_millis),
+        Duration::from_secs(cmd.timeout_secs),
+    );
+    let results = checker.run(&opts.host, Duration::from_secs(cmd.time_secs)).await;
+    if let Err(e) = print_check_results(&results).await {
+        tracing::warn!(message = "error writing output", err = %e);
+    }
 
-            if let Err(e) = client.set(&c.key, 0, c.ttl, &buf).await {
-                tracing::error!(message = "unable to set item", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            }
+    if results.failures.total > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient) -> ExitCode {
+    if let Err(e) = client.decr(&cmd.key, cmd.delta).await {
+        tracing::error!(message = "unable to decrement value", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClient) -> ExitCode {
+    if let Err(e) = client.delete(&cmd.key).await {
+        tracing::error!(message = "unable to delete item", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) -> ExitCode {
+    let response = match client.get(&[cmd.key.clone()]).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to get item", key = cmd.key, host = opts.host, err = %e);
+            return ExitCode::FAILURE;
         }
-        Action::Touch(c) => {
-            if let Err(e) = client.touch(&c.key, c.ttl).await {
-                tracing::error!(message = "unable to touch item", key = c.key, host = opts.host, error = %e);
-                process::exit(1);
-            }
+    };
+
+    if let Some(v) = response.values.get(&cmd.key) {
+        if let Err(e) = print_data(v).await {
+            tracing::warn!(message = "error writing output", err = %e);
         }
     }
 
-    pool.put(client).await;
-    Ok(())
+    for (server, e) in response.errors.iter() {
+        tracing::error!(message = "error fetching value", host = server.name, err = %e);
+    }
+
+    if response.has_errors() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) -> ExitCode {
+    if let Err(e) = client.incr(&cmd.key, cmd.delta).await {
+        tracing::error!(message = "unable to increment value", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient) -> ExitCode {
+    let mut response = match client.metas().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to list keys", host = opts.host, err = %e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut metas = response.values.remove(&Server::new(&opts.host)).unwrap_or_default();
+    metas.sort();
+
+    if let Err(e) = print_keys(&metas, cmd.details).await {
+        tracing::warn!(message = "error writing output", err = %e);
+    }
+
+    for (server, e) in response.errors.iter() {
+        tracing::error!(message = "error fetching metas", host = server.name, err = %e);
+    }
+
+    if response.has_errors() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedClient) -> ExitCode {
+    let buf = match read_input().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to read item data from stdin", err = %e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(e) = client.replace(&cmd.key, 0, cmd.ttl, &buf).await {
+        tracing::error!(message = "unable to replace item", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) -> ExitCode {
+    let buf = match read_input().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to read item data from stdin", err = %e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(e) = client.set(&cmd.key, 0, cmd.ttl, &buf).await {
+        tracing::error!(message = "unable to set item", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient) -> ExitCode {
+    if let Err(e) = client.touch(&cmd.key, cmd.ttl).await {
+        tracing::error!(message = "unable to touch item", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 async fn read_input() -> io::Result<Vec<u8>> {

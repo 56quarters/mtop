@@ -1,0 +1,562 @@
+use crate::core::{Key, Meta, MtopError, SlabItems, Slabs, Stats, Value};
+use crate::pool::{MemcachedPool, PooledMemcached, Server};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::Hasher;
+use std::sync::Arc;
+use tokio::runtime::Handle;
+use tokio::sync::RwLock;
+
+// Further reading on rendezvous hashing:
+//
+// - https://randorithms.com/2020/12/26/rendezvous-hashing.html
+// - https://www.snia.org/sites/default/files/SDC15_presentations/dist_sys/Jason_Resch_New_Consistent_Hashings_Rev.pdf
+// - https://dgryski.medium.com/consistent-hashing-algorithmic-tradeoffs-ef6b8e2fcae8
+// - https://medium.com/i0exception/rendezvous-hashing-8c00e2fb58b0
+// - https://stackoverflow.com/questions/69841546/consistent-hashing-why-are-vnodes-a-thing
+// - https://medium.com/@panchr/dynamic-replication-in-memcached-8939c6f81e7f
+
+/// Logic for picking a server to "own" a particular cache key that uses
+/// rendezvous hashing.
+///
+/// See https://en.wikipedia.org/wiki/Rendezvous_hashing
+#[derive(Debug)]
+pub struct SelectorRendezvous {
+    servers: RwLock<Vec<Server>>,
+}
+
+impl SelectorRendezvous {
+    /// Create a new instance with the provided initial server list
+    pub fn new(servers: Vec<Server>) -> Self {
+        Self {
+            servers: RwLock::new(servers),
+        }
+    }
+
+    fn score(server: &Server, key: &Key) -> f64 {
+        let mut hasher = DefaultHasher::new();
+        hasher.write(server.name.as_bytes());
+        hasher.write(key.as_ref().as_bytes());
+        let h = hasher.finish();
+
+        // Add one to the hash value since we can't take the log of 0 and clamp to 1.0
+        // since we negate the log result, which is negative for numbers less than 1.0
+        let unit = ((h + 1) as f64 / u64::MAX as f64).min(1.0);
+
+        // Log of 1.0 is 0. Dividing by floating point 0 is infinity in IEEE 754 so we
+        // just let that happen instead of special casing a unit value of exactly 1.0.
+        100_f64 / -unit.ln()
+    }
+
+    /// Get a copy of all current servers.
+    pub async fn servers(&self) -> Vec<Server> {
+        let servers = self.servers.read().await;
+        servers.clone()
+    }
+
+    /// Get the `Server` that owns the given key, or none if there are no servers.
+    pub async fn server(&self, key: &Key) -> Option<Server> {
+        let servers = self.servers.read().await;
+        if servers.is_empty() {
+            None
+        } else if servers.len() == 1 {
+            servers.first().cloned()
+        } else {
+            servers
+                .iter()
+                .max_by(|x, y| Self::score(x, key).total_cmp(&Self::score(y, key)))
+                .cloned()
+        }
+    }
+
+    /// Update the list of potential servers to pick from.
+    pub async fn set_servers(&self, servers: Vec<Server>) {
+        let mut current = self.servers.write().await;
+        *current = servers
+    }
+}
+
+/// Response for both values and errors from multiple servers, indexed by server.
+#[derive(Debug, Default)]
+pub struct ServersResponse<T> {
+    pub values: HashMap<Server, T>,
+    pub errors: HashMap<Server, MtopError>,
+}
+
+impl<T> ServersResponse<T> {
+    /// Return true if there are any errors, false otherwise.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+/// Response for values indexed by key and errors indexed by server.
+#[derive(Debug, Default)]
+pub struct ValuesResponse {
+    pub values: HashMap<String, Value>,
+    pub errors: HashMap<Server, MtopError>,
+}
+
+impl ValuesResponse {
+    /// Return true if there are any errors, false otherwise.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+#[derive(Debug)]
+pub struct MemcachedClient {
+    handle: Handle,
+    selector: SelectorRendezvous,
+    pool: Arc<MemcachedPool>,
+}
+
+/// Run a method for a particular server in a spawned future.
+macro_rules! spawn_for_host {
+    ($self:ident, $method:ident, $host:expr $(, $args:expr)* $(,)?) => {{
+        let pool = $self.pool.clone();
+        $self.handle.spawn(async move {
+            match pool.get($host).await {
+                Ok(mut conn) => {
+                    let res = conn.$method($($args,)*).await;
+                    pool.put(conn).await;
+                    res
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }};
+}
+
+/// Run a method on a connection to a particular server based on the hash of a single key.
+macro_rules! operation_for_key {
+    ($self:ident, $method:ident, $key:expr $(, $args:expr)* $(,)?) => {{
+        let key = Key::one($key)?;
+        if let Some(s) = $self.selector.server(&key).await {
+            let mut conn = $self.pool.get(&s.name).await?;
+            let res = conn.$method(&key, $($args,)*).await;
+            $self.pool.put(conn).await;
+            res
+        } else {
+            Err(MtopError::runtime("no servers available"))
+        }
+    }};
+}
+
+/// Run a method on a connection to every server and bucket the results and errors by server.
+macro_rules! operation_for_all {
+    ($self:ident, $method:ident) => {{
+        let servers = $self.selector.servers().await;
+        let tasks = servers
+            .into_iter()
+            .map(|s| {
+                let host = s.name.clone();
+                (s, spawn_for_host!($self, $method, &host))
+            })
+            .collect::<Vec<_>>();
+
+        let mut values = HashMap::with_capacity(tasks.len());
+        let mut errors = HashMap::new();
+
+        for (server, task) in tasks {
+            match task.await {
+                Ok(Ok(results)) => {
+                    values.insert(server, results);
+                }
+                Ok(Err(e)) => {
+                    errors.insert(server, e);
+                }
+                Err(e) => {
+                    errors.insert(server, MtopError::runtime_cause("fetching cluster values", e));
+                }
+            };
+        }
+
+        Ok(ServersResponse { values, errors })
+    }};
+}
+
+impl MemcachedClient {
+    /// Create a new `MemcachedClient` instance.
+    ///
+    /// `handle` is used to spawn multiple async tasks to fetch data from servers in
+    /// parallel. `selector` is used to determine which server "owns" a particular key.
+    /// `pool` is used for pooling or establishing new connections to each server as
+    /// needed.
+    pub fn new(handle: Handle, selector: SelectorRendezvous, pool: MemcachedPool) -> Self {
+        Self {
+            handle,
+            selector,
+            pool: Arc::new(pool),
+        }
+    }
+
+    /// Get a connection to a particular server from the pool if available, otherwise
+    /// establish a new connection.
+    pub async fn raw_open(&self, host: &str) -> Result<PooledMemcached, MtopError> {
+        self.pool.get(host).await
+    }
+
+    /// Return a connection to a particular server to the pool if fewer than the configured
+    /// number of idle connections to that server are currently in the pool, otherwise close
+    /// it immediately.
+    pub async fn raw_close(&self, conn: PooledMemcached) {
+        self.pool.put(conn).await;
+    }
+
+    /// Get a `Stats` object with the current values of the interesting stats for each server.
+    ///
+    /// A future is spawned for each server with results and any errors indexed by server. A
+    /// pooled connection to each server is used if available, otherwise new connections are
+    /// established.
+    pub async fn stats(&self) -> Result<ServersResponse<Stats>, MtopError> {
+        operation_for_all!(self, stats)
+    }
+
+    /// Get a `Slabs` object with information about each set of `Slab`s maintained by each server.
+    /// You can think of each `Slab` as a class of objects that are stored together in memory. Note
+    /// that `Slab` IDs may not be contiguous based on the size of items actually stored by the server.
+    ///
+    /// A future is spawned for each server with results and any errors indexed by server. A
+    /// pooled connection to each server is used if available, otherwise new connections are
+    /// established.
+    pub async fn slabs(&self) -> Result<ServersResponse<Slabs>, MtopError> {
+        operation_for_all!(self, slabs)
+    }
+
+    /// Get a `SlabsItems` object with information about the `SlabItem` items stored in
+    /// each slab class maintained by each server. The ID of each `SlabItem` corresponds to a
+    /// `Slab` maintained by the server. Note that `SlabItem` IDs may not be contiguous based
+    /// on the size of items actually stored by the server.
+    ///
+    /// A future is spawned for each server with results and any errors indexed by server. A
+    /// pooled connection to each server is used if available, otherwise new connections are
+    /// established.
+    pub async fn items(&self) -> Result<ServersResponse<SlabItems>, MtopError> {
+        operation_for_all!(self, items)
+    }
+
+    /// Get a `Meta` object for every item in the cache for each server which includes its key
+    /// and expiration time as a UNIX timestamp. Expiration time will be `-1` if the item was
+    /// set with an infinite TTL.
+    ///
+    /// A future is spawned for each server with results and any errors indexed by server. A
+    /// pooled connection to each server is used if available, otherwise new connections are
+    /// established.
+    pub async fn metas(&self) -> Result<ServersResponse<Vec<Meta>>, MtopError> {
+        operation_for_all!(self, metas)
+    }
+
+    /// Send a simple command to verify our connection each known server.
+    ///
+    /// A future is spawned for each server with results and any errors indexed by server. A
+    /// pooled connection to each server is used if available, otherwise new connections are
+    /// established.
+    pub async fn ping(&self) -> Result<ServersResponse<()>, MtopError> {
+        operation_for_all!(self, ping)
+    }
+
+    /// Get a map of the requested keys and their corresponding `Value` in the cache
+    /// including the key, flags, and data.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" each of the
+    /// provided keys. A future is spawned for each server and the results merged together. A
+    /// pooled connection to each server is used if available, otherwise new connections are
+    /// established.
+    pub async fn get<I, K>(&self, keys: I) -> Result<ValuesResponse, MtopError>
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        let keys = Key::many(keys)?;
+        if keys.is_empty() {
+            return Ok(ValuesResponse::default());
+        }
+
+        let num_keys = keys.len();
+        let mut by_server: HashMap<Server, Vec<Key>> = HashMap::new();
+        for key in keys {
+            if let Some(s) = self.selector.server(&key).await {
+                let entry = by_server.entry(s).or_default();
+                entry.push(key);
+            }
+        }
+
+        let tasks = by_server
+            .into_iter()
+            .map(|(server, keys)| {
+                let host = server.name.clone();
+                (server, spawn_for_host!(self, get, &host, &keys))
+            })
+            .collect::<Vec<_>>();
+
+        let mut values = HashMap::with_capacity(num_keys);
+        let mut errors = HashMap::new();
+
+        for (server, task) in tasks {
+            match task.await {
+                Ok(Ok(results)) => {
+                    values.extend(results);
+                }
+                Ok(Err(e)) => {
+                    errors.insert(server, e);
+                }
+                Err(e) => {
+                    errors.insert(server, MtopError::runtime_cause("fetching keys", e));
+                }
+            };
+        }
+
+        Ok(ValuesResponse { values, errors })
+    }
+
+    /// Increment the value of a key by the given delta if the value is numeric returning
+    /// the new value. Returns an error if the value is not set or _not_ numeric.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" the provided
+    /// key. A pooled connection to the server is used if available, otherwise a new connection
+    /// is established.
+    pub async fn incr<K>(&self, key: K, delta: u64) -> Result<u64, MtopError>
+    where
+        K: Into<String>,
+    {
+        operation_for_key!(self, incr, key, delta)
+    }
+
+    /// Decrement the value of a key by the given delta if the value is numeric returning
+    /// the new value with a minimum of 0. Returns an error if the value is not set or _not_
+    /// numeric.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" the provided
+    /// key. A pooled connection to the server is used if available, otherwise a new connection
+    /// is established.
+    pub async fn decr<K>(&self, key: K, delta: u64) -> Result<u64, MtopError>
+    where
+        K: Into<String>,
+    {
+        operation_for_key!(self, decr, key, delta)
+    }
+
+    /// Store the provided item in the cache, regardless of whether it already exists.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" the provided
+    /// key. A pooled connection to the server is used if available, otherwise a new connection
+    /// is established.
+    pub async fn set<K, V>(&self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
+    where
+        K: Into<String>,
+        V: AsRef<[u8]>,
+    {
+        operation_for_key!(self, set, key, flags, ttl, data)
+    }
+
+    /// Store the provided item in the cache only if it does not already exist.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" the provided
+    /// key. A pooled connection to the server is used if available, otherwise a new connection
+    /// is established.
+    pub async fn add<K, V>(&self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
+    where
+        K: Into<String>,
+        V: AsRef<[u8]>,
+    {
+        operation_for_key!(self, add, key, flags, ttl, data)
+    }
+
+    /// Store the provided item in the cache only if it already exists.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" the provided
+    /// key. A pooled connection to the server is used if available, otherwise a new connection
+    /// is established.
+    pub async fn replace<K, V>(&self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
+    where
+        K: Into<String>,
+        V: AsRef<[u8]>,
+    {
+        operation_for_key!(self, replace, key, flags, ttl, data)
+    }
+
+    /// Update the TTL of an item in the cache if it exists, return an error otherwise.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" the provided
+    /// key. A pooled connection to the server is used if available, otherwise a new connection
+    /// is established.
+    pub async fn touch<K>(&self, key: K, ttl: u32) -> Result<(), MtopError>
+    where
+        K: Into<String>,
+    {
+        operation_for_key!(self, touch, key, ttl)
+    }
+
+    /// Delete an item from the cache if it exists, return an error otherwise.
+    ///
+    /// This method uses a selector implementation to determine which server "owns" the provided
+    /// key. A pooled connection to the server is used if available, otherwise a new connection
+    /// is established.
+    pub async fn delete<K>(&self, key: K) -> Result<(), MtopError>
+    where
+        K: Into<String>,
+    {
+        operation_for_key!(self, delete, key)
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    // TODO: Actually figure out how to test this without a bunch of boilerplate.
+
+    ///////////
+    // stats //
+    ///////////
+
+    #[tokio::test]
+    async fn test_memcached_client_stats_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_stats_no_errors() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_stats_some_errors() {}
+
+    ///////////
+    // slabs //
+    ///////////
+
+    #[tokio::test]
+    async fn test_memcached_client_slabs_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_slabs_no_errors() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_slabs_some_errors() {}
+
+    ///////////
+    // items //
+    ///////////
+
+    #[tokio::test]
+    async fn test_memcached_client_items_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_items_no_errors() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_items_some_errors() {}
+
+    ///////////
+    // metas //
+    ///////////
+
+    #[tokio::test]
+    async fn test_memcached_client_metas_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_metas_no_errors() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_metas_some_errors() {}
+
+    //////////
+    // ping //
+    //////////
+
+    #[tokio::test]
+    async fn test_memcached_client_ping_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_ping_no_errors() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_ping_some_errors() {}
+
+    /////////
+    // get //
+    /////////
+
+    #[tokio::test]
+    async fn test_memcached_client_get_invalid_keys() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_get_no_keys() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_get_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_get_no_errors() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_get_some_errors() {}
+
+    //////////
+    // incr //
+    //////////
+
+    #[tokio::test]
+    async fn test_memcached_client_incr_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_incr_success() {}
+
+    //////////
+    // decr //
+    //////////
+
+    #[tokio::test]
+    async fn test_memcached_client_decr_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_decr_success() {}
+
+    /////////
+    // set //
+    /////////
+
+    #[tokio::test]
+    async fn test_memcached_client_set_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_set_success() {}
+
+    /////////
+    // add //
+    /////////
+
+    #[tokio::test]
+    async fn test_memcached_client_add_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_add_success() {}
+
+    /////////////
+    // replace //
+    /////////////
+
+    #[tokio::test]
+    async fn test_memcached_client_replace_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_replace_success() {}
+
+    ///////////
+    // touch //
+    ///////////
+
+    #[tokio::test]
+    async fn test_memcached_client_touch_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_touch_success() {}
+
+    ////////////
+    // delete //
+    ////////////
+
+    #[tokio::test]
+    async fn test_memcached_client_delete_no_servers() {}
+
+    #[tokio::test]
+    async fn test_memcached_client_delete_success() {}
+}

@@ -32,9 +32,12 @@ impl StatsQueue {
         }
     }
 
-    pub async fn insert(&self, host: String, stats: Stats, slabs: Slabs, items: SlabItems) {
+    pub async fn insert<H>(&self, host: H, stats: Stats, slabs: Slabs, items: SlabItems)
+    where
+        H: Into<String>,
+    {
         let mut map = self.queues.lock().await;
-        let q = map.entry(host).or_insert_with(VecDeque::new);
+        let q = map.entry(host.into()).or_insert_with(VecDeque::new);
 
         if let Some(prev) = q.back() {
             if stats.uptime == prev.stats.uptime {
@@ -81,9 +84,12 @@ impl StatsQueue {
         }
     }
 
-    pub async fn read_delta(&self, host: &str) -> Option<StatsDelta> {
+    pub async fn read_delta<H>(&self, host: H) -> Option<StatsDelta>
+    where
+        H: AsRef<str>,
+    {
         let map = self.queues.lock().await;
-        map.get(host).and_then(|q| match (q.front(), q.back()) {
+        map.get(host.as_ref()).and_then(|q| match (q.front(), q.back()) {
             // The delta is only valid if there are more than two entries in the queue. This
             // avoids division by zero errors (since the time for the entries would be the same).
             (Some(previous), Some(current)) if q.len() >= 2 => {
@@ -110,11 +116,17 @@ impl BlockingStatsQueue {
         Self { queue, handle }
     }
 
-    pub fn insert(&self, host: String, stats: Stats, slabs: Slabs, items: SlabItems) {
+    pub fn insert<H>(&self, host: H, stats: Stats, slabs: Slabs, items: SlabItems)
+    where
+        H: Into<String>,
+    {
         self.handle.block_on(self.queue.insert(host, stats, slabs, items))
     }
 
-    pub fn read_delta(&self, host: &str) -> Option<StatsDelta> {
+    pub fn read_delta<H>(&self, host: H) -> Option<StatsDelta>
+    where
+        H: AsRef<str>,
+    {
         self.handle.block_on(self.queue.read_delta(host))
     }
 }

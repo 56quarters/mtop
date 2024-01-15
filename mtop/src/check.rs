@@ -1,4 +1,4 @@
-use mtop_client::{MemcachedPool, MtopError};
+use mtop_client::{Key, MemcachedClient, MtopError};
 use std::time::{Duration, Instant};
 use std::{cmp, fmt};
 use tokio::net::ToSocketAddrs;
@@ -10,7 +10,7 @@ const VALUE: &[u8] = "test".as_bytes();
 /// Repeatedly make connections to a Memcached server to verify connectivity.
 #[derive(Debug)]
 pub struct Checker<'a> {
-    pool: &'a MemcachedPool,
+    client: &'a MemcachedClient,
     delay: Duration,
     timeout: Duration,
 }
@@ -20,8 +20,8 @@ impl<'a> Checker<'a> {
     /// is the amount of time to wait between each test. `timeout` is how long each individual
     /// part of the test may take (DNS resolution, connecting, setting a value, and fetching
     /// a value).
-    pub fn new(pool: &'a MemcachedPool, delay: Duration, timeout: Duration) -> Self {
-        Self { pool, delay, timeout }
+    pub fn new(client: &'a MemcachedClient, delay: Duration, timeout: Duration) -> Self {
+        Self { client, delay, timeout }
     }
 
     /// Perform connection tests for a particular hosts in a loop and return information
@@ -38,7 +38,7 @@ impl<'a> Checker<'a> {
         let mut failures = Failures::default();
         let start = Instant::now();
 
-        // Note that we don't return the connection to the pool each iteration. This ensures
+        // Note that we don't return the connection to the client each iteration. This ensures
         // we're creating a new connection each time and thus actually testing the network
         // when doing the check.
         loop {
@@ -67,7 +67,7 @@ impl<'a> Checker<'a> {
 
             let dns_time = dns_start.elapsed();
             let conn_start = Instant::now();
-            let mut conn = match time::timeout(self.timeout, self.pool.get(&ip_addr)).await {
+            let mut conn = match time::timeout(self.timeout, self.client.raw_open(&ip_addr)).await {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => {
                     tracing::warn!(message = "failed to connect to host", host = host, addr = ip_addr, err = %e);
@@ -85,7 +85,7 @@ impl<'a> Checker<'a> {
 
             let conn_time = conn_start.elapsed();
             let set_start = Instant::now();
-            match time::timeout(self.timeout, conn.set(KEY.to_owned(), 0, 60, VALUE.to_vec())).await {
+            match time::timeout(self.timeout, conn.set(&Key::one(KEY).unwrap(), 0, 60, VALUE.to_vec())).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
                     tracing::warn!(message = "failed to set key", host = host, addr = ip_addr, err = %e);
@@ -103,7 +103,7 @@ impl<'a> Checker<'a> {
 
             let set_time = set_start.elapsed();
             let get_start = Instant::now();
-            match time::timeout(self.timeout, conn.get(&[KEY.to_owned()])).await {
+            match time::timeout(self.timeout, conn.get(&Key::many(vec![KEY]).unwrap())).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
                     tracing::warn!(message = "failed to get key", host = host, addr = ip_addr, err = %e);

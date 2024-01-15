@@ -1,10 +1,11 @@
 # Changelog
 
-## v0.7.1 - unreleased
+## v0.8.0 - unreleased
 
 - Add default 5 second timeout to network operations done by `mtop`. #90
-- Add `add` and `replace` commands to `mc. #95 
+- Add `incr`, `decr`, `add`, and `replace` commands to `mc`. #95 #98
 - TLS related dependency updates. #93
+- Create high-level client for operating on multiple servers. #100
 
 ## v0.7.0 - 2023-11-28
 

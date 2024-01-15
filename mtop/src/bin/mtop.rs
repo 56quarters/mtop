@@ -1,11 +1,14 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, StatsQueue};
-use mtop_client::{MemcachedPool, MtopError, PoolConfig, SlabItems, Slabs, Stats, TLSConfig, Timeout};
+use mtop_client::{
+    MemcachedClient, MemcachedPool, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig, Timeout,
+};
+use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{env, error, process};
 use tokio::net::ToSocketAddrs;
 use tokio::runtime::Handle;
 use tokio::task;
@@ -35,9 +38,8 @@ struct MtopConfig {
 
     /// File to log errors to since they cannot be logged to the console. If the path is not
     /// writable, mtop will not start.
-    /// [default: $TEMP/mtop/mtop.log]
-    #[arg(long, value_hint = ValueHint::FilePath)]
-    log_file: Option<PathBuf>,
+    #[arg(long, default_value=default_log_file().into_os_string(), value_hint = ValueHint::FilePath)]
+    log_file: PathBuf,
 
     /// Enable TLS connections to the Memcached server.
     #[arg(long)]
@@ -76,66 +78,61 @@ fn default_log_file() -> PathBuf {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
+async fn main() -> ExitCode {
     let opts = MtopConfig::parse();
 
-    let console_subscriber = mtop::tracing::console_subscriber(opts.log_level)?;
+    let console_subscriber =
+        mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
     // Create a file subscriber for log messages generated while the UI is running
     // since we can't log to stdout or stderr.
-    let log_file = opts.log_file.unwrap_or_else(default_log_file);
-    let file_subscriber = mtop::tracing::file_subscriber(opts.log_level, log_file)
-        .map(Arc::new)
-        .unwrap_or_else(|e| {
+    let file_subscriber = match mtop::tracing::file_subscriber(opts.log_level, &opts.log_file).map(Arc::new) {
+        Ok(v) => v,
+        Err(e) => {
             tracing::error!(message = "failed to initialize file logging", error = %e);
-            process::exit(1);
-        });
+            return ExitCode::FAILURE;
+        }
+    };
 
     let timeout = Duration::from_secs(opts.timeout_secs);
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
-    let pool = MemcachedPool::new(
-        Handle::current(),
-        PoolConfig {
-            tls: TLSConfig {
-                enabled: opts.tls_enabled,
-                ca_path: opts.tls_ca,
-                cert_path: opts.tls_cert,
-                key_path: opts.tls_key,
-                server_name: opts.tls_server_name,
-            },
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap_or_else(|e| {
-        tracing::error!(message = "unable to initialize memcached client", hosts = ?opts.hosts, error = %e);
-        process::exit(1);
-    });
 
     // Do DNS lookups on any "dns+" hostnames to expand them to multiple IPs based on A records.
-    let hosts = expand_hosts(&opts.hosts, timeout).await.unwrap_or_else(|e| {
-        tracing::error!(message = "unable to resolve host names", hosts = ?opts.hosts, error = %e);
-        process::exit(1);
-    });
+    let hosts = match expand_hosts(&opts.hosts, timeout).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to resolve host names", hosts = ?opts.hosts, error = %e);
+            return ExitCode::FAILURE;
+        }
+    };
 
-    // Run the initial connection to each server once in the main thread to make bad hostnames
-    // easier to spot.
-    let update_task = UpdateTask::new(&hosts, pool, measurements.clone(), timeout, Handle::current());
-    update_task.connect().await.unwrap_or_else(|e| {
-        tracing::error!(message = "unable to connect to memcached servers", hosts = ?opts.hosts, error = %e);
-        process::exit(1);
-    });
+    let client = match new_client(&opts, &hosts).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to initialize memcached client", hosts = ?hosts, err = %e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let update_task = UpdateTask::new(client, measurements.clone(), timeout);
+    if let Err(e) = update_task.connect().await {
+        tracing::error!(message = "unable to connect to memcached servers", hosts = ?hosts, err = %e);
+        return ExitCode::FAILURE;
+    }
 
     task::spawn(
         async move {
             let mut interval = tokio::time::interval(DEFAULT_STATS_INTERVAL);
             loop {
                 let _ = interval.tick().await;
-                update_task
+                if let Err(e) = update_task
                     .update()
                     .instrument(tracing::span!(Level::INFO, "periodic.update"))
-                    .await;
+                    .await
+                {
+                    tracing::error!(message = "unable to update server metrics", err = %e);
+                }
             }
         }
         .with_subscriber(file_subscriber.clone()),
@@ -157,16 +154,14 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     match ui_res {
         Err(e) => {
             tracing::error!(message = "unable to run UI in dedicated thread", error = %e);
-            process::exit(1);
+            ExitCode::FAILURE
         }
         Ok(Err(e)) => {
             tracing::error!(message = "error setting up terminal or running UI", error = %e);
-            process::exit(1);
+            ExitCode::FAILURE
         }
-        _ => {}
+        _ => ExitCode::SUCCESS,
     }
-
-    Ok(())
 }
 
 async fn expand_hosts(hosts: &[String], timeout: Duration) -> Result<Vec<String>, MtopError> {
@@ -199,91 +194,107 @@ where
     Ok(tokio::net::lookup_host(host).await?)
 }
 
+async fn new_client(opts: &MtopConfig, hosts: &[String]) -> Result<MemcachedClient, MtopError> {
+    let tls = TLSConfig {
+        enabled: opts.tls_enabled,
+        ca_path: opts.tls_ca.clone(),
+        cert_path: opts.tls_cert.clone(),
+        key_path: opts.tls_key.clone(),
+        server_name: opts.tls_server_name.clone(),
+    };
+
+    MemcachedPool::new(
+        Handle::current(),
+        PoolConfig {
+            tls,
+            ..Default::default()
+        },
+    )
+    .await
+    .map(|pool| {
+        let selector = SelectorRendezvous::new(hosts.iter().map(Server::new).collect());
+        MemcachedClient::new(Handle::current(), selector, pool)
+    })
+}
+
 #[derive(Debug)]
 struct UpdateTask {
-    hosts: Vec<String>,
-    pool: Arc<MemcachedPool>,
+    client: MemcachedClient,
     queue: Arc<StatsQueue>,
     timeout: Duration,
-    handle: Handle,
 }
 
 impl UpdateTask {
-    fn new(hosts: &[String], pool: MemcachedPool, queue: Arc<StatsQueue>, timeout: Duration, handle: Handle) -> Self {
-        UpdateTask {
-            hosts: Vec::from(hosts),
-            pool: Arc::new(pool),
-            queue,
-            timeout,
-            handle,
-        }
+    fn new(client: MemcachedClient, queue: Arc<StatsQueue>, timeout: Duration) -> Self {
+        UpdateTask { client, queue, timeout }
     }
 
     async fn connect(&self) -> Result<(), MtopError> {
-        for host in self.hosts.iter() {
-            let client = self
-                .pool
-                .get(host)
-                .timeout(self.timeout, "client.connect")
-                .instrument(tracing::span!(Level::INFO, "client.connect"))
-                .await?;
-            self.pool.put(client).await;
+        let pings = self
+            .client
+            .ping()
+            .timeout(self.timeout, "client.ping")
+            .instrument(tracing::span!(Level::INFO, "client.ping"))
+            .await?;
+
+        if let Some((_server, err)) = pings.errors.into_iter().next() {
+            return Err(err);
         }
 
         Ok(())
     }
 
-    async fn update_host(
-        host: String,
-        pool: Arc<MemcachedPool>,
-        timeout: Duration,
-    ) -> Result<(Stats, Slabs, SlabItems), MtopError> {
-        let mut client = pool
-            .get(&host)
-            .timeout(timeout, "client.connect")
-            .instrument(tracing::span!(Level::INFO, "client.connect"))
-            .await?;
-        let stats = client
+    async fn update(&self) -> Result<(), MtopError> {
+        let stats = self
+            .client
             .stats()
-            .timeout(timeout, "client.stats")
+            .timeout(self.timeout, "client.stats")
             .instrument(tracing::span!(Level::INFO, "client.stats"))
             .await?;
-        let slabs = client
+
+        let mut slabs = self
+            .client
             .slabs()
-            .timeout(timeout, "client.slabs")
+            .timeout(self.timeout, "client.slabs")
             .instrument(tracing::span!(Level::INFO, "client.slabs"))
             .await?;
-        let items = client
+
+        let mut items = self
+            .client
             .items()
-            .timeout(timeout, "client.items")
+            .timeout(self.timeout, "client.items")
             .instrument(tracing::span!(Level::INFO, "client.items"))
             .await?;
 
-        pool.put(client).await;
-        Ok((stats, slabs, items))
-    }
+        for (server, stats) in stats.values {
+            let slabs = match slabs.values.remove(&server) {
+                Some(v) => v,
+                None => continue,
+            };
 
-    async fn update(&self) {
-        let mut tasks = Vec::with_capacity(self.hosts.len());
-        for host in self.hosts.iter() {
-            tasks.push((
-                host,
-                self.handle
-                    .spawn(Self::update_host(host.clone(), self.pool.clone(), self.timeout)),
-            ));
+            let items = match items.values.remove(&server) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            self.queue
+                .insert(server.name, stats, slabs, items)
+                .instrument(tracing::span!(Level::INFO, "queue.insert"))
+                .await;
         }
 
-        for (host, task) in tasks {
-            match task.await {
-                Err(e) => tracing::error!(message = "failed to run server update task", host = host, err = %e),
-                Ok(Err(e)) => tracing::warn!(message = "failed to update stats for server", host = host, err = %e),
-                Ok(Ok((stats, slabs, items))) => {
-                    self.queue
-                        .insert(host.clone(), stats, slabs, items)
-                        .instrument(tracing::span!(Level::INFO, "queue.insert"))
-                        .await;
-                }
-            }
+        for (server, e) in stats.errors {
+            tracing::warn!(message = "error fetching stats", host = server.name, err = %e);
         }
+
+        for (server, e) in slabs.errors {
+            tracing::warn!(message = "error fetching slabs", host = server.name, err = %e);
+        }
+
+        for (server, e) in items.errors {
+            tracing::warn!(message = "error fetching items", host = server.name, err = %e);
+        }
+
+        Ok(())
     }
 }
