@@ -1,7 +1,8 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::check::{Checker, MeasurementBundle};
 use mtop_client::{
-    MemcachedClient, MemcachedPool, Meta, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig, Timeout, Value,
+    DiscoveryDefault, MemcachedClient, MemcachedPool, Meta, MtopError, PoolConfig, SelectorRendezvous, Server,
+    TLSConfig, Timeout, Value,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -214,7 +215,20 @@ async fn main() -> ExitCode {
         mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
-    let client = match new_client(&opts).await {
+    let resolver = DiscoveryDefault;
+    let server = match resolver.resolve(&opts.host).await.map(|mut v| v.pop()) {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            tracing::error!(message = "no names resolved for host name", hosts = ?opts.host);
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            tracing::error!(message = "unable to resolve host names", hosts = ?opts.host, err = %e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let client = match new_client(&opts, &server).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(message = "unable to initialize memcached client", host = opts.host, err = %e);
@@ -230,19 +244,19 @@ async fn main() -> ExitCode {
 
     match &opts.mode {
         Action::Add(cmd) => run_add(&opts, cmd, &client).await,
-        Action::Check(cmd) => run_check(&opts, cmd, &client).await,
+        Action::Check(cmd) => run_check(&opts, cmd, &client, &resolver).await,
         Action::Decr(cmd) => run_decr(&opts, cmd, &client).await,
         Action::Delete(cmd) => run_delete(&opts, cmd, &client).await,
         Action::Get(cmd) => run_get(&opts, cmd, &client).await,
         Action::Incr(cmd) => run_incr(&opts, cmd, &client).await,
-        Action::Keys(cmd) => run_keys(&opts, cmd, &client).await,
+        Action::Keys(cmd) => run_keys(&opts, &server, cmd, &client).await,
         Action::Replace(cmd) => run_replace(&opts, cmd, &client).await,
         Action::Set(cmd) => run_set(&opts, cmd, &client).await,
         Action::Touch(cmd) => run_touch(&opts, cmd, &client).await,
     }
 }
 
-async fn new_client(opts: &McConfig) -> Result<MemcachedClient, MtopError> {
+async fn new_client(opts: &McConfig, servers: &Server) -> Result<MemcachedClient, MtopError> {
     let tls = TLSConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
@@ -260,7 +274,7 @@ async fn new_client(opts: &McConfig) -> Result<MemcachedClient, MtopError> {
     )
     .await
     .map(|pool| {
-        let selector = SelectorRendezvous::new(vec![Server::new(&opts.host)]);
+        let selector = SelectorRendezvous::new(vec![servers.clone()]);
         MemcachedClient::new(Handle::current(), selector, pool)
     })
 }
@@ -296,9 +310,15 @@ async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) ->
     }
 }
 
-async fn run_check(opts: &McConfig, cmd: &CheckCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_check(
+    opts: &McConfig,
+    cmd: &CheckCommand,
+    client: &MemcachedClient,
+    resolver: &DiscoveryDefault,
+) -> ExitCode {
     let checker = Checker::new(
         client,
+        resolver,
         Duration::from_millis(cmd.delay_millis),
         Duration::from_secs(cmd.timeout_secs),
     );
@@ -347,8 +367,8 @@ async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) ->
         }
     }
 
-    for (server, e) in response.errors.iter() {
-        tracing::error!(message = "error fetching value", host = server.name, err = %e);
+    for (id, e) in response.errors.iter() {
+        tracing::error!(message = "error fetching value", server = %id, err = %e);
     }
 
     if response.has_errors() {
@@ -367,7 +387,7 @@ async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) 
     }
 }
 
-async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_keys(opts: &McConfig, server: &Server, cmd: &KeysCommand, client: &MemcachedClient) -> ExitCode {
     let mut response = match client.metas().await {
         Ok(v) => v,
         Err(e) => {
@@ -376,15 +396,15 @@ async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient) 
         }
     };
 
-    let mut metas = response.values.remove(&Server::new(&opts.host)).unwrap_or_default();
+    let mut metas = response.values.remove(&server.id()).unwrap_or_default();
     metas.sort();
 
     if let Err(e) = print_keys(&metas, cmd.details).await {
         tracing::warn!(message = "error writing output", err = %e);
     }
 
-    for (server, e) in response.errors.iter() {
-        tracing::error!(message = "error fetching metas", host = server.name, err = %e);
+    for (id, e) in response.errors.iter() {
+        tracing::error!(message = "error fetching metas", server = %id, err = %e);
     }
 
     if response.has_errors() {

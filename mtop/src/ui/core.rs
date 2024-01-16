@@ -1,4 +1,4 @@
-use crate::queue::{BlockingStatsQueue, StatsDelta};
+use crate::queue::{BlockingStatsQueue, Host, StatsDelta};
 use crate::ui::compat::{StatefulTabs, TabState};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -82,7 +82,7 @@ fn render(f: &mut Frame, app: &mut Application) {
     }
 }
 
-fn render_host_area(f: &mut Frame, host: String, hosts: Vec<String>, state: &mut TabState) -> Rect {
+fn render_host_area(f: &mut Frame, host: Host, hosts: Vec<Host>, state: &mut TabState) -> Rect {
     let (tab_area, host_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -97,7 +97,7 @@ fn render_host_area(f: &mut Frame, host: String, hosts: Vec<String>, state: &mut
     let tabs = host_tabs(&hosts);
     f.render_stateful_widget(tabs, tab_area, state);
 
-    let host_block = Block::default().title(host).borders(Borders::ALL);
+    let host_block = Block::default().title(host.to_string()).borders(Borders::ALL);
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
 
@@ -209,15 +209,16 @@ fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut
     f.render_stateful_widget(t, area, state);
 }
 
-fn host_tabs(hosts: &[String]) -> StatefulTabs {
+fn host_tabs(hosts: &[Host]) -> StatefulTabs {
     let selected = Style::default().add_modifier(Modifier::REVERSED);
     let titles = hosts
         .iter()
-        .map(|t| {
-            let (first, rest) = t.split_at(1);
+        .map(|h| {
+            let host = h.to_string();
+            let (first, rest) = host.split_at(1);
             Line::from(vec![
-                Span::styled(first, Style::default().fg(Color::Cyan)),
-                Span::styled(rest, Style::default()),
+                Span::styled(first.to_owned(), Style::default().fg(Color::Cyan)),
+                Span::styled(rest.to_owned(), Style::default()),
             ])
         })
         .collect();
@@ -416,12 +417,12 @@ fn system_cpu_gauge(m: &StatsDelta) -> Gauge {
 pub struct Application {
     stats: BlockingStatsQueue,
     state: State,
-    hosts: Vec<String>,
+    hosts: Vec<Host>,
     num_rows: usize,
 }
 
 impl Application {
-    pub fn new(hosts: &[String], stats: BlockingStatsQueue) -> Self {
+    pub fn new(hosts: &[Host], stats: BlockingStatsQueue) -> Self {
         Application {
             stats,
             state: State::new(hosts.len()),
@@ -460,12 +461,12 @@ impl Application {
     }
 
     /// Get the hostnames of all hosts we have stats for
-    fn hosts(&self) -> Vec<String> {
+    fn hosts(&self) -> Vec<Host> {
         self.hosts.clone()
     }
 
     /// Get the hostname of the currently selected host
-    fn host(&self) -> String {
+    fn host(&self) -> Host {
         self.hosts[self.state.selected()].clone()
     }
 

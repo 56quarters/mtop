@@ -1,5 +1,5 @@
 use crate::core::{Key, Meta, MtopError, SlabItems, Slabs, Stats, Value};
-use crate::pool::{MemcachedPool, PooledMemcached, Server};
+use crate::pool::{MemcachedPool, PooledMemcached, Server, ServerID};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::Hasher;
@@ -35,7 +35,7 @@ impl SelectorRendezvous {
 
     fn score(server: &Server, key: &Key) -> f64 {
         let mut hasher = DefaultHasher::new();
-        hasher.write(server.name.as_bytes());
+        hasher.write(server.id().as_ref().as_bytes());
         hasher.write(key.as_ref().as_bytes());
         let h = hasher.finish();
 
@@ -79,8 +79,8 @@ impl SelectorRendezvous {
 /// Response for both values and errors from multiple servers, indexed by server.
 #[derive(Debug, Default)]
 pub struct ServersResponse<T> {
-    pub values: HashMap<Server, T>,
-    pub errors: HashMap<Server, MtopError>,
+    pub values: HashMap<ServerID, T>,
+    pub errors: HashMap<ServerID, MtopError>,
 }
 
 impl<T> ServersResponse<T> {
@@ -94,7 +94,7 @@ impl<T> ServersResponse<T> {
 #[derive(Debug, Default)]
 pub struct ValuesResponse {
     pub values: HashMap<String, Value>,
-    pub errors: HashMap<Server, MtopError>,
+    pub errors: HashMap<ServerID, MtopError>,
 }
 
 impl ValuesResponse {
@@ -133,7 +133,7 @@ macro_rules! operation_for_key {
     ($self:ident, $method:ident, $key:expr $(, $args:expr)* $(,)?) => {{
         let key = Key::one($key)?;
         if let Some(s) = $self.selector.server(&key).await {
-            let mut conn = $self.pool.get(&s.name).await?;
+            let mut conn = $self.pool.get(&s).await?;
             let res = conn.$method(&key, $($args,)*).await;
             $self.pool.put(conn).await;
             res
@@ -149,10 +149,7 @@ macro_rules! operation_for_all {
         let servers = $self.selector.servers().await;
         let tasks = servers
             .into_iter()
-            .map(|s| {
-                let host = s.name.clone();
-                (s, spawn_for_host!($self, $method, &host))
-            })
+            .map(|server| (server.clone(), spawn_for_host!($self, $method, &server)))
             .collect::<Vec<_>>();
 
         let mut values = HashMap::with_capacity(tasks.len());
@@ -161,13 +158,13 @@ macro_rules! operation_for_all {
         for (server, task) in tasks {
             match task.await {
                 Ok(Ok(results)) => {
-                    values.insert(server, results);
+                    values.insert(server.id(), results);
                 }
                 Ok(Err(e)) => {
-                    errors.insert(server, e);
+                    errors.insert(server.id(), e);
                 }
                 Err(e) => {
-                    errors.insert(server, MtopError::runtime_cause("fetching cluster values", e));
+                    errors.insert(server.id(), MtopError::runtime_cause("fetching cluster values", e));
                 }
             };
         }
@@ -193,15 +190,15 @@ impl MemcachedClient {
 
     /// Get a connection to a particular server from the pool if available, otherwise
     /// establish a new connection.
-    pub async fn raw_open(&self, host: &str) -> Result<PooledMemcached, MtopError> {
-        self.pool.get(host).await
+    pub async fn raw_open(&self, server: &Server) -> Result<PooledMemcached, MtopError> {
+        self.pool.get(server).await
     }
 
     /// Return a connection to a particular server to the pool if fewer than the configured
     /// number of idle connections to that server are currently in the pool, otherwise close
     /// it immediately.
-    pub async fn raw_close(&self, conn: PooledMemcached) {
-        self.pool.put(conn).await;
+    pub async fn raw_close(&self, connection: PooledMemcached) {
+        self.pool.put(connection).await
     }
 
     /// Get a `Stats` object with the current values of the interesting stats for each server.
@@ -284,10 +281,7 @@ impl MemcachedClient {
 
         let tasks = by_server
             .into_iter()
-            .map(|(server, keys)| {
-                let host = server.name.clone();
-                (server, spawn_for_host!(self, get, &host, &keys))
-            })
+            .map(|(server, keys)| (server.clone(), spawn_for_host!(self, get, &server, &keys)))
             .collect::<Vec<_>>();
 
         let mut values = HashMap::with_capacity(num_keys);
@@ -299,10 +293,10 @@ impl MemcachedClient {
                     values.extend(results);
                 }
                 Ok(Err(e)) => {
-                    errors.insert(server, e);
+                    errors.insert(server.id(), e);
                 }
                 Err(e) => {
-                    errors.insert(server, MtopError::runtime_cause("fetching keys", e));
+                    errors.insert(server.id(), MtopError::runtime_cause("fetching keys", e));
                 }
             };
         }

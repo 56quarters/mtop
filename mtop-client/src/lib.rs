@@ -8,5 +8,5 @@ pub use crate::core::{
     ErrorKind, Key, Memcached, Meta, MtopError, ProtocolError, ProtocolErrorKind, Slab, SlabItem, SlabItems, Slabs,
     Stats, Value,
 };
-pub use crate::pool::{MemcachedPool, PoolConfig, PooledMemcached, Server, TLSConfig};
+pub use crate::pool::{DiscoveryDefault, MemcachedPool, PoolConfig, PooledMemcached, Server, ServerID, TLSConfig};
 pub use crate::timeout::{Timed, Timeout};
