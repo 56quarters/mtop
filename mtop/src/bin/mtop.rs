@@ -1,15 +1,14 @@
 use clap::{Parser, ValueHint};
-use mtop::queue::{BlockingStatsQueue, StatsQueue};
+use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop_client::{
-    MemcachedClient, MemcachedPool, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig, Timeout,
+    DiscoveryDefault, MemcachedClient, MemcachedPool, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig,
+    Timeout,
 };
 use std::env;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::ToSocketAddrs;
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::instrument::WithSubscriber;
@@ -97,9 +96,9 @@ async fn main() -> ExitCode {
 
     let timeout = Duration::from_secs(opts.timeout_secs);
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
+    let resolver = DiscoveryDefault;
 
-    // Do DNS lookups on any "dns+" hostnames to expand them to multiple IPs based on A records.
-    let hosts = match expand_hosts(&opts.hosts, timeout).await {
+    let servers = match expand_hosts(&opts.hosts, &resolver, timeout).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(message = "unable to resolve host names", hosts = ?opts.hosts, error = %e);
@@ -107,17 +106,17 @@ async fn main() -> ExitCode {
         }
     };
 
-    let client = match new_client(&opts, &hosts).await {
+    let client = match new_client(&opts, &servers).await {
         Ok(v) => v,
         Err(e) => {
-            tracing::error!(message = "unable to initialize memcached client", hosts = ?hosts, err = %e);
+            tracing::error!(message = "unable to initialize memcached client", hosts = fmt_servers(&servers), err = %e);
             return ExitCode::FAILURE;
         }
     };
 
     let update_task = UpdateTask::new(client, measurements.clone(), timeout);
     if let Err(e) = update_task.connect().await {
-        tracing::error!(message = "unable to connect to memcached servers", hosts = ?hosts, err = %e);
+        tracing::error!(message = "unable to connect to memcached servers", hosts = fmt_servers(&servers), err = %e);
         return ExitCode::FAILURE;
     }
 
@@ -143,6 +142,7 @@ async fn main() -> ExitCode {
         mtop::ui::install_panic_handler();
 
         let blocking_measurements = BlockingStatsQueue::new(measurements.clone(), Handle::current());
+        let hosts: Vec<Host> = servers.iter().map(|s| Host::from(s.id())).collect();
         let app = mtop::ui::Application::new(&hosts, blocking_measurements);
 
         // Run the terminal reset unconditionally but prefer to return an error from the
@@ -153,32 +153,45 @@ async fn main() -> ExitCode {
 
     match ui_res {
         Err(e) => {
-            tracing::error!(message = "unable to run UI in dedicated thread", error = %e);
+            tracing::error!(message = "unable to run UI in dedicated thread", err = %e);
             ExitCode::FAILURE
         }
         Ok(Err(e)) => {
-            tracing::error!(message = "error setting up terminal or running UI", error = %e);
+            tracing::error!(message = "error setting up terminal or running UI", err = %e);
             ExitCode::FAILURE
         }
         _ => ExitCode::SUCCESS,
     }
 }
 
-async fn expand_hosts(hosts: &[String], timeout: Duration) -> Result<Vec<String>, MtopError> {
+/// Convert a list of `Server`s into something that can be displayed by tracing.
+fn fmt_servers(servers: &[Server]) -> String {
+    let ids: Vec<String> = servers.iter().map(|s| s.id().to_string()).collect();
+    format!("[{}]", ids.join(", "))
+}
+
+/// Perform DNS resolution on provided hostnames, expanding any "dns+" prefixed hosts
+/// that have multiple A or AAAA records.
+async fn expand_hosts(
+    hosts: &[String],
+    resolver: &DiscoveryDefault,
+    timeout: Duration,
+) -> Result<Vec<Server>, MtopError> {
     let mut out = Vec::with_capacity(hosts.len());
 
     for host in hosts {
+        let mut servers = resolver
+            .resolve(host.trim_start_matches(DNS_HOST_PREFIX))
+            .timeout(timeout, "resolver.resolve")
+            .instrument(tracing::span!(Level::INFO, "resolver.resolve"))
+            .await?;
+
+        // If the hostname had a "dns+" prefix, include all hosts that we resolved.
+        // Otherwise, just pick the first result.
         if host.starts_with(DNS_HOST_PREFIX) {
-            let name = host.trim_start_matches(DNS_HOST_PREFIX);
-            for addr in lookup_host(name)
-                .timeout(timeout, "lookup_host")
-                .instrument(tracing::span!(Level::INFO, "lookup_host"))
-                .await?
-            {
-                out.push(addr.to_string());
-            }
-        } else {
-            out.push(host.clone());
+            out.extend(servers);
+        } else if let Some(s) = servers.pop() {
+            out.push(s);
         }
     }
 
@@ -186,15 +199,7 @@ async fn expand_hosts(hosts: &[String], timeout: Duration) -> Result<Vec<String>
     Ok(out)
 }
 
-async fn lookup_host<T>(host: T) -> Result<impl Iterator<Item = SocketAddr>, MtopError>
-where
-    T: ToSocketAddrs,
-{
-    // This function only exists to translate io::Error to MtopError so we can .timeout()
-    Ok(tokio::net::lookup_host(host).await?)
-}
-
-async fn new_client(opts: &MtopConfig, hosts: &[String]) -> Result<MemcachedClient, MtopError> {
+async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
     let tls = TLSConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
@@ -212,7 +217,7 @@ async fn new_client(opts: &MtopConfig, hosts: &[String]) -> Result<MemcachedClie
     )
     .await
     .map(|pool| {
-        let selector = SelectorRendezvous::new(hosts.iter().map(Server::new).collect());
+        let selector = SelectorRendezvous::new(servers.to_vec());
         MemcachedClient::new(Handle::current(), selector, pool)
     })
 }
@@ -266,33 +271,33 @@ impl UpdateTask {
             .instrument(tracing::span!(Level::INFO, "client.items"))
             .await?;
 
-        for (server, stats) in stats.values {
-            let slabs = match slabs.values.remove(&server) {
+        for (id, stats) in stats.values {
+            let slabs = match slabs.values.remove(&id) {
                 Some(v) => v,
                 None => continue,
             };
 
-            let items = match items.values.remove(&server) {
+            let items = match items.values.remove(&id) {
                 Some(v) => v,
                 None => continue,
             };
 
             self.queue
-                .insert(server.name, stats, slabs, items)
+                .insert(Host::from(id), stats, slabs, items)
                 .instrument(tracing::span!(Level::INFO, "queue.insert"))
                 .await;
         }
 
-        for (server, e) in stats.errors {
-            tracing::warn!(message = "error fetching stats", host = server.name, err = %e);
+        for (id, e) in stats.errors {
+            tracing::warn!(message = "error fetching stats", server = %id, err = %e);
         }
 
-        for (server, e) in slabs.errors {
-            tracing::warn!(message = "error fetching slabs", host = server.name, err = %e);
+        for (id, e) in slabs.errors {
+            tracing::warn!(message = "error fetching slabs", server = %id, err = %e);
         }
 
-        for (server, e) in items.errors {
-            tracing::warn!(message = "error fetching items", host = server.name, err = %e);
+        for (id, e) in items.errors {
+            tracing::warn!(message = "error fetching items", server = %id, err = %e);
         }
 
         Ok(())

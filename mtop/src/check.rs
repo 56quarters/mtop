@@ -1,7 +1,6 @@
-use mtop_client::{Key, MemcachedClient, MtopError};
+use mtop_client::{DiscoveryDefault, Key, MemcachedClient};
+use std::cmp;
 use std::time::{Duration, Instant};
-use std::{cmp, fmt};
-use tokio::net::ToSocketAddrs;
 use tokio::time;
 
 const KEY: &str = "mc-check-test";
@@ -11,6 +10,7 @@ const VALUE: &[u8] = "test".as_bytes();
 #[derive(Debug)]
 pub struct Checker<'a> {
     client: &'a MemcachedClient,
+    resolver: &'a DiscoveryDefault,
     delay: Duration,
     timeout: Duration,
 }
@@ -20,8 +20,18 @@ impl<'a> Checker<'a> {
     /// is the amount of time to wait between each test. `timeout` is how long each individual
     /// part of the test may take (DNS resolution, connecting, setting a value, and fetching
     /// a value).
-    pub fn new(client: &'a MemcachedClient, delay: Duration, timeout: Duration) -> Self {
-        Self { client, delay, timeout }
+    pub fn new(
+        client: &'a MemcachedClient,
+        resolver: &'a DiscoveryDefault,
+        delay: Duration,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            client,
+            resolver,
+            delay,
+            timeout,
+        }
     }
 
     /// Perform connection tests for a particular hosts in a loop and return information
@@ -47,10 +57,21 @@ impl<'a> Checker<'a> {
             }
 
             time::sleep(self.delay).await;
+            let key = Key::one(KEY).unwrap();
+            let val = VALUE.to_vec();
 
             let dns_start = Instant::now();
-            let ip_addr = match time::timeout(self.timeout, resolve_host(host)).await {
-                Ok(Ok(v)) => v,
+            let server = match time::timeout(self.timeout, self.resolver.resolve(host))
+                .await
+                .map(|r| r.map(|mut v| v.pop()))
+            {
+                Ok(Ok(Some(s))) => s,
+                Ok(Ok(None)) => {
+                    tracing::warn!(message = "no addresses for host", host = host);
+                    failures.total += 1;
+                    failures.dns += 1;
+                    continue;
+                }
                 Ok(Err(e)) => {
                     tracing::warn!(message = "failed to resolve host", host = host, err = %e);
                     failures.total += 1;
@@ -67,16 +88,16 @@ impl<'a> Checker<'a> {
 
             let dns_time = dns_start.elapsed();
             let conn_start = Instant::now();
-            let mut conn = match time::timeout(self.timeout, self.client.raw_open(&ip_addr)).await {
+            let mut conn = match time::timeout(self.timeout, self.client.raw_open(&server)).await {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => {
-                    tracing::warn!(message = "failed to connect to host", host = host, addr = ip_addr, err = %e);
+                    tracing::warn!(message = "failed to connect to host", host = host, addr = %server.addr(), err = %e);
                     failures.total += 1;
                     failures.connections += 1;
                     continue;
                 }
                 Err(_) => {
-                    tracing::warn!(message = "timeout connecting to host", host = host, addr = ip_addr);
+                    tracing::warn!(message = "timeout connecting to host", host = host, addr = %server.addr());
                     failures.total += 1;
                     failures.connections += 1;
                     continue;
@@ -85,16 +106,16 @@ impl<'a> Checker<'a> {
 
             let conn_time = conn_start.elapsed();
             let set_start = Instant::now();
-            match time::timeout(self.timeout, conn.set(&Key::one(KEY).unwrap(), 0, 60, VALUE.to_vec())).await {
+            match time::timeout(self.timeout, conn.set(&key, 0, 60, &val)).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
-                    tracing::warn!(message = "failed to set key", host = host, addr = ip_addr, err = %e);
+                    tracing::warn!(message = "failed to set key", host = host, addr = %server.addr(), err = %e);
                     failures.total += 1;
                     failures.sets += 1;
                     continue;
                 }
                 Err(_) => {
-                    tracing::warn!(message = "timeout setting key", host = host, addr = ip_addr);
+                    tracing::warn!(message = "timeout setting key", host = host, addr = %server.addr());
                     failures.total += 1;
                     failures.sets += 1;
                     continue;
@@ -103,16 +124,16 @@ impl<'a> Checker<'a> {
 
             let set_time = set_start.elapsed();
             let get_start = Instant::now();
-            match time::timeout(self.timeout, conn.get(&Key::many(vec![KEY]).unwrap())).await {
+            match time::timeout(self.timeout, conn.get(&[key])).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
-                    tracing::warn!(message = "failed to get key", host = host, addr = ip_addr, err = %e);
+                    tracing::warn!(message = "failed to get key", host = host, addr = %server.addr(), err = %e);
                     failures.total += 1;
                     failures.gets += 1;
                     continue;
                 }
                 Err(_) => {
-                    tracing::warn!(message = "timeout getting key", host = host, addr = ip_addr);
+                    tracing::warn!(message = "timeout getting key", host = host, addr = %server.addr());
                     failures.total += 1;
                     failures.gets += 1;
                     continue;
@@ -153,20 +174,6 @@ impl<'a> Checker<'a> {
             failures,
         }
     }
-}
-
-async fn resolve_host<A>(host: A) -> Result<String, MtopError>
-where
-    A: ToSocketAddrs + fmt::Display,
-{
-    tokio::net::lookup_host(&host)
-        .await
-        .map_err(|e| MtopError::from((host.to_string(), e)))
-        .and_then(|mut i| {
-            i.next()
-                .map(|a| a.to_string())
-                .ok_or_else(|| MtopError::configuration(format!("hostname returned no addresses: {}", host)))
-        })
 }
 
 /// Accumulate measurements of how long a particular operation takes and compute
