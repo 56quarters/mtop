@@ -190,21 +190,21 @@ fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut
     let selected_style = Style::default().bg(Color::Red).fg(Color::LightYellow);
     let header = slab_table_header(header_style);
     let rows = slab_table_rows(delta, &units);
+    let widths = &[
+        Constraint::Percentage(5),  // ID
+        Constraint::Percentage(8),  // size
+        Constraint::Percentage(8),  // pages
+        Constraint::Percentage(13), // items
+        Constraint::Percentage(15), // memory
+        Constraint::Percentage(13), // max age
+        Constraint::Percentage(17), // unfetched
+        Constraint::Percentage(17), // expired
+    ];
 
-    let t = Table::new(rows)
+    let t = Table::new(rows, widths)
         .header(header)
         .block(Block::default().borders(Borders::ALL).title("Slabs"))
-        .highlight_style(selected_style)
-        .widths(&[
-            Constraint::Percentage(5),  // ID
-            Constraint::Percentage(8),  // size
-            Constraint::Percentage(8),  // pages
-            Constraint::Percentage(13), // items
-            Constraint::Percentage(15), // memory
-            Constraint::Percentage(13), // max age
-            Constraint::Percentage(17), // unfetched
-            Constraint::Percentage(17), // expired
-        ]);
+        .highlight_style(selected_style);
 
     f.render_stateful_widget(t, area, state);
 }
