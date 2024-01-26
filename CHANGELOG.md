@@ -3,7 +3,8 @@
 ## v0.8.0 - unreleased
 
 - Add default 5 second timeout to network operations done by `mtop`. #90
-- Add `incr`, `decr`, `add`, and `replace` commands to `mc`. #95 #98
+- Add default 30 second timeout to network operaitons done by `mc`. #111
+- Add `bench`, `incr`, `decr`, `add`, and `replace` commands to `mc`. #95 #98 #111
 - TLS related dependency updates. #93
 - Create high-level client for operating on multiple servers. #101
 

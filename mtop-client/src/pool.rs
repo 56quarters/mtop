@@ -16,6 +16,8 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 use webpki::types::{CertificateDer, PrivateKeyDer, ServerName};
 
+const DNS_HOST_PREFIX: &str = "dns+";
+
 /// Unique ID for a server in a Memcached cluster.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(transparent)]
@@ -97,9 +99,17 @@ fn host_to_server_name(host: &str) -> Result<ServerName<'static>, MtopError> {
 pub struct DiscoveryDefault;
 
 impl DiscoveryDefault {
-    pub async fn resolve(&self, name: &str) -> Result<Vec<Server>, MtopError> {
+    pub async fn resolve_by_proto(&self, name: &str) -> Result<Vec<Server>, MtopError> {
+        if name.starts_with(DNS_HOST_PREFIX) {
+            Ok(self.resolve_a(name.trim_start_matches(DNS_HOST_PREFIX)).await?)
+        } else {
+            Ok(self.resolve_a(name).await?.pop().into_iter().collect())
+        }
+    }
+
+    async fn resolve_a(&self, name: &str) -> Result<Vec<Server>, MtopError> {
         // Names must be of the form hostname:port. The hostname can be an IP address or
-        // an actual DNS name. We trim leading an trailing brackets from the hostname portion
+        // an actual DNS name. We trim leading and trailing brackets from the hostname portion
         // since these are used to disambiguate IPv6 addresses from the port number but
         // aren't allowed for _just_ an IP address.
         let server_name = name
@@ -139,7 +149,7 @@ impl DerefMut for PooledMemcached {
 
 #[derive(Debug)]
 pub struct PoolConfig {
-    pub max_idle_per_host: usize,
+    pub max_idle_per_host: u64,
     pub check_on_get: bool,
     pub check_on_put: bool,
     pub tls: TLSConfig,
@@ -336,7 +346,7 @@ impl MemcachedPool {
             let mut map = self.connections.lock().await;
             let conns = map.entry(conn.host).or_default();
 
-            if conns.len() < self.config.max_idle_per_host {
+            if (conns.len() as u64) < self.config.max_idle_per_host {
                 conns.push(conn.inner);
             }
         }

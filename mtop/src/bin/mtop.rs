@@ -20,7 +20,6 @@ const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_STATS_INTERVAL: Duration = Duration::from_millis(1073);
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const NUM_MEASUREMENTS: usize = 10;
-const DNS_HOST_PREFIX: &str = "dns+";
 
 /// mtop: top for memcached
 #[derive(Debug, Parser)]
@@ -180,19 +179,13 @@ async fn expand_hosts(
     let mut out = Vec::with_capacity(hosts.len());
 
     for host in hosts {
-        let mut servers = resolver
-            .resolve(host.trim_start_matches(DNS_HOST_PREFIX))
-            .timeout(timeout, "resolver.resolve")
-            .instrument(tracing::span!(Level::INFO, "resolver.resolve"))
-            .await?;
-
-        // If the hostname had a "dns+" prefix, include all hosts that we resolved.
-        // Otherwise, just pick the first result.
-        if host.starts_with(DNS_HOST_PREFIX) {
-            out.extend(servers);
-        } else if let Some(s) = servers.pop() {
-            out.push(s);
-        }
+        out.extend(
+            resolver
+                .resolve_by_proto(host)
+                .timeout(timeout, "resolver.resolve_by_proto")
+                .instrument(tracing::span!(Level::INFO, "resolver.resolve_by_proto"))
+                .await?,
+        );
     }
 
     out.sort();
