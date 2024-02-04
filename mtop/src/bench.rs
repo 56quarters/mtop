@@ -38,7 +38,7 @@ impl FromStr for Percent {
             .parse()
             .map_err(|e| MtopError::configuration_cause(format!("invalid percent {}", s), e))?;
 
-        if v < 0.0 || v > 1.0 {
+        if !(0.0..=1.0).contains(&v) {
             Err(MtopError::configuration(format!("invalid percent {}", v)))
         } else {
             Ok(Self(v))
@@ -98,8 +98,7 @@ impl Bencher {
 
             tasks.push((worker, self.handle.spawn(async move {
                 let kvs = fixture_data(worker, NUM_KEYS);
-                let mut stats = Summary::default();
-                stats.worker = worker;
+                let mut stats = Summary {  worker, ..Default::default() };
 
                 while run.load(Ordering::Acquire) {
                     let set_start = interval.tick().await;

@@ -33,19 +33,11 @@ impl SelectorRendezvous {
         }
     }
 
-    fn score(server: &Server, key: &Key) -> f64 {
+    fn score(server: &Server, key: &Key) -> u64 {
         let mut hasher = DefaultHasher::new();
         hasher.write(server.id().as_ref().as_bytes());
         hasher.write(key.as_ref().as_bytes());
-        let h = hasher.finish();
-
-        // Add one to the hash value since we can't take the log of 0 and clamp to 1.0
-        // since we negate the log result, which is negative for numbers less than 1.0
-        let unit = ((h + 1) as f64 / u64::MAX as f64).min(1.0);
-
-        // Log of 1.0 is 0. Dividing by floating point 0 is infinity in IEEE 754 so we
-        // just let that happen instead of special casing a unit value of exactly 1.0.
-        100_f64 / -unit.ln()
+        hasher.finish()
     }
 
     /// Get a copy of all current servers.
@@ -62,10 +54,18 @@ impl SelectorRendezvous {
         } else if servers.len() == 1 {
             servers.first().cloned()
         } else {
-            servers
-                .iter()
-                .max_by(|x, y| Self::score(x, key).total_cmp(&Self::score(y, key)))
-                .cloned()
+            let mut max = u64::MIN;
+            let mut choice = None;
+
+            for server in servers.iter() {
+                let score = Self::score(server, key);
+                if score > max {
+                    choice = Some(server);
+                    max = score;
+                }
+            }
+
+            choice.cloned()
         }
     }
 

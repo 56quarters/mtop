@@ -1,11 +1,14 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Checker, TimingBundle};
+use mtop::profile::Profiler;
 use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, Meta, MtopError, PoolConfig, SelectorRendezvous, Server,
     TLSConfig, Timeout, Value,
 };
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 use std::{env, io};
@@ -38,6 +41,11 @@ struct McConfig {
     /// Maximum number of idle connections to maintain per host.
     #[arg(long, default_value_t = DEFAULT_CONNECTIONS_PER_HOST)]
     connections: u64,
+
+    /// Output pprof protobuf profile data to this file if profiling support was enabled
+    /// at build time.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    profile_output: Option<PathBuf>,
 
     /// Enable TLS connections to the Memcached server.
     #[arg(long)]
@@ -299,7 +307,8 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    match &opts.mode {
+    let profiling = Profiling::default();
+    let code = match &opts.mode {
         Action::Add(cmd) => run_add(&opts, cmd, &client).await,
         Action::Bench(cmd) => run_bench(&opts, cmd, client).await,
         Action::Check(cmd) => run_check(&opts, cmd, &client, &resolver).await,
@@ -311,6 +320,42 @@ async fn main() -> ExitCode {
         Action::Replace(cmd) => run_replace(&opts, cmd, &client).await,
         Action::Set(cmd) => run_set(&opts, cmd, &client).await,
         Action::Touch(cmd) => run_touch(&opts, cmd, &client).await,
+    };
+
+    if let Some(p) = opts.profile_output {
+        profiling.finish(p);
+    }
+
+    code
+}
+
+#[derive(Debug, Default)]
+pub struct Profiling {
+    profiler: Profiler,
+}
+
+impl Profiling {
+    pub fn finish<P>(&self, path: P)
+    where
+        P: AsRef<Path>,
+    {
+        if let Err(e) = self.profiler.proto().and_then(|b| Self::write_file(&path, &b)) {
+            tracing::warn!(message = "unable to collect and write pprof data", path = ?path.as_ref(), err = %e);
+        }
+    }
+
+    fn write_file<P>(path: P, contents: &[u8]) -> Result<(), MtopError>
+    where
+        P: AsRef<Path>,
+    {
+        if contents.is_empty() {
+            return Err(MtopError::configuration("mtop built without profiling support"));
+        }
+
+        let mut file = File::options().create(true).truncate(true).write(true).open(path)?;
+        file.write_all(contents)?;
+        file.flush()?;
+        Ok(file.sync_all()?)
     }
 }
 
