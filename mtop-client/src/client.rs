@@ -397,7 +397,6 @@ impl MemcachedClient {
 
 #[cfg(test)]
 mod test {
-
     // TODO: Actually figure out how to test this without a bunch of boilerplate.
 
     ///////////

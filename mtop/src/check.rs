@@ -39,29 +39,26 @@ impl<'a> Checker<'a> {
     /// a value, and fetching a value) and counts of failures or timeouts during each step.
     ///
     /// Note that each test run performs a DNS lookup and creates a brand new connection.
-    pub async fn run(&self, host: &str, time: Duration) -> MeasurementBundle {
-        let mut dns_builder = MeasurementBuilder::default();
-        let mut conn_builder = MeasurementBuilder::default();
-        let mut set_builder = MeasurementBuilder::default();
-        let mut get_builder = MeasurementBuilder::default();
-        let mut total_builder = MeasurementBuilder::default();
+    pub async fn run(&self, host: &str, time: Duration) -> TimingBundle {
+        let mut dns_builder = TimingBuilder::default();
+        let mut conn_builder = TimingBuilder::default();
+        let mut set_builder = TimingBuilder::default();
+        let mut get_builder = TimingBuilder::default();
+        let mut total_builder = TimingBuilder::default();
         let mut failures = Failures::default();
+        let mut interval = time::interval(self.delay);
         let start = Instant::now();
 
         // Note that we don't return the connection to the client each iteration. This ensures
         // we're creating a new connection each time and thus actually testing the network
         // when doing the check.
-        loop {
-            if start.elapsed() > time {
-                break;
-            }
-
-            time::sleep(self.delay).await;
+        while start.elapsed() < time {
+            let _ = interval.tick().await;
             let key = Key::one(KEY).unwrap();
             let val = VALUE.to_vec();
 
             let dns_start = Instant::now();
-            let server = match time::timeout(self.timeout, self.resolver.resolve(host))
+            let server = match time::timeout(self.timeout, self.resolver.resolve_by_proto(host))
                 .await
                 .map(|r| r.map(|mut v| v.pop()))
             {
@@ -165,7 +162,7 @@ impl<'a> Checker<'a> {
         let sets = set_builder.build();
         let total = total_builder.build();
 
-        MeasurementBundle {
+        TimingBundle {
             total,
             dns,
             connections,
@@ -179,16 +176,16 @@ impl<'a> Checker<'a> {
 /// Accumulate measurements of how long a particular operation takes and compute
 /// the min, max, average, and standard deviation of them.
 #[derive(Debug, Default)]
-pub struct MeasurementBuilder {
+pub struct TimingBuilder {
     times: Vec<Duration>,
 }
 
-impl MeasurementBuilder {
+impl TimingBuilder {
     pub fn add(&mut self, d: Duration) {
         self.times.push(d);
     }
 
-    pub fn build(self) -> Measurement {
+    pub fn build(self) -> Timing {
         let mut min = Duration::MAX;
         let mut max = Duration::ZERO;
         let mut sum = Duration::ZERO;
@@ -214,12 +211,12 @@ impl MeasurementBuilder {
             Duration::ZERO
         };
 
-        Measurement { min, max, avg, std_dev }
+        Timing { min, max, avg, std_dev }
     }
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct Measurement {
+pub struct Timing {
     pub min: Duration,
     pub max: Duration,
     pub avg: Duration,
@@ -227,12 +224,12 @@ pub struct Measurement {
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct MeasurementBundle {
-    pub total: Measurement,
-    pub dns: Measurement,
-    pub connections: Measurement,
-    pub sets: Measurement,
-    pub gets: Measurement,
+pub struct TimingBundle {
+    pub total: Timing,
+    pub dns: Timing,
+    pub connections: Timing,
+    pub sets: Timing,
+    pub gets: Timing,
     pub failures: Failures,
 }
 
