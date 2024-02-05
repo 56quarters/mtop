@@ -160,7 +160,7 @@ impl Default for PoolConfig {
         Self {
             max_idle_per_host: 4,
             check_on_get: false,
-            check_on_put: true,
+            check_on_put: false,
             tls: TLSConfig::default(),
         }
     }

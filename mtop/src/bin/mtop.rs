@@ -205,6 +205,7 @@ async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedCl
         Handle::current(),
         PoolConfig {
             tls,
+            check_on_put: true,
             ..Default::default()
         },
     )
