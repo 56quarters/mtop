@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.8.0 - unreleased
+## v0.8.0 - 2024-02-04
 
 - Add default 5 second timeout to network operations done by `mtop`. #90
 - Add default 30 second timeout to network operaitons done by `mc`. #111
