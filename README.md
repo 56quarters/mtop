@@ -192,7 +192,7 @@ shall be licensed as above, without any additional terms or conditions.
 Steps for releasing new versions of `mtop` are described below.
 
 * Open and merge a PR incrementing the version of `mtop` in all `Cargo.toml` files and update `CHANGELOG.md`.
-* Update local `master` from Github remote.
+* Update local `master` from Github remote. Make sure to build once with updated versions to update `Cargo.lock`.
 * Create but do not push a tag of the format `v1.2.3`
 * Run `cargo package` and `cargo publish` for the `mtop-client` crate.
 * Run `cargo pacakge` and `cargo publish` for the `mtop` crate.
