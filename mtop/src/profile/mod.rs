@@ -1,9 +1,9 @@
 #[cfg(not(feature = "profile"))]
 pub use nop::Profiler;
 #[cfg(feature = "profile")]
-pub use pprof::Profiler;
+pub use proto::Profiler;
 
 #[cfg(not(feature = "profile"))]
 mod nop;
 #[cfg(feature = "profile")]
-mod pprof;
+mod proto;
