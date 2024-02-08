@@ -1,14 +1,15 @@
 use crate::queue::{BlockingStatsQueue, Host, StatsDelta};
-use crate::ui::compat::{StatefulTabs, TabState};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use mtop_client::SlabItem;
 use ratatui::backend::Backend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Gauge, Row, Table, TableState, Tabs};
-use ratatui::{backend::CrosstermBackend, Frame, Terminal};
+use ratatui::widgets::{
+    Block, Borders, Cell, Gauge, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState, Tabs,
+};
+use ratatui::{backend::CrosstermBackend, symbols, Frame, Terminal};
 use std::collections::HashMap;
 use std::time::Duration;
 use std::{io, panic};
@@ -72,7 +73,7 @@ where
 fn render(f: &mut Frame, app: &mut Application) {
     let host = app.host();
     let hosts = app.hosts();
-    let inner_host_area = render_host_area(f, host, hosts, app.state.tabs());
+    let inner_host_area = render_host_area(f, host, hosts, app.state.selected(), app.state.scrollbar());
 
     if let Some(delta) = app.read() {
         match app.state.mode() {
@@ -82,7 +83,13 @@ fn render(f: &mut Frame, app: &mut Application) {
     }
 }
 
-fn render_host_area(f: &mut Frame, host: Host, hosts: Vec<Host>, state: &mut TabState) -> Rect {
+fn render_host_area(
+    f: &mut Frame,
+    host: Host,
+    hosts: Vec<Host>,
+    selected: usize,
+    scrollbar_state: &mut ScrollbarState,
+) -> Rect {
     let (tab_area, host_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -94,8 +101,20 @@ fn render_host_area(f: &mut Frame, host: Host, hosts: Vec<Host>, state: &mut Tab
         (chunks[0], chunks[1])
     };
 
-    let tabs = host_tabs(&hosts);
-    f.render_stateful_widget(tabs, tab_area, state);
+    let tabs = host_tabs(&hosts, selected);
+    f.render_widget(tabs, tab_area);
+
+    let scrollbar = Scrollbar::default()
+        .orientation(ScrollbarOrientation::HorizontalBottom)
+        .begin_symbol(Some("<"))
+        .end_symbol(Some(">"))
+        .track_symbol(Some(symbols::line::HORIZONTAL))
+        .thumb_symbol(symbols::line::DOUBLE_HORIZONTAL);
+    let inner_tab_area = tab_area.inner(&Margin {
+        vertical: 0,
+        horizontal: 1,
+    });
+    f.render_stateful_widget(scrollbar, inner_tab_area, scrollbar_state);
 
     let host_block = Block::default().title(host.to_string()).borders(Borders::ALL);
     let inner_host_area = host_block.inner(host_area);
@@ -209,9 +228,9 @@ fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut
     f.render_stateful_widget(t, area, state);
 }
 
-fn host_tabs(hosts: &[Host]) -> StatefulTabs {
-    let selected = Style::default().add_modifier(Modifier::REVERSED);
-    let titles = hosts
+fn host_tabs(hosts: &[Host], selected: usize) -> Tabs {
+    let highlight = Style::default().add_modifier(Modifier::REVERSED);
+    let mut titles = hosts
         .iter()
         .map(|h| {
             let host = h.to_string();
@@ -221,13 +240,20 @@ fn host_tabs(hosts: &[Host]) -> StatefulTabs {
                 Span::styled(rest.to_owned(), Style::default()),
             ])
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    let tabs = Tabs::new(titles)
+    // It's possible that there are most hosts than we can fit in the area for tabs
+    // on screen. The tabs widget doesn't support scrolling as different hosts are
+    // selected to change which portion of them are visible. Instead of writing our
+    // own tabs widget, we cheat and always display the selected host first and let
+    // the overflow hosts go off the edge of the screen.
+    titles.rotate_left(selected);
+
+    Tabs::new(titles)
         .block(Block::default().borders(Borders::ALL).title("Hosts"))
-        .highlight_style(selected);
-
-    StatefulTabs::from(tabs)
+        .highlight_style(highlight)
+        // We reorder the list of hosts to always put the selected one first.
+        .select(0)
 }
 
 fn slab_table_header<'a>(style: Style) -> Row<'a> {
@@ -411,6 +437,7 @@ fn system_cpu_gauge(m: &StatsDelta) -> Gauge {
         .percent(0)
         .label(label)
 }
+
 /// Holds the current state of the application such as stats data and currently
 /// selected host to render in the UI.
 #[derive(Debug)]
@@ -501,7 +528,8 @@ enum Mode {
 struct State {
     num_hosts: usize,
     mode: Mode,
-    tabs: TabState,
+    host_selected: usize,
+    host_scrollbar: ScrollbarState,
     tables: Vec<TableState>,
 }
 
@@ -510,21 +538,27 @@ impl State {
         Self {
             num_hosts,
             mode: Mode::Default,
-            tabs: TabState::default(),
+            host_selected: 0,
+            host_scrollbar: ScrollbarState::new(num_hosts),
             tables: (0..num_hosts).map(|_| TableState::default()).collect(),
         }
     }
 
     fn next_host(&mut self) {
-        self.tabs.select((self.tabs.selected() + 1) % self.num_hosts);
+        let idx = (self.host_selected + 1) % self.num_hosts;
+        self.host_selected = idx;
+        self.host_scrollbar = self.host_scrollbar.position(idx);
     }
 
     fn prev_host(&mut self) {
-        self.tabs.select(if self.tabs.selected() > 0 {
-            self.tabs.selected() - 1
+        let idx = if self.host_selected > 0 {
+            self.host_selected - 1
         } else {
             self.num_hosts - 1
-        });
+        };
+
+        self.host_selected = idx;
+        self.host_scrollbar = self.host_scrollbar.position(idx);
     }
 
     fn next_row(&mut self, total: usize) {
@@ -532,7 +566,7 @@ impl State {
             return;
         }
 
-        let table = &mut self.tables[self.tabs.selected()];
+        let table = &mut self.tables[self.host_selected];
         let selected = if let Some(current) = table.selected() {
             if total == 0 || current >= total - 1 {
                 0
@@ -551,7 +585,7 @@ impl State {
             return;
         }
 
-        let table = &mut self.tables[self.tabs.selected()];
+        let table = &mut self.tables[self.host_selected];
         let selected = if let Some(current) = table.selected() {
             if total == 0 {
                 0
@@ -568,7 +602,7 @@ impl State {
     }
 
     fn selected(&self) -> usize {
-        self.tabs.selected()
+        self.host_selected
     }
 
     fn mode(&self) -> Mode {
@@ -579,12 +613,12 @@ impl State {
         self.mode = mode;
     }
 
-    fn tabs(&mut self) -> &mut TabState {
-        &mut self.tabs
+    fn scrollbar(&mut self) -> &mut ScrollbarState {
+        &mut self.host_scrollbar
     }
 
     fn table(&mut self) -> &mut TableState {
-        &mut self.tables[self.tabs.selected()]
+        &mut self.tables[self.host_selected]
     }
 }
 
@@ -594,7 +628,7 @@ struct BytesScale {
     suffix: &'static str,
 }
 
-/// Formatter for displaying human readable versions of various metrics.
+/// Formatter for displaying human-readable versions of various metrics.
 #[derive(Debug)]
 struct UnitFormatter {
     bytes_scale: Vec<BytesScale>,
