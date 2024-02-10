@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.1 - unreleased
+
+- Change host selection in `mtop` to allow more host tabs than fit on the
+  screen. #119
+
 ## v0.8.0 - 2024-02-04
 
 - Add default 5 second timeout to network operations done by `mtop`. #90
