@@ -97,17 +97,17 @@ impl Bencher {
             let timeout = self.timeout;
 
             tasks.push((worker, self.handle.spawn(async move {
-                let kvs = fixture_data(worker, NUM_KEYS);
+                let fixture = fixture_data(worker, NUM_KEYS);
                 let mut stats = Summary {  worker, ..Default::default() };
 
                 while run.load(Ordering::Acquire) {
                     let set_start = interval.tick().await;
 
-                    for kv in kvs.iter() {
+                    for kv in fixture.kvs.iter() {
                         // Write a small percentage of fixture data because cache workloads skew read heavy.
                         if rand::thread_rng().gen_bool(write_percent.as_f64()) {
-                            if let Err(e) = client.set(&kv.key, 0, ttl, &kv.val).timeout(timeout, "client.set").await {
-                                tracing::debug!(message = "unable to set item", key = kv.key, payload_size = kv.val.len(), err = %e);
+                            if let Err(e) = client.set(&kv.key, 0, ttl, fixture.payload(kv)).timeout(timeout, "client.set").await {
+                                tracing::debug!(message = "unable to set item", key = kv.key, payload_size = kv.len, err = %e);
                             } else {
                                 stats.sets += 1;
                             }
@@ -117,7 +117,7 @@ impl Bencher {
                     stats.sets_time += set_start.elapsed();
                     let get_start = Instant::now();
 
-                    for batch in kvs.chunks(GET_BATCH_SIZE) {
+                    for batch in fixture.kvs.chunks(GET_BATCH_SIZE) {
                         let keys: Vec<&String> = batch.iter().map(|kv| &kv.key).collect();
                         match client.get(keys).timeout(timeout, "client.get").await {
                             Ok(v) => {
@@ -158,9 +158,10 @@ impl Bencher {
     }
 }
 
-fn fixture_data(worker: usize, num: usize) -> Vec<KVPair> {
-    let mut out = Vec::with_capacity(num);
+fn fixture_data(worker: usize, num: usize) -> FixtureData {
+    let mut kvs = Vec::with_capacity(num);
     let mut rng = rand::thread_rng();
+    let payload = b"x".repeat(MAX_ITEM_SIZE);
     // Using a "lambda" value of 10 means that most numbers end up in the 0 to 1.0 range
     // with the occasional value over 1.0. We're generating sizes of test data, so it doesn't
     // really matter if we occasionally have values over 1.0.
@@ -169,21 +170,30 @@ fn fixture_data(worker: usize, num: usize) -> Vec<KVPair> {
     for i in 0..num {
         let key = format!("mc-bench-{}-{}", worker, i);
         let unit = rng.sample(dist);
-        let size = (MAX_ITEM_SIZE as f64 * unit) as usize;
-        let val = "x".repeat(size);
-
-        out.push(KVPair {
-            key,
-            val: val.into_bytes(),
-        })
+        // Each KV pair is actually a key and length of the payload. We don't need to
+        // store a copy of the payload since the actual contents don't matter, we'll just
+        // grab a subslice of it when we need to write to the cache.
+        let len = (MAX_ITEM_SIZE as f64 * unit) as usize;
+        kvs.push(KVPair { key, len })
     }
 
-    out
+    FixtureData { payload, kvs }
+}
+
+struct FixtureData {
+    payload: Vec<u8>,
+    kvs: Vec<KVPair>,
+}
+
+impl FixtureData {
+    fn payload(&self, kv: &KVPair) -> &[u8] {
+        &self.payload[0..kv.len.min(self.payload.len())]
+    }
 }
 
 struct KVPair {
     key: String,
-    val: Vec<u8>,
+    len: usize,
 }
 
 #[derive(Debug, Default)]
