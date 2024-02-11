@@ -1,9 +1,11 @@
 # Changelog
 
-## v0.8.1 - unreleased
+## v0.9.0 - unreleased
 
 - Change host selection in `mtop` to allow more host tabs than fit on the
   screen. #119
+- Change default colors in `mtop` to dark theme based on tailwind color
+  palette. #122
 
 ## v0.8.0 - 2024-02-04
 

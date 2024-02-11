@@ -1,10 +1,11 @@
 use crate::queue::{BlockingStatsQueue, Host, StatsDelta};
+use crate::ui::theme::TAILWIND as THEME;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use mtop_client::SlabItem;
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Cell, Gauge, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState, Tabs,
@@ -104,19 +105,19 @@ fn render_host_area(
     let tabs = host_tabs(&hosts, selected);
     f.render_widget(tabs, tab_area);
 
-    let scrollbar = Scrollbar::default()
-        .orientation(ScrollbarOrientation::HorizontalBottom)
-        .begin_symbol(Some("<"))
-        .end_symbol(Some(">"))
-        .track_symbol(Some(symbols::line::HORIZONTAL))
-        .thumb_symbol(symbols::line::DOUBLE_HORIZONTAL);
+    let scrollbar = host_tabs_scrollbar();
     let inner_tab_area = tab_area.inner(&Margin {
         vertical: 0,
         horizontal: 1,
     });
     f.render_stateful_widget(scrollbar, inner_tab_area, scrollbar_state);
 
-    let host_block = Block::default().title(host.to_string()).borders(Borders::ALL);
+    let host_block = Block::default()
+        .title(host.to_string())
+        .borders(Borders::ALL)
+        .border_style(THEME.border)
+        .title_style(THEME.title)
+        .bg(THEME.background);
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
 
@@ -131,7 +132,7 @@ fn render_stats_gauges(f: &mut Frame, area: Rect, delta: &StatsDelta) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(33),
+                Constraint::Percentage(34),
                 Constraint::Percentage(33),
                 Constraint::Percentage(33),
             ])
@@ -141,7 +142,7 @@ fn render_stats_gauges(f: &mut Frame, area: Rect, delta: &StatsDelta) {
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Percentage(33),
-                Constraint::Percentage(33),
+                Constraint::Percentage(34),
                 Constraint::Percentage(33),
             ])
             .split(chunks[0]);
@@ -205,10 +206,9 @@ fn render_stats_gauges(f: &mut Frame, area: Rect, delta: &StatsDelta) {
 
 fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut TableState) {
     let units = UnitFormatter::new();
-    let header_style = Style::default().bg(Color::Blue);
-    let selected_style = Style::default().bg(Color::Red).fg(Color::LightYellow);
-    let header = slab_table_header(header_style);
+    let header = slab_table_header();
     let rows = slab_table_rows(delta, &units);
+
     let widths = &[
         Constraint::Percentage(5),  // ID
         Constraint::Percentage(8),  // size
@@ -220,24 +220,19 @@ fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut
         Constraint::Percentage(17), // expired
     ];
 
-    let t = Table::new(rows, widths)
-        .header(header)
-        .block(Block::default().borders(Borders::ALL).title("Slabs"))
-        .highlight_style(selected_style);
-
-    f.render_stateful_widget(t, area, state);
+    let table = slab_table(header, rows, widths);
+    f.render_stateful_widget(table, area, state);
 }
 
 fn host_tabs(hosts: &[Host], selected: usize) -> Tabs {
-    let highlight = Style::default().add_modifier(Modifier::REVERSED);
     let mut titles = hosts
         .iter()
         .map(|h| {
             let host = h.to_string();
             let (first, rest) = host.split_at(1);
             Line::from(vec![
-                Span::styled(first.to_owned(), Style::default().fg(Color::Cyan)),
-                Span::styled(rest.to_owned(), Style::default()),
+                Span::styled(first.to_owned(), THEME.tab_highlight),
+                Span::from(rest.to_owned()),
             ])
         })
         .collect::<Vec<_>>();
@@ -250,13 +245,34 @@ fn host_tabs(hosts: &[Host], selected: usize) -> Tabs {
     titles.rotate_left(selected);
 
     Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title("Hosts"))
-        .highlight_style(highlight)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Hosts")
+                .border_style(THEME.border)
+                .title_style(THEME.title)
+                .bg(THEME.background)
+                .fg(THEME.text),
+        )
+        .highlight_style(Style::default().bg(THEME.tab_selected))
         // We reorder the list of hosts to always put the selected one first.
         .select(0)
 }
 
-fn slab_table_header<'a>(style: Style) -> Row<'a> {
+fn host_tabs_scrollbar<'a>() -> Scrollbar<'a> {
+    Scrollbar::default()
+        .orientation(ScrollbarOrientation::HorizontalBottom)
+        .begin_symbol(Some("<"))
+        .end_symbol(Some(">"))
+        .track_symbol(Some(symbols::line::HORIZONTAL))
+        .thumb_symbol(symbols::line::DOUBLE_HORIZONTAL)
+        .begin_style(THEME.tab_scrollbar_arrows)
+        .end_style(THEME.tab_scrollbar_arrows)
+        .track_style(THEME.tab_scrollbar_track)
+        .thumb_style(THEME.tab_scrollbar_thumb)
+}
+
+fn slab_table_header<'a>() -> Row<'a> {
     Row::new(
         [
             "ID",
@@ -271,9 +287,9 @@ fn slab_table_header<'a>(style: Style) -> Row<'a> {
         .into_iter()
         .map(Cell::from),
     )
-    .style(style)
     .height(2)
-    .bottom_margin(1)
+    .bottom_margin(0)
+    .fg(THEME.table_header)
 }
 
 fn slab_table_rows<'a>(delta: &StatsDelta, units: &UnitFormatter) -> Vec<Row<'a>> {
@@ -312,6 +328,20 @@ fn slab_table_rows<'a>(delta: &StatsDelta, units: &UnitFormatter) -> Vec<Row<'a>
     rows
 }
 
+fn slab_table<'a>(header: Row<'a>, rows: Vec<Row<'a>>, widths: &'a [Constraint]) -> Table<'a> {
+    Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Slabs")
+                .border_style(THEME.border)
+                .title_style(THEME.title)
+                .style(THEME.text),
+        )
+        .highlight_style(Style::default().bg(THEME.table_select_bg).fg(THEME.table_select_fg))
+}
+
 fn memory_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let ratio = (m.current.stats.bytes as f64 / m.current.stats.max_bytes as f64).min(1.0);
     let label = format!(
@@ -320,10 +350,16 @@ fn memory_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
         units.bytes(m.current.stats.max_bytes)
     );
     Gauge::default()
-        .block(Block::default().title("Memory").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Magenta))
-        .ratio(ratio)
+        .block(
+            Block::default()
+                .title("Memory")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.memory)
         .label(label)
+        .ratio(ratio)
 }
 
 fn connections_gauge(m: &StatsDelta) -> Gauge {
@@ -333,10 +369,16 @@ fn connections_gauge(m: &StatsDelta) -> Gauge {
         m.current.stats.curr_connections, m.current.stats.max_connections
     );
     Gauge::default()
-        .block(Block::default().title("Connections").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Yellow))
-        .ratio(ratio)
+        .block(
+            Block::default()
+                .title("Connections")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.connections)
         .label(label)
+        .ratio(ratio)
 }
 
 fn hits_gauge(m: &StatsDelta) -> Gauge {
@@ -353,89 +395,143 @@ fn hits_gauge(m: &StatsDelta) -> Gauge {
 
     let label = format!("{:.1}%", ratio * 100.0);
     Gauge::default()
-        .block(Block::default().title("Hit Ratio").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Blue))
-        .ratio(ratio)
+        .block(
+            Block::default()
+                .title("Hit Ratio")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.hits)
         .label(label)
+        .ratio(ratio)
 }
 
 fn gets_gauge(m: &StatsDelta) -> Gauge {
     let diff = (m.current.stats.cmd_get - m.previous.stats.cmd_get) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
-        .block(Block::default().title("Gets").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightGreen))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("Gets")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.gets)
         .label(label)
+        .percent(0)
 }
 
 fn sets_gauge(m: &StatsDelta) -> Gauge {
     let diff = (m.current.stats.cmd_set - m.previous.stats.cmd_set) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
-        .block(Block::default().title("Sets").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Cyan))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("Sets")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.sets)
         .label(label)
+        .percent(0)
 }
 
 fn evictions_gauge(m: &StatsDelta) -> Gauge {
     let diff = (m.current.stats.evictions - m.previous.stats.evictions) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
-        .block(Block::default().title("Evictions").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Red))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("Evictions")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.evictions)
         .label(label)
+        .percent(0)
 }
 
 fn items_gauge(m: &StatsDelta) -> Gauge {
     let label = format!("{}", m.current.stats.curr_items);
     Gauge::default()
-        .block(Block::default().title("Items").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::Yellow))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("Items")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.items)
         .label(label)
+        .percent(0)
 }
 
 fn bytes_read_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.stats.bytes_read - m.previous.stats.bytes_read) / m.seconds;
     let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
-        .block(Block::default().title("Bytes rx").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightMagenta))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("Bytes rx")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.bytes_rx)
         .label(label)
+        .percent(0)
 }
 
 fn bytes_written_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.stats.bytes_written - m.previous.stats.bytes_written) / m.seconds;
     let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
-        .block(Block::default().title("Bytes tx").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightBlue))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("Bytes tx")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.bytes_tx)
         .label(label)
+        .percent(0)
 }
 
 fn user_cpu_gauge(m: &StatsDelta) -> Gauge {
     let diff = ((m.current.stats.rusage_user - m.previous.stats.rusage_user) / m.seconds as f64) * 100.0;
     let label = format!("{:.1}%", diff);
     Gauge::default()
-        .block(Block::default().title("User CPU").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightCyan))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("User CPU")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.user_cpu)
         .label(label)
+        .percent(0)
 }
 
 fn system_cpu_gauge(m: &StatsDelta) -> Gauge {
     let diff = ((m.current.stats.rusage_system - m.previous.stats.rusage_system) / m.seconds as f64) * 100.0;
     let label = format!("{:.1}%", diff);
     Gauge::default()
-        .block(Block::default().title("System CPU").borders(Borders::ALL))
-        .gauge_style(Style::default().fg(Color::LightRed))
-        .percent(0)
+        .block(
+            Block::default()
+                .title("System CPU")
+                .borders(Borders::ALL)
+                .border_style(THEME.border)
+                .title_style(THEME.title),
+        )
+        .gauge_style(THEME.system_cpu)
         .label(label)
+        .percent(0)
 }
 
 /// Holds the current state of the application such as stats data and currently
