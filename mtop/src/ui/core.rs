@@ -360,6 +360,7 @@ fn memory_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta, units: &'a UnitFormatte
                 .title_style(theme.title),
         )
         .gauge_style(theme.memory)
+        .use_unicode(true)
         .label(label)
         .ratio(ratio)
 }
@@ -379,6 +380,7 @@ fn connections_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
                 .title_style(theme.title),
         )
         .gauge_style(theme.connections)
+        .use_unicode(true)
         .label(label)
         .ratio(ratio)
 }
@@ -405,6 +407,7 @@ fn hits_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
                 .title_style(theme.title),
         )
         .gauge_style(theme.hits)
+        .use_unicode(true)
         .label(label)
         .ratio(ratio)
 }
