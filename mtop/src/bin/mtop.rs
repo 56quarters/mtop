@@ -1,5 +1,6 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
+use mtop::ui::{Theme, TAILWIND};
 use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig,
     Timeout,
@@ -14,6 +15,7 @@ use tokio::task;
 use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, Level};
 
+const DEFAULT_THEME: Theme = TAILWIND;
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 // Update interval of more than a second to minimize the chance that stats returned by the
 // memcached server have the exact same "time" value (which has one-second granularity).
@@ -38,6 +40,10 @@ struct MtopConfig {
     /// writable, mtop will not start.
     #[arg(long, default_value=default_log_file().into_os_string(), value_hint = ValueHint::FilePath)]
     log_file: PathBuf,
+
+    /// Color scheme to use for the UI. Available options are "ansi", "material", and "tailwind".
+    #[arg(long, default_value_t = DEFAULT_THEME)]
+    theme: Theme,
 
     /// Enable TLS connections to the Memcached server.
     #[arg(long)]
@@ -142,7 +148,7 @@ async fn main() -> ExitCode {
 
         let blocking_measurements = BlockingStatsQueue::new(measurements.clone(), Handle::current());
         let hosts: Vec<Host> = servers.iter().map(|s| Host::from(s.id())).collect();
-        let app = mtop::ui::Application::new(&hosts, blocking_measurements);
+        let app = mtop::ui::Application::new(&hosts, blocking_measurements, opts.theme);
 
         // Run the terminal reset unconditionally but prefer to return an error from the
         // application, if available, for logging.

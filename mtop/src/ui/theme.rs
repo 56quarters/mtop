@@ -1,7 +1,41 @@
 use mtop_client::MtopError;
 use ratatui::style::palette::{material, tailwind};
 use ratatui::style::Color;
+use std::fmt;
 use std::str::FromStr;
+
+pub const ANSI: Theme = Theme {
+    // general
+    border: Color::Gray,
+    background: Color::Black,
+    title: Color::White,
+    text: Color::Reset,
+
+    // tabs
+    tab_highlight: Color::Cyan,
+    tab_selected: Color::LightBlue,
+    tab_scrollbar_arrows: Color::Yellow,
+    tab_scrollbar_track: Color::Gray,
+    tab_scrollbar_thumb: Color::LightGreen,
+
+    // gauges
+    memory: Color::Magenta,
+    connections: Color::Yellow,
+    hits: Color::LightBlue,
+    gets: Color::Green,
+    sets: Color::Cyan,
+    evictions: Color::Red,
+    items: Color::Yellow,
+    bytes_rx: Color::LightRed,
+    bytes_tx: Color::Blue,
+    user_cpu: Color::Cyan,
+    system_cpu: Color::Red,
+
+    // table
+    table_header: Color::White,
+    table_select_bg: Color::Red,
+    table_select_fg: Color::LightYellow,
+};
 
 pub const MATERIAL: Theme = Theme {
     // general
@@ -70,7 +104,7 @@ pub const TAILWIND: Theme = Theme {
 };
 
 /// The collection of colors used in various places in the mtop UI.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Theme {
     // general
     pub border: Color,
@@ -110,9 +144,23 @@ impl FromStr for Theme {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim().to_lowercase();
         match s.as_str() {
-            "tailwind" => Ok(TAILWIND),
+            "ansi" => Ok(ANSI),
             "material" => Ok(MATERIAL),
-            _ => Err(MtopError::configuration(format!("invalid theme {}", s))),
+            "tailwind" => Ok(TAILWIND),
+            _ => Err(MtopError::configuration(format!("unknown theme '{}'", s))),
         }
+    }
+}
+
+impl fmt::Display for Theme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let d = match *self {
+            ANSI => "ansi",
+            MATERIAL => "material",
+            TAILWIND => "tailwind",
+            _ => panic!("invalid theme"),
+        };
+
+        write!(f, "{}", d)
     }
 }
