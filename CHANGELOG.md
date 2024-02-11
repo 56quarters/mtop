@@ -7,6 +7,8 @@
 - Change default colors in `mtop` to dark theme based on tailwind color
   palette. #122
 - Allow other `mtop` color palettes to be selected via the `--theme` flag. #124
+- Switch `mtop` memory, connections, and hit ratio gauges to unicode for finer
+  grained bars. #125
 
 ## v0.8.0 - 2024-02-04
 
