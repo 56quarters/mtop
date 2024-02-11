@@ -6,6 +6,7 @@
   screen. #119
 - Change default colors in `mtop` to dark theme based on tailwind color
   palette. #122
+- Allow other `mtop` color palettes to be selected via the `--theme` flag. #124
 
 ## v0.8.0 - 2024-02-04
 

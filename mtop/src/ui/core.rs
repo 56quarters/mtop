@@ -1,5 +1,5 @@
 use crate::queue::{BlockingStatsQueue, Host, StatsDelta};
-use crate::ui::theme::TAILWIND as THEME;
+use crate::ui::theme::Theme;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use mtop_client::SlabItem;
@@ -74,17 +74,19 @@ where
 fn render(f: &mut Frame, app: &mut Application) {
     let host = app.host();
     let hosts = app.hosts();
-    let inner_host_area = render_host_area(f, host, hosts, app.state.selected(), app.state.scrollbar());
+    let theme = app.theme();
+    let inner_host_area = render_host_area(&theme, f, host, hosts, app.state.selected(), app.state.scrollbar());
 
     if let Some(delta) = app.read() {
         match app.state.mode() {
-            Mode::Default => render_stats_gauges(f, inner_host_area, &delta),
-            Mode::Slabs => render_slabs_table(f, inner_host_area, &delta, app.state.table()),
+            Mode::Default => render_stats_gauges(&theme, f, inner_host_area, &delta),
+            Mode::Slabs => render_slabs_table(&theme, f, inner_host_area, &delta, app.state.table()),
         }
     }
 }
 
 fn render_host_area(
+    theme: &Theme,
     f: &mut Frame,
     host: Host,
     hosts: Vec<Host>,
@@ -102,10 +104,10 @@ fn render_host_area(
         (chunks[0], chunks[1])
     };
 
-    let tabs = host_tabs(&hosts, selected);
+    let tabs = host_tabs(theme, &hosts, selected);
     f.render_widget(tabs, tab_area);
 
-    let scrollbar = host_tabs_scrollbar();
+    let scrollbar = host_tabs_scrollbar(theme);
     let inner_tab_area = tab_area.inner(&Margin {
         vertical: 0,
         horizontal: 1,
@@ -115,16 +117,16 @@ fn render_host_area(
     let host_block = Block::default()
         .title(host.to_string())
         .borders(Borders::ALL)
-        .border_style(THEME.border)
-        .title_style(THEME.title)
-        .bg(THEME.background);
+        .border_style(theme.border)
+        .title_style(theme.title)
+        .bg(theme.background);
     let inner_host_area = host_block.inner(host_area);
     f.render_widget(host_block, host_area);
 
     inner_host_area
 }
 
-fn render_stats_gauges(f: &mut Frame, area: Rect, delta: &StatsDelta) {
+fn render_stats_gauges(theme: &Theme, f: &mut Frame, area: Rect, delta: &StatsDelta) {
     let units = UnitFormatter::new();
     // Split up the host area into three rows. These will be further split
     // into 3 or 4 sections horizontally
@@ -170,43 +172,43 @@ fn render_stats_gauges(f: &mut Frame, area: Rect, delta: &StatsDelta) {
         (gauges_1, gauges_2, gauges_3)
     };
 
-    let bytes = memory_gauge(delta, &units);
+    let bytes = memory_gauge(theme, delta, &units);
     f.render_widget(bytes, gauge_row_1[0]);
 
-    let connections = connections_gauge(delta);
+    let connections = connections_gauge(theme, delta);
     f.render_widget(connections, gauge_row_1[1]);
 
-    let hits = hits_gauge(delta);
+    let hits = hits_gauge(theme, delta);
     f.render_widget(hits, gauge_row_1[2]);
 
-    let gets = gets_gauge(delta);
+    let gets = gets_gauge(theme, delta);
     f.render_widget(gets, gauge_row_2[0]);
 
-    let sets = sets_gauge(delta);
+    let sets = sets_gauge(theme, delta);
     f.render_widget(sets, gauge_row_2[1]);
 
-    let evictions = evictions_gauge(delta);
+    let evictions = evictions_gauge(theme, delta);
     f.render_widget(evictions, gauge_row_2[2]);
 
-    let items = items_gauge(delta);
+    let items = items_gauge(theme, delta);
     f.render_widget(items, gauge_row_2[3]);
 
-    let bytes_written = bytes_written_gauge(delta, &units);
+    let bytes_written = bytes_written_gauge(theme, delta, &units);
     f.render_widget(bytes_written, gauge_row_3[0]);
 
-    let bytes_read = bytes_read_gauge(delta, &units);
+    let bytes_read = bytes_read_gauge(theme, delta, &units);
     f.render_widget(bytes_read, gauge_row_3[1]);
 
-    let user_cpu = user_cpu_gauge(delta);
+    let user_cpu = user_cpu_gauge(theme, delta);
     f.render_widget(user_cpu, gauge_row_3[2]);
 
-    let system_cpu = system_cpu_gauge(delta);
+    let system_cpu = system_cpu_gauge(theme, delta);
     f.render_widget(system_cpu, gauge_row_3[3]);
 }
 
-fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut TableState) {
+fn render_slabs_table(theme: &Theme, f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut TableState) {
     let units = UnitFormatter::new();
-    let header = slab_table_header();
+    let header = slab_table_header(theme);
     let rows = slab_table_rows(delta, &units);
 
     let widths = &[
@@ -220,18 +222,18 @@ fn render_slabs_table(f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut
         Constraint::Percentage(17), // expired
     ];
 
-    let table = slab_table(header, rows, widths);
+    let table = slab_table(theme, header, rows, widths);
     f.render_stateful_widget(table, area, state);
 }
 
-fn host_tabs(hosts: &[Host], selected: usize) -> Tabs {
+fn host_tabs<'a>(theme: &'a Theme, hosts: &'a [Host], selected: usize) -> Tabs<'a> {
     let mut titles = hosts
         .iter()
         .map(|h| {
             let host = h.to_string();
             let (first, rest) = host.split_at(1);
             Line::from(vec![
-                Span::styled(first.to_owned(), THEME.tab_highlight),
+                Span::styled(first.to_owned(), theme.tab_highlight),
                 Span::from(rest.to_owned()),
             ])
         })
@@ -249,30 +251,30 @@ fn host_tabs(hosts: &[Host], selected: usize) -> Tabs {
             Block::default()
                 .borders(Borders::ALL)
                 .title("Hosts")
-                .border_style(THEME.border)
-                .title_style(THEME.title)
-                .bg(THEME.background)
-                .fg(THEME.text),
+                .border_style(theme.border)
+                .title_style(theme.title)
+                .bg(theme.background)
+                .fg(theme.text),
         )
-        .highlight_style(Style::default().bg(THEME.tab_selected))
+        .highlight_style(Style::default().bg(theme.tab_selected))
         // We reorder the list of hosts to always put the selected one first.
         .select(0)
 }
 
-fn host_tabs_scrollbar<'a>() -> Scrollbar<'a> {
+fn host_tabs_scrollbar(theme: &Theme) -> Scrollbar {
     Scrollbar::default()
         .orientation(ScrollbarOrientation::HorizontalBottom)
         .begin_symbol(Some("<"))
         .end_symbol(Some(">"))
         .track_symbol(Some(symbols::line::HORIZONTAL))
         .thumb_symbol(symbols::line::DOUBLE_HORIZONTAL)
-        .begin_style(THEME.tab_scrollbar_arrows)
-        .end_style(THEME.tab_scrollbar_arrows)
-        .track_style(THEME.tab_scrollbar_track)
-        .thumb_style(THEME.tab_scrollbar_thumb)
+        .begin_style(theme.tab_scrollbar_arrows)
+        .end_style(theme.tab_scrollbar_arrows)
+        .track_style(theme.tab_scrollbar_track)
+        .thumb_style(theme.tab_scrollbar_thumb)
 }
 
-fn slab_table_header<'a>() -> Row<'a> {
+fn slab_table_header<'a>(theme: &Theme) -> Row<'a> {
     Row::new(
         [
             "ID",
@@ -289,7 +291,7 @@ fn slab_table_header<'a>() -> Row<'a> {
     )
     .height(2)
     .bottom_margin(0)
-    .fg(THEME.table_header)
+    .fg(theme.table_header)
 }
 
 fn slab_table_rows<'a>(delta: &StatsDelta, units: &UnitFormatter) -> Vec<Row<'a>> {
@@ -328,21 +330,21 @@ fn slab_table_rows<'a>(delta: &StatsDelta, units: &UnitFormatter) -> Vec<Row<'a>
     rows
 }
 
-fn slab_table<'a>(header: Row<'a>, rows: Vec<Row<'a>>, widths: &'a [Constraint]) -> Table<'a> {
+fn slab_table<'a>(theme: &'a Theme, header: Row<'a>, rows: Vec<Row<'a>>, widths: &'a [Constraint]) -> Table<'a> {
     Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title("Slabs")
-                .border_style(THEME.border)
-                .title_style(THEME.title)
-                .style(THEME.text),
+                .border_style(theme.border)
+                .title_style(theme.title)
+                .style(theme.text),
         )
-        .highlight_style(Style::default().bg(THEME.table_select_bg).fg(THEME.table_select_fg))
+        .highlight_style(Style::default().bg(theme.table_select_bg).fg(theme.table_select_fg))
 }
 
-fn memory_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
+fn memory_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let ratio = (m.current.stats.bytes as f64 / m.current.stats.max_bytes as f64).min(1.0);
     let label = format!(
         "{}/{}",
@@ -354,15 +356,15 @@ fn memory_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
             Block::default()
                 .title("Memory")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.memory)
+        .gauge_style(theme.memory)
         .label(label)
         .ratio(ratio)
 }
 
-fn connections_gauge(m: &StatsDelta) -> Gauge {
+fn connections_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let ratio = (m.current.stats.curr_connections as f64 / m.current.stats.max_connections as f64).min(1.0);
     let label = format!(
         "{}/{}",
@@ -373,15 +375,15 @@ fn connections_gauge(m: &StatsDelta) -> Gauge {
             Block::default()
                 .title("Connections")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.connections)
+        .gauge_style(theme.connections)
         .label(label)
         .ratio(ratio)
 }
 
-fn hits_gauge(m: &StatsDelta) -> Gauge {
+fn hits_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let total = (m.current.stats.get_flushed
         + m.current.stats.get_expired
         + m.current.stats.get_hits
@@ -399,15 +401,15 @@ fn hits_gauge(m: &StatsDelta) -> Gauge {
             Block::default()
                 .title("Hit Ratio")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.hits)
+        .gauge_style(theme.hits)
         .label(label)
         .ratio(ratio)
 }
 
-fn gets_gauge(m: &StatsDelta) -> Gauge {
+fn gets_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let diff = (m.current.stats.cmd_get - m.previous.stats.cmd_get) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
@@ -415,15 +417,15 @@ fn gets_gauge(m: &StatsDelta) -> Gauge {
             Block::default()
                 .title("Gets")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.gets)
+        .gauge_style(theme.gets)
         .label(label)
         .percent(0)
 }
 
-fn sets_gauge(m: &StatsDelta) -> Gauge {
+fn sets_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let diff = (m.current.stats.cmd_set - m.previous.stats.cmd_set) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
@@ -431,15 +433,15 @@ fn sets_gauge(m: &StatsDelta) -> Gauge {
             Block::default()
                 .title("Sets")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.sets)
+        .gauge_style(theme.sets)
         .label(label)
         .percent(0)
 }
 
-fn evictions_gauge(m: &StatsDelta) -> Gauge {
+fn evictions_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let diff = (m.current.stats.evictions - m.previous.stats.evictions) / m.seconds;
     let label = format!("{}/s", diff);
     Gauge::default()
@@ -447,30 +449,30 @@ fn evictions_gauge(m: &StatsDelta) -> Gauge {
             Block::default()
                 .title("Evictions")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.evictions)
+        .gauge_style(theme.evictions)
         .label(label)
         .percent(0)
 }
 
-fn items_gauge(m: &StatsDelta) -> Gauge {
+fn items_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let label = format!("{}", m.current.stats.curr_items);
     Gauge::default()
         .block(
             Block::default()
                 .title("Items")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.items)
+        .gauge_style(theme.items)
         .label(label)
         .percent(0)
 }
 
-fn bytes_read_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
+fn bytes_read_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.stats.bytes_read - m.previous.stats.bytes_read) / m.seconds;
     let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
@@ -478,15 +480,15 @@ fn bytes_read_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a
             Block::default()
                 .title("Bytes rx")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.bytes_rx)
+        .gauge_style(theme.bytes_rx)
         .label(label)
         .percent(0)
 }
 
-fn bytes_written_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
+fn bytes_written_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
     let diff = (m.current.stats.bytes_written - m.previous.stats.bytes_written) / m.seconds;
     let label = format!("{}/s", units.bytes(diff));
     Gauge::default()
@@ -494,15 +496,15 @@ fn bytes_written_gauge<'a>(m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge
             Block::default()
                 .title("Bytes tx")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.bytes_tx)
+        .gauge_style(theme.bytes_tx)
         .label(label)
         .percent(0)
 }
 
-fn user_cpu_gauge(m: &StatsDelta) -> Gauge {
+fn user_cpu_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let diff = ((m.current.stats.rusage_user - m.previous.stats.rusage_user) / m.seconds as f64) * 100.0;
     let label = format!("{:.1}%", diff);
     Gauge::default()
@@ -510,15 +512,15 @@ fn user_cpu_gauge(m: &StatsDelta) -> Gauge {
             Block::default()
                 .title("User CPU")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.user_cpu)
+        .gauge_style(theme.user_cpu)
         .label(label)
         .percent(0)
 }
 
-fn system_cpu_gauge(m: &StatsDelta) -> Gauge {
+fn system_cpu_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta) -> Gauge<'a> {
     let diff = ((m.current.stats.rusage_system - m.previous.stats.rusage_system) / m.seconds as f64) * 100.0;
     let label = format!("{:.1}%", diff);
     Gauge::default()
@@ -526,10 +528,10 @@ fn system_cpu_gauge(m: &StatsDelta) -> Gauge {
             Block::default()
                 .title("System CPU")
                 .borders(Borders::ALL)
-                .border_style(THEME.border)
-                .title_style(THEME.title),
+                .border_style(theme.border)
+                .title_style(theme.title),
         )
-        .gauge_style(THEME.system_cpu)
+        .gauge_style(theme.system_cpu)
         .label(label)
         .percent(0)
 }
@@ -542,12 +544,14 @@ pub struct Application {
     state: State,
     hosts: Vec<Host>,
     num_rows: usize,
+    theme: Theme,
 }
 
 impl Application {
-    pub fn new(hosts: &[Host], stats: BlockingStatsQueue) -> Self {
+    pub fn new(hosts: &[Host], stats: BlockingStatsQueue, theme: Theme) -> Self {
         Application {
             stats,
+            theme,
             state: State::new(hosts.len()),
             hosts: Vec::from(hosts),
             num_rows: 0,
@@ -591,6 +595,10 @@ impl Application {
     /// Get the hostname of the currently selected host
     fn host(&self) -> Host {
         self.hosts[self.state.selected()].clone()
+    }
+
+    fn theme(&self) -> Theme {
+        self.theme
     }
 
     /// Get most recent and least recent stats for the currently selected host
