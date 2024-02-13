@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.0 - unreleased
+## v0.9.0 - 2024-02-12
 
 - Change host selection in `mtop` to allow more host tabs than fit on the
   screen. #119
