@@ -180,6 +180,7 @@ fn fixture_data(worker: usize, num: usize) -> FixtureData {
     FixtureData { payload, kvs }
 }
 
+#[derive(Debug)]
 struct FixtureData {
     payload: Vec<u8>,
     kvs: Vec<KVPair>,
@@ -191,6 +192,7 @@ impl FixtureData {
     }
 }
 
+#[derive(Debug)]
 struct KVPair {
     key: String,
     len: usize,

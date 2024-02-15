@@ -379,7 +379,7 @@ impl TryFrom<&HashMap<String, String>> for SlabItems {
 #[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
 pub struct Meta {
     pub key: String,
-    pub expires: i64, /* Signed because Memcached uses '-1' for infinite/no TTL */
+    pub expires: i64,
     pub size: u64,
 }
 
@@ -705,21 +705,7 @@ impl Memcached {
     /// Get a `Stats` object with the current values of the interesting stats for the server.
     pub async fn stats(&mut self) -> Result<Stats, MtopError> {
         self.send(Command::Stats).await?;
-        let mut raw = HashMap::new();
-
-        // Collect each of the returned `STAT` lines into key-value pairs and create
-        // a single Stats object from them with each of the expected fields.
-        loop {
-            let line = self.read.next_line().await?;
-            match line.as_deref() {
-                Some("END") | None => break,
-                Some(v) => {
-                    let (key, val) = Self::parse_stat_line(v)?;
-                    raw.insert(key.to_owned(), val.to_owned());
-                }
-            }
-        }
-
+        let raw = self.read_stats_response().await?;
         Stats::try_from(&raw)
     }
 
@@ -729,19 +715,7 @@ impl Memcached {
     /// on the size of items actually stored by the server.
     pub async fn slabs(&mut self) -> Result<Slabs, MtopError> {
         self.send(Command::StatsSlabs).await?;
-        let mut raw = HashMap::new();
-
-        loop {
-            let line = self.read.next_line().await?;
-            match line.as_deref() {
-                Some("END") | None => break,
-                Some(v) => {
-                    let (key, val) = Self::parse_stat_line(v)?;
-                    raw.insert(key.to_owned(), val.to_owned());
-                }
-            }
-        }
-
+        let raw = self.read_stats_response().await?;
         Slabs::try_from(&raw)
     }
 
@@ -751,25 +725,27 @@ impl Memcached {
     /// not be contiguous based on the size of items actually stored by the server.
     pub async fn items(&mut self) -> Result<SlabItems, MtopError> {
         self.send(Command::StatsItems).await?;
-        let mut raw = HashMap::new();
+        let raw = self.read_stats_response().await?;
+        SlabItems::try_from(&raw)
+    }
 
-        loop {
-            let line = self.read.next_line().await?;
-            match line.as_deref() {
-                Some("END") | None => break,
-                Some(v) => {
-                    let (key, val) = Self::parse_stat_line(v)?;
-                    raw.insert(key.to_owned(), val.to_owned());
-                }
+    async fn read_stats_response(&mut self) -> Result<HashMap<String, String>, MtopError> {
+        let mut out = HashMap::new();
+
+        while let Some(v) = self.read.next_line().await? {
+            if v == "END" {
+                break;
             }
+
+            let (key, val) = Self::parse_stat_line(&v)?;
+            out.insert(key.to_owned(), val.to_owned());
         }
 
-        SlabItems::try_from(&raw)
+        Ok(out)
     }
 
     fn parse_stat_line(line: &str) -> Result<(&str, &str), MtopError> {
         let mut parts = line.splitn(3, ' ');
-
         match (parts.next(), parts.next(), parts.next()) {
             (Some("STAT"), Some(key), Some(val)) => Ok((key, val)),
             _ => {
@@ -790,28 +766,26 @@ impl Memcached {
         let mut out = Vec::new();
         let mut raw = HashMap::new();
 
-        loop {
-            let line = self.read.next_line().await?;
-            match line.as_deref() {
-                Some("END") | None => break,
-                Some(v) => {
-                    // Check for an error first because the `metadump` command doesn't
-                    // have any sort of prefix for each result line like `STAT` or `VALUE`
-                    // so it's hard to know if it's valid without looking for an error.
-                    if let Some(err) = Self::parse_error(v) {
-                        return Err(MtopError::from(err));
-                    }
-
-                    let item = Self::parse_crawler_meta(v, &mut raw)?;
-                    out.push(item);
-                }
+        while let Some(v) = self.read.next_line().await? {
+            if v == "END" {
+                break;
             }
+
+            // Check for an error first because the `metadump` command doesn't
+            // have any sort of prefix for each result line like `STAT` or `VALUE`
+            // so it's hard to know if it's valid without looking for an error.
+            if let Some(err) = Self::parse_error(&v) {
+                return Err(MtopError::from(err));
+            }
+
+            let item = Self::parse_crawler_meta(&v, Meta::KEYS, &mut raw)?;
+            out.push(item);
         }
 
         Ok(out)
     }
 
-    fn parse_crawler_meta(line: &str, raw: &mut HashMap<String, String>) -> Result<Meta, MtopError> {
+    fn parse_crawler_meta(line: &str, keys: &[&str], raw: &mut HashMap<String, String>) -> Result<Meta, MtopError> {
         // Avoid allocating a new HashMap to parse every meta entry just to throw it away
         raw.clear();
 
@@ -820,8 +794,10 @@ impl Memcached {
                 .split_once('=')
                 .ok_or_else(|| MtopError::runtime(format!("unexpected metadump format '{}'", line)))?;
 
-            // Avoid spending time decoding values or allocating for data we don't care about
-            if !Meta::KEYS.contains(&key) {
+            // Avoid spending time decoding values or allocating for data we don't care about.
+            // Use a slice here since it's faster than a HashSet when the number of entries is
+            // small and the number of keys we're searching through is always small.
+            if !keys.contains(&key) {
                 continue;
             }
 
@@ -839,15 +815,13 @@ impl Memcached {
         self.send(Command::Gets(keys)).await?;
         let mut out = HashMap::with_capacity(keys.len());
 
-        loop {
-            let line = self.read.next_line().await?;
-            match line.as_deref() {
-                Some("END") | None => break,
-                Some(v) => {
-                    let value = self.parse_gets_value(v).await?;
-                    out.insert(value.key.clone(), value);
-                }
+        while let Some(v) = self.read.next_line().await? {
+            if v == "END" {
+                break;
             }
+
+            let value = self.parse_gets_value(&v).await?;
+            out.insert(value.key.clone(), value);
         }
 
         Ok(out)
