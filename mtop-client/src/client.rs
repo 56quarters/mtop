@@ -17,6 +17,75 @@ use tokio::sync::RwLock;
 // - https://medium.com/@panchr/dynamic-replication-in-memcached-8939c6f81e7f
 
 /// Logic for picking a server to "own" a particular cache key that uses
+/// jump consistent hashing.
+///
+/// See https://arxiv.org/pdf/1406.2294.pdf
+#[derive(Debug)]
+pub struct SelectorJump {
+    servers: RwLock<Vec<Server>>,
+}
+
+impl SelectorJump {
+    /// Create a new instance with the provided initial server list
+    pub fn new(mut servers: Vec<Server>) -> Self {
+        // Jump hash requires that the list of servers is always in the same order
+        servers.sort();
+        Self {
+            servers: RwLock::new(servers),
+        }
+    }
+
+    /// Implementation of the jump consistent hash.
+    ///
+    /// Adapted from https://arxiv.org/pdf/1406.2294.pdf
+    fn jump_hash(mut key: u64, buckets: usize) -> usize {
+        assert!(buckets > 0);
+        let mut b: u64 = 0;
+        let mut j: u64 = 0;
+
+        while j < buckets as u64 {
+            b = j;
+            key = key.wrapping_mul(2862933555777941757) + 1;
+            j = ((b + 1) as f64 * ((1_u64 << 31) as f64 / ((key >> 33) + 1) as f64)) as u64;
+        }
+
+        b as usize
+    }
+
+    /// Get a copy of all current servers.
+    pub async fn servers(&self) -> Vec<Server> {
+        let servers = self.servers.read().await;
+        servers.clone()
+    }
+
+    /// Get the `Server` that owns the given key, or none if there are no servers.
+    pub async fn server(&self, key: &Key) -> Option<Server> {
+        let servers = self.servers.read().await;
+        if servers.is_empty() {
+            None
+        } else if servers.len() == 1 {
+            servers.first().cloned()
+        } else {
+            let mut hasher = DefaultHasher::new();
+            hasher.write(key.as_ref().as_bytes());
+            let hash = hasher.finish();
+
+            let idx = Self::jump_hash(hash, servers.len());
+            servers.get(idx).cloned()
+        }
+    }
+
+    /// Update the list of potential servers to pick from.
+    pub async fn set_servers(&self, mut servers: Vec<Server>) {
+        // Jump hash requires that the list of servers is always in the same order
+        servers.sort();
+
+        let mut current = self.servers.write().await;
+        *current = servers
+    }
+}
+
+/// Logic for picking a server to "own" a particular cache key that uses
 /// rendezvous hashing.
 ///
 /// See https://en.wikipedia.org/wiki/Rendezvous_hashing
