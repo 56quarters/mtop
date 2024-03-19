@@ -116,7 +116,7 @@ struct AddCommand {
 ///
 /// The default configuration runs for 60 seconds, uses a single worker, performs 10,000
 /// gets per second, performs 500 sets per second, and writes payloads between a few
-/// hundred bytes and 128KB.
+/// hundred bytes and 64KB.
 #[derive(Debug, Args)]
 struct BenchCommand {
     /// How long to run the benchmark for in seconds.
@@ -147,7 +147,7 @@ struct BenchCommand {
     delay_millis: u64,
 
     /// TTL to use for test values stored in the cache in seconds.
-    #[arg(long, default_value_t = 1800)]
+    #[arg(long, default_value_t = 300)]
     ttl_secs: u32,
 }
 
