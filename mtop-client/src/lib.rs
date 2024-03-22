@@ -3,6 +3,8 @@ mod core;
 mod pool;
 mod timeout;
 
+pub mod dns;
+
 pub use crate::client::{MemcachedClient, SelectorRendezvous, ServersResponse, ValuesResponse};
 pub use crate::core::{
     ErrorKind, Key, Memcached, Meta, MtopError, ProtocolError, ProtocolErrorKind, Slab, SlabItem, SlabItems, Slabs,
