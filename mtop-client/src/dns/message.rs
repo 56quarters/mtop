@@ -4,12 +4,40 @@ use crate::dns::name::Name;
 use crate::dns::rdata::RecordData;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::io::Seek;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct MessageId(u16);
+
+impl MessageId {
+    pub fn random() -> Self {
+        Self(rand::random())
+    }
+}
+
+impl From<u16> for MessageId {
+    fn from(value: u16) -> Self {
+        Self(value)
+    }
+}
+
+impl From<MessageId> for u16 {
+    fn from(value: MessageId) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for MessageId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Message {
-    id: u16,
+    id: MessageId,
     flags: Flags,
     questions: Vec<Question>,
     answers: Vec<Record>,
@@ -18,7 +46,7 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn new(id: u16, flags: Flags) -> Self {
+    pub fn new(id: MessageId, flags: Flags) -> Self {
         Self {
             id,
             flags,
@@ -29,11 +57,11 @@ impl Message {
         }
     }
 
-    pub fn id(&self) -> u16 {
+    pub fn id(&self) -> MessageId {
         self.id
     }
 
-    pub fn set_id(mut self, id: u16) -> Self {
+    pub fn set_id(mut self, id: MessageId) -> Self {
         self.id = id;
         self
     }
@@ -164,7 +192,7 @@ impl Message {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct Header {
-    id: u16,
+    id: MessageId,
     flags: Flags,
     num_questions: u16,
     num_answers: u16,
@@ -177,7 +205,7 @@ impl Header {
     where
         T: WriteBytesExt,
     {
-        buf.write_u16::<NetworkEndian>(self.id)?;
+        buf.write_u16::<NetworkEndian>(self.id.into())?;
         buf.write_u16::<NetworkEndian>(self.flags.as_u16())?;
         buf.write_u16::<NetworkEndian>(self.num_questions)?;
         buf.write_u16::<NetworkEndian>(self.num_answers)?;
@@ -189,7 +217,7 @@ impl Header {
     where
         T: ReadBytesExt,
     {
-        let id = buf.read_u16::<NetworkEndian>()?;
+        let id = MessageId::from(buf.read_u16::<NetworkEndian>()?);
         let flags = Flags::try_from(buf.read_u16::<NetworkEndian>()?)?;
         let num_questions = buf.read_u16::<NetworkEndian>()?;
         let num_answers = buf.read_u16::<NetworkEndian>()?;
@@ -543,7 +571,7 @@ impl Record {
 
 #[cfg(test)]
 mod test {
-    use super::{Flags, Header, Message, Operation, Question, Record, ResponseCode};
+    use super::{Flags, Header, Message, MessageId, Operation, Question, Record, ResponseCode};
     use crate::dns::core::{RecordClass, RecordType};
     use crate::dns::name::Name;
     use crate::dns::rdata::{RecordData, RecordDataA, RecordDataSRV};
@@ -578,7 +606,7 @@ mod test {
         );
 
         let message = Message::new(
-            65333, Flags::default()
+            MessageId::from(65333), Flags::default()
                 .set_response()
                 .set_op_code(Operation::Query)
                 .set_response_code(ResponseCode::NoError))
@@ -722,7 +750,7 @@ mod test {
         ]);
 
         let message = Message::read_network_bytes(cur).unwrap();
-        assert_eq!(65333, message.id());
+        assert_eq!(MessageId::from(65333), message.id());
         assert_eq!(
             Flags::default()
                 .set_response()
@@ -768,7 +796,7 @@ mod test {
     #[test]
     fn test_header_write_network_bytes() {
         let h = Header {
-            id: 65333,
+            id: MessageId::from(65333),
             flags: Flags::default().set_recursion_desired(),
             num_questions: 1,
             num_answers: 2,
@@ -805,7 +833,7 @@ mod test {
         ]);
 
         let h = Header::read_network_bytes(cur).unwrap();
-        assert_eq!(65333, h.id);
+        assert_eq!(MessageId::from(65333), h.id);
         assert_eq!(Flags::default().set_recursion_desired(), h.flags);
         assert_eq!(1, h.num_questions);
         assert_eq!(2, h.num_answers);

@@ -1,18 +1,17 @@
 use clap::{Args, Parser, Subcommand};
-use mtop_client::dns::{Flags, Message, Name, Question, Record, RecordClass, RecordType};
-use mtop_client::MtopError;
+use mtop_client::dns::{DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use mtop_client::Timeout;
 use std::fmt::Write;
 use std::io::Cursor;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::ToSocketAddrs;
-use tokio::net::UdpSocket;
 use tracing::Level;
 
-const DEFAULT_HOST: &str = "127.0.0.1:53";
+const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+const DEFAULT_DNS_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_RECORD_TYPE: RecordType = RecordType::A;
 const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
@@ -35,9 +34,13 @@ enum Action {
 /// Perform a DNS query and display the result as dig-like text output.
 #[derive(Debug, Args)]
 struct QueryCommand {
-    /// Server to make the request to in the form 'hostname:port'
-    #[arg(long, default_value_t = DEFAULT_HOST.to_owned())]
-    server: String,
+    /// Local address for DNS requests for service discovery in the form 'address:port'
+    #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
+    dns_local: SocketAddr,
+
+    /// DNS server for service discovery in the form 'address:port'
+    #[arg(long, default_value_t = DEFAULT_DNS_SERVER)]
+    dns_server: SocketAddr,
 
     /// Timeout for making requests to a DNS server, in seconds.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
@@ -96,25 +99,8 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn connect<A>(server: A) -> Result<UdpSocket, MtopError>
-where
-    A: ToSocketAddrs,
-{
-    let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    socket.connect(server).await?;
-    Ok(socket)
-}
-
 async fn run_query(cmd: &QueryCommand) -> ExitCode {
     let timeout = Duration::from_secs(cmd.timeout_secs);
-    let socket = match connect(&cmd.server).timeout(timeout, "socket.connect").await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(message = "unable to open UDP socket", "server" = cmd.server, err = %e);
-            return ExitCode::FAILURE;
-        }
-    };
-
     let name = match Name::from_str(&cmd.name) {
         Ok(n) => n,
         Err(e) => {
@@ -123,25 +109,15 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
         }
     };
 
-    let id = mtop_client::dns::id();
+    let id = MessageId::random();
     let msg = Message::new(id, Flags::default().set_query().set_recursion_desired())
         .add_question(Question::new(name, cmd.rtype).set_qclass(cmd.rclass));
 
-    if let Err(e) = mtop_client::dns::send(&socket, &msg)
-        .timeout(timeout, "socket.send")
-        .await
-    {
-        tracing::error!(message = "unable to send message", "server" = cmd.server, err = %e);
-        return ExitCode::FAILURE;
-    }
-
-    let response = match mtop_client::dns::recv(&socket, id)
-        .timeout(timeout, "socket.recv")
-        .await
-    {
+    let client = DnsClient::new(cmd.dns_local, cmd.dns_server);
+    let response = match client.exchange(&msg).timeout(timeout, "client.exchange").await {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(message = "unable to receive message", "server" = cmd.server, err = %e);
+            tracing::error!(message = "unable to exchange message", "server" = %cmd.dns_server, err = %e);
             return ExitCode::FAILURE;
         }
     };
@@ -187,7 +163,7 @@ async fn run_write(cmd: &WriteCommand) -> ExitCode {
         }
     };
 
-    let id = rand::random();
+    let id = MessageId::random();
     let msg = Message::new(id, Flags::default().set_query().set_recursion_desired())
         .add_question(Question::new(name, cmd.rtype).set_qclass(cmd.rclass));
 
