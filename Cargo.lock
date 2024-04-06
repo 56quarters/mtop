@@ -404,6 +404,7 @@ dependencies = [
  "rand",
  "rand_distr",
  "ratatui",
+ "rustls-webpki",
  "tokio",
  "tracing",
  "tracing-subscriber",

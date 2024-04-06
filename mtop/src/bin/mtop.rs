@@ -1,11 +1,13 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{Theme, TAILWIND};
+use mtop_client::dns::DnsClient;
 use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig,
     Timeout,
 };
 use std::env;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -14,9 +16,12 @@ use tokio::runtime::Handle;
 use tokio::task;
 use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, Level};
+use webpki::types::{InvalidDnsNameError, ServerName};
 
-const DEFAULT_THEME: Theme = TAILWIND;
+const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+const DEFAULT_DNS_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
+const DEFAULT_THEME: Theme = TAILWIND;
 // Update interval of more than a second to minimize the chance that stats returned by the
 // memcached server have the exact same "time" value (which has one-second granularity).
 const DEFAULT_STATS_INTERVAL: Duration = Duration::from_millis(1073);
@@ -28,9 +33,17 @@ const NUM_MEASUREMENTS: usize = 10;
 #[command(name = "mtop", version = clap::crate_version!())]
 struct MtopConfig {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
-    /// (case insensitive).
+    /// (case-insensitive).
     #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
     log_level: Level,
+
+    /// Local address for DNS requests for service discovery in the form 'address:port'
+    #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
+    dns_local: SocketAddr,
+
+    /// DNS server for service discovery in the form 'address:port'
+    #[arg(long, default_value_t = DEFAULT_DNS_SERVER)]
+    dns_server: SocketAddr,
 
     /// Timeout for connecting to Memcached and fetching statistics, in seconds.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
@@ -56,8 +69,8 @@ struct MtopConfig {
 
     /// Optional server name to use for validating the server certificate. If not set, the
     /// hostname of the server is used for checking that the certificate matches the server.
-    #[arg(long)]
-    tls_server_name: Option<String>,
+    #[arg(long, value_parser = parse_server_name)]
+    tls_server_name: Option<ServerName<'static>>,
 
     /// Optional client certificate to use to authenticate with the Memcached server. Note that
     /// this may or may not be required based on how the Memcached server is configured.
@@ -70,11 +83,19 @@ struct MtopConfig {
     tls_key: Option<PathBuf>,
 
     /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least
-    /// once and may be used multiple times (separated by spaces). Hostnames may be prefixed by
-    /// the string 'dns+'. When prefixed, the hostname will be resolved to A or AAAA records and
-    /// each IP address will be connected to at the provided port.
+    /// once and may be used multiple times (separated by spaces).
+    ///
+    /// Hostnames may be prefixed by the strings 'dns+' or 'dnssrv+'. When prefixed with 'dns+',
+    /// the hostname will be resolved to A or AAAA records and each IP address will be connected
+    /// to at the provided port. When prefixed with 'dnssrv+', the hostname will be resolved to
+    /// SRV records and the target of each record will be connected to at the provided port. Note
+    /// that the port from the SRV record is ignored.
     #[arg(required = true, value_hint = ValueHint::Hostname)]
     hosts: Vec<String>,
+}
+
+fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {
+    ServerName::try_from(s).map(|n| n.to_owned())
 }
 
 fn default_log_file() -> PathBuf {
@@ -101,7 +122,7 @@ async fn main() -> ExitCode {
 
     let timeout = Duration::from_secs(opts.timeout_secs);
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
-    let resolver = DiscoveryDefault;
+    let resolver = DiscoveryDefault::new(DnsClient::new(opts.dns_local, opts.dns_server));
 
     let servers = match expand_hosts(&opts.hosts, &resolver, timeout).await {
         Ok(v) => v,
@@ -110,6 +131,11 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if servers.is_empty() {
+        tracing::error!(message = "resolving host names did not return any results", hosts = ?opts.hosts);
+        return ExitCode::FAILURE;
+    }
 
     let client = match new_client(&opts, &servers).await {
         Ok(v) => v,

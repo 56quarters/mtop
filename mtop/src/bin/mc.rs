@@ -2,12 +2,14 @@ use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Checker, TimingBundle};
 use mtop::profile::Profiler;
+use mtop_client::dns::DnsClient;
 use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, Meta, MtopError, PoolConfig, SelectorRendezvous, Server,
     TLSConfig, Timeout, Value,
 };
 use std::fs::File;
 use std::io::Write;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -15,7 +17,10 @@ use std::{env, io};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::runtime::Handle;
 use tracing::{Instrument, Level};
+use webpki::types::{InvalidDnsNameError, ServerName};
 
+const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+const DEFAULT_DNS_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_HOST: &str = "localhost:11211";
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -26,9 +31,17 @@ const DEFAULT_CONNECTIONS_PER_HOST: u64 = 4;
 #[command(name = "mc", version = clap::crate_version!())]
 struct McConfig {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
-    /// (case insensitive).
+    /// (case-insensitive).
     #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
     log_level: Level,
+
+    /// Local address for DNS requests for service discovery in the form 'address:port'
+    #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
+    dns_local: SocketAddr,
+
+    /// DNS server for service discovery in the form 'address:port'
+    #[arg(long, default_value_t = DEFAULT_DNS_SERVER)]
+    dns_server: SocketAddr,
 
     /// Memcached host to connect to in the form 'hostname:port'.
     #[arg(long, default_value_t = DEFAULT_HOST.to_owned(), value_hint = ValueHint::Hostname)]
@@ -58,8 +71,8 @@ struct McConfig {
 
     /// Optional server name to use for validating the server certificate. If not set, the
     /// hostname of the server is used for checking that the certificate matches the server.
-    #[arg(long)]
-    tls_server_name: Option<String>,
+    #[arg(long, value_parser = parse_server_name)]
+    tls_server_name: Option<ServerName<'static>>,
 
     /// Optional client certificate to use to authenticate with the Memcached server. Note that
     /// this may or may not be required based on how the Memcached server is configured.
@@ -73,6 +86,10 @@ struct McConfig {
 
     #[command(subcommand)]
     mode: Action,
+}
+
+fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {
+    ServerName::try_from(s).map(|n| n.to_owned())
 }
 
 #[derive(Debug, Subcommand)]
@@ -280,7 +297,7 @@ async fn main() -> ExitCode {
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
     let timeout = Duration::from_secs(opts.timeout_secs);
-    let resolver = DiscoveryDefault;
+    let resolver = DiscoveryDefault::new(DnsClient::new(opts.dns_local, opts.dns_server));
     let servers = match resolver
         .resolve_by_proto(&opts.host)
         .timeout(timeout, "resolver.resolve_by_proto")

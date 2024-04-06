@@ -1,11 +1,10 @@
 use crate::core::{Memcached, MtopError};
-use std::cmp::Ordering;
+use crate::discovery::Server;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::fs::File;
 use std::future::Future;
 use std::io::{self, BufReader};
-use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,117 +14,6 @@ use tokio::sync::Mutex;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 use webpki::types::{CertificateDer, PrivateKeyDer, ServerName};
-
-const DNS_HOST_PREFIX: &str = "dns+";
-
-/// Unique ID for a server in a Memcached cluster.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-#[repr(transparent)]
-pub struct ServerID(String);
-
-impl From<SocketAddr> for ServerID {
-    fn from(value: SocketAddr) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl fmt::Display for ServerID {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl AsRef<str> for ServerID {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-/// An individual server that is part of a Memcached cluster.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct Server {
-    id: ServerID,
-    addr: SocketAddr,
-    name: ServerName<'static>,
-}
-
-impl Server {
-    pub fn from(addr: SocketAddr, name: ServerName<'static>) -> Self {
-        Self {
-            id: ServerID::from(addr),
-            addr,
-            name,
-        }
-    }
-
-    pub fn id(&self) -> ServerID {
-        self.id.clone()
-    }
-
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    pub fn server_name(&self) -> ServerName<'static> {
-        self.name.clone()
-    }
-}
-
-impl PartialOrd for Server {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Server {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.id.cmp(&other.id)
-    }
-}
-
-impl fmt::Display for Server {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.id)
-    }
-}
-
-fn host_to_server_name(host: &str) -> Result<ServerName<'static>, MtopError> {
-    ServerName::try_from(host)
-        .map(|s| s.to_owned())
-        .map_err(|e| MtopError::configuration_cause(format!("invalid server name '{}'", host), e))
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct DiscoveryDefault;
-
-impl DiscoveryDefault {
-    pub async fn resolve_by_proto(&self, name: &str) -> Result<Vec<Server>, MtopError> {
-        if name.starts_with(DNS_HOST_PREFIX) {
-            Ok(self.resolve_a(name.trim_start_matches(DNS_HOST_PREFIX)).await?)
-        } else {
-            Ok(self.resolve_a(name).await?.pop().into_iter().collect())
-        }
-    }
-
-    async fn resolve_a(&self, name: &str) -> Result<Vec<Server>, MtopError> {
-        // Names must be of the form hostname:port. The hostname can be an IP address or
-        // an actual DNS name. We trim leading and trailing brackets from the hostname portion
-        // since these are used to disambiguate IPv6 addresses from the port number but
-        // aren't allowed for _just_ an IP address.
-        let server_name = name
-            .rsplit_once(':')
-            .ok_or_else(|| MtopError::configuration(format!("invalid server name '{}'", name)))
-            .map(|(hostname, _)| hostname.trim_start_matches('[').trim_end_matches(']'))
-            .and_then(host_to_server_name)?;
-
-        let mut out = Vec::new();
-        for addr in tokio::net::lookup_host(name).await? {
-            out.push(Server::from(addr, server_name.clone()));
-        }
-
-        Ok(out)
-    }
-}
 
 #[derive(Debug)]
 pub struct PooledMemcached {
@@ -172,25 +60,18 @@ pub struct TLSConfig {
     pub ca_path: Option<PathBuf>,
     pub cert_path: Option<PathBuf>,
     pub key_path: Option<PathBuf>,
-    pub server_name: Option<String>,
+    pub server_name: Option<ServerName<'static>>,
 }
 
 #[derive(Debug)]
 pub struct MemcachedPool {
     connections: Mutex<HashMap<Server, Vec<Memcached>>>,
     client_config: Option<Arc<ClientConfig>>,
-    server_name: Option<ServerName<'static>>,
     config: PoolConfig,
 }
 
 impl MemcachedPool {
     pub async fn new(handle: Handle, config: PoolConfig) -> Result<Self, MtopError> {
-        let server_name = if let Some(s) = &config.tls.server_name {
-            Some(host_to_server_name(s)?)
-        } else {
-            None
-        };
-
         let client_config = if config.tls.enabled {
             Some(Arc::new(Self::client_config(handle, &config.tls).await?))
         } else {
@@ -200,7 +81,6 @@ impl MemcachedPool {
         Ok(MemcachedPool {
             connections: Mutex::new(HashMap::new()),
             client_config,
-            server_name,
             config,
         })
     }
@@ -299,11 +179,16 @@ impl MemcachedPool {
 
     async fn connect(&self, server: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
-            let name = self.server_name.clone().unwrap_or_else(|| server.server_name());
+            let name = self
+                .config
+                .tls
+                .server_name
+                .clone()
+                .unwrap_or_else(|| server.server_name());
             tracing::debug!(message = "using server name for TLS validation", server_name = ?name);
-            tls_connect(server.addr(), name, cfg.clone()).await
+            tls_connect(server.address(), name, cfg.clone()).await
         } else {
-            plain_connect(server.addr()).await
+            plain_connect(server.address()).await
         }
     }
 
@@ -407,7 +292,7 @@ mod test {
     async fn test_get_new_connection() {
         let cfg = PoolConfig::default();
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
-        let server = Server::from(
+        let server = Server::from_addr(
             "127.0.0.1:11211".parse().unwrap(),
             ServerName::try_from("localhost").unwrap().to_owned(),
         );
@@ -428,7 +313,7 @@ mod test {
     async fn test_get_existing_connection() {
         let cfg = PoolConfig::default();
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
-        let server = Server::from(
+        let server = Server::from_addr(
             "127.0.0.1:11211".parse().unwrap(),
             ServerName::try_from("localhost").unwrap().to_owned(),
         );
@@ -454,7 +339,7 @@ mod test {
         };
 
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
-        let server = Server::from(
+        let server = Server::from_addr(
             "127.0.0.1:11211".parse().unwrap(),
             ServerName::try_from("localhost").unwrap().to_owned(),
         );
@@ -478,7 +363,7 @@ mod test {
         let cfg = PoolConfig::default();
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
 
-        let server = Server::from(
+        let server = Server::from_addr(
             "127.0.0.1:11211".parse().unwrap(),
             ServerName::try_from("localhost").unwrap().to_owned(),
         );

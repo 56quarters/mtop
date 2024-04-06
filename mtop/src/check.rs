@@ -1,4 +1,4 @@
-use mtop_client::{DiscoveryDefault, Key, MemcachedClient};
+use mtop_client::{DiscoveryDefault, Key, MemcachedClient, Timeout};
 use std::cmp;
 use std::time::{Duration, Instant};
 use tokio::time;
@@ -58,25 +58,22 @@ impl<'a> Checker<'a> {
             let val = VALUE.to_vec();
 
             let dns_start = Instant::now();
-            let server = match time::timeout(self.timeout, self.resolver.resolve_by_proto(host))
+            let server = match self
+                .resolver
+                .resolve_by_proto(host)
+                .timeout(self.timeout, "resolver.resolve_by_proto")
                 .await
-                .map(|r| r.map(|mut v| v.pop()))
+                .map(|mut v| v.pop())
             {
-                Ok(Ok(Some(s))) => s,
-                Ok(Ok(None)) => {
+                Ok(Some(s)) => s,
+                Ok(None) => {
                     tracing::warn!(message = "no addresses for host", host = host);
                     failures.total += 1;
                     failures.dns += 1;
                     continue;
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     tracing::warn!(message = "failed to resolve host", host = host, err = %e);
-                    failures.total += 1;
-                    failures.dns += 1;
-                    continue;
-                }
-                Err(_) => {
-                    tracing::warn!(message = "timeout resolving host", host = host);
                     failures.total += 1;
                     failures.dns += 1;
                     continue;
@@ -85,16 +82,15 @@ impl<'a> Checker<'a> {
 
             let dns_time = dns_start.elapsed();
             let conn_start = Instant::now();
-            let mut conn = match time::timeout(self.timeout, self.client.raw_open(&server)).await {
-                Ok(Ok(v)) => v,
-                Ok(Err(e)) => {
-                    tracing::warn!(message = "failed to connect to host", host = host, addr = %server.addr(), err = %e);
-                    failures.total += 1;
-                    failures.connections += 1;
-                    continue;
-                }
-                Err(_) => {
-                    tracing::warn!(message = "timeout connecting to host", host = host, addr = %server.addr());
+            let mut conn = match self
+                .client
+                .raw_open(&server)
+                .timeout(self.timeout, "client.raw_open")
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(message = "failed to connect to host", host = host, addr = %server.address(), err = %e);
                     failures.total += 1;
                     failures.connections += 1;
                     continue;
@@ -103,16 +99,14 @@ impl<'a> Checker<'a> {
 
             let conn_time = conn_start.elapsed();
             let set_start = Instant::now();
-            match time::timeout(self.timeout, conn.set(&key, 0, 60, &val)).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!(message = "failed to set key", host = host, addr = %server.addr(), err = %e);
-                    failures.total += 1;
-                    failures.sets += 1;
-                    continue;
-                }
-                Err(_) => {
-                    tracing::warn!(message = "timeout setting key", host = host, addr = %server.addr());
+            match conn
+                .set(&key, 0, 60, &val)
+                .timeout(self.timeout, "connection.set")
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(message = "failed to set key", host = host, addr = %server.address(), err = %e);
                     failures.total += 1;
                     failures.sets += 1;
                     continue;
@@ -121,16 +115,10 @@ impl<'a> Checker<'a> {
 
             let set_time = set_start.elapsed();
             let get_start = Instant::now();
-            match time::timeout(self.timeout, conn.get(&[key])).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!(message = "failed to get key", host = host, addr = %server.addr(), err = %e);
-                    failures.total += 1;
-                    failures.gets += 1;
-                    continue;
-                }
-                Err(_) => {
-                    tracing::warn!(message = "timeout getting key", host = host, addr = %server.addr());
+            match conn.get(&[key]).timeout(self.timeout, "connection.get").await {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(message = "failed to get key", host = host, addr = %server.address(), err = %e);
                     failures.total += 1;
                     failures.gets += 1;
                     continue;

@@ -1,5 +1,6 @@
 use crate::core::{Key, Meta, MtopError, SlabItems, Slabs, Stats, Value};
-use crate::pool::{MemcachedPool, PooledMemcached, Server, ServerID};
+use crate::discovery::{Server, ServerID};
+use crate::pool::{MemcachedPool, PooledMemcached};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::Hasher;
