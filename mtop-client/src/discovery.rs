@@ -1,5 +1,5 @@
 use crate::core::MtopError;
-use crate::dns::{DnsClient, RecordData};
+use crate::dns::{DnsClient, Name, Record, RecordClass, RecordData, RecordType};
 use std::cmp::Ordering;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -60,47 +60,25 @@ impl AsRef<str> for ServerID {
 /// An individual server that is part of a Memcached cluster.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Server {
-    repr: ServerRepr,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-enum ServerRepr {
-    Resolved(ServerID, ServerName<'static>, SocketAddr),
-    Unresolved(ServerID, ServerName<'static>),
+    id: ServerID,
+    name: ServerName<'static>,
 }
 
 impl Server {
-    pub fn from_id(id: ServerID, name: ServerName<'static>) -> Self {
-        Self {
-            repr: ServerRepr::Unresolved(id, name),
-        }
-    }
-
-    pub fn from_addr(addr: SocketAddr, name: ServerName<'static>) -> Self {
-        Self {
-            repr: ServerRepr::Resolved(ServerID::from(addr), name, addr),
-        }
+    pub fn new(id: ServerID, name: ServerName<'static>) -> Self {
+        Self { id, name }
     }
 
     pub fn id(&self) -> ServerID {
-        match &self.repr {
-            ServerRepr::Resolved(id, _, _) => id.clone(),
-            ServerRepr::Unresolved(id, _) => id.clone(),
-        }
+        self.id.clone()
     }
 
     pub fn server_name(&self) -> ServerName<'static> {
-        match &self.repr {
-            ServerRepr::Resolved(_, name, _) => name.clone(),
-            ServerRepr::Unresolved(_, name) => name.clone(),
-        }
+        self.name.clone()
     }
 
     pub fn address(&self) -> String {
-        match &self.repr {
-            ServerRepr::Resolved(_, _, addr) => addr.to_string(),
-            ServerRepr::Unresolved(id, _) => id.to_string(),
-        }
+        self.id.to_string()
     }
 }
 
@@ -134,44 +112,56 @@ impl DiscoveryDefault {
 
     pub async fn resolve_by_proto(&self, name: &str) -> Result<Vec<Server>, MtopError> {
         if name.starts_with(DNS_A_PREFIX) {
-            Ok(self.resolve_a(name.trim_start_matches(DNS_A_PREFIX)).await?)
+            Ok(self.resolve_a_aaaa(name.trim_start_matches(DNS_A_PREFIX)).await?)
         } else if name.starts_with(DNS_SRV_PREFIX) {
             Ok(self.resolve_srv(name.trim_start_matches(DNS_SRV_PREFIX)).await?)
         } else {
-            Ok(self.resolve_a(name).await?.pop().into_iter().collect())
+            Ok(self.resolve_a_aaaa(name).await?.pop().into_iter().collect())
         }
     }
 
     async fn resolve_srv(&self, name: &str) -> Result<Vec<Server>, MtopError> {
-        let server_name = Self::server_name(name)?;
-        let (host_name, port) = Self::host_and_port(name)?;
-        let mut out = Vec::new();
+        let (host, port) = Self::host_and_port(name)?;
+        let server_name = Self::server_name(host)?;
+        let name = host.parse()?;
 
-        let res = self.client.resolve_srv(host_name).await?;
-        for a in res.answers() {
-            let target = if let RecordData::SRV(srv) = a.rdata() {
-                srv.target().to_string()
-            } else {
-                tracing::warn!(message = "unexpected record data for answer", name = host_name, answer = ?a);
-                continue;
-            };
-            let server_id = ServerID::from((target, port));
-            let server = Server::from_id(server_id, server_name.clone());
-            out.push(server);
-        }
+        let res = self.client.resolve(name, RecordType::SRV, RecordClass::INET).await?;
+        Ok(self.servers_from_answers(port, &server_name, res.answers()))
+    }
+
+    async fn resolve_a_aaaa(&self, name: &str) -> Result<Vec<Server>, MtopError> {
+        let (host, port) = Self::host_and_port(name)?;
+        let server_name = Self::server_name(host)?;
+        let name: Name = host.parse()?;
+
+        let res = self.client.resolve(name.clone(), RecordType::A, RecordClass::INET).await?;
+        let mut out = self.servers_from_answers(port, &server_name, res.answers());
+
+        let res = self.client.resolve(name, RecordType::AAAA, RecordClass::INET).await?;
+        out.extend(self.servers_from_answers(port, &server_name, res.answers()));
 
         Ok(out)
     }
 
-    async fn resolve_a(&self, name: &str) -> Result<Vec<Server>, MtopError> {
-        let server_name = Self::server_name(name)?;
-
+    fn servers_from_answers(&self, port: u16, server_name: &ServerName, answers: &[Record]) -> Vec<Server> {
         let mut out = Vec::new();
-        for addr in tokio::net::lookup_host(name).await? {
-            out.push(Server::from_addr(addr, server_name.clone()));
+
+        for answer in answers {
+            let server_id = match answer.rdata() {
+                RecordData::A(data) => ServerID::from(SocketAddr::new(IpAddr::V4(data.addr()), port)),
+                RecordData::AAAA(data) => ServerID::from(SocketAddr::new(IpAddr::V6(data.addr()), port)),
+                RecordData::SRV(data) => ServerID::from((data.target().to_string(), port)),
+                _ => {
+                    tracing::warn!(message = "unexpected record data for answer", answer = ?answer);
+                    continue;
+                }
+            };
+
+            let server = Server::new(server_id, server_name.to_owned());
+            out.push(server);
         }
 
-        Ok(out)
+        out
     }
 
     fn host_and_port(name: &str) -> Result<(&str, u16), MtopError> {
@@ -185,27 +175,26 @@ impl DiscoveryDefault {
             // IPv6 addresses use brackets around them to disambiguate them from a port number.
             // Since we're parsing the host and port, strip the brackets because they aren't
             // needed or valid to include in a TLS ServerName.
-            .map(|(hostname, port)| (hostname.trim_start_matches('[').trim_end_matches(']'), port))
-            .and_then(|(hostname, port)| {
-                port.parse().map(|p| (hostname, p)).map_err(|e| {
+            .map(|(host, port)| (host.trim_start_matches('[').trim_end_matches(']'), port))
+            .and_then(|(host, port)| {
+                port.parse().map(|p| (host, p)).map_err(|e| {
                     MtopError::configuration_cause(format!("unable to parse port number from '{}'", name), e)
                 })
             })
     }
 
-    fn server_name(name: &str) -> Result<ServerName<'static>, MtopError> {
-        Self::host_and_port(name).and_then(|(host, _)| {
-            ServerName::try_from(host)
-                .map(|s| s.to_owned())
-                .map_err(|e| MtopError::configuration_cause(format!("invalid server name '{}'", host), e))
-        })
+    fn server_name(host: &str) -> Result<ServerName<'static>, MtopError> {
+        ServerName::try_from(host)
+            .map(|s| s.to_owned())
+            .map_err(|e| MtopError::configuration_cause(format!("invalid server name '{}'", host), e))
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::ServerID;
+    use super::{Server, ServerID};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    use webpki::types::ServerName;
 
     #[test]
     fn test_server_id_from_ipv4_addr() {
@@ -240,5 +229,39 @@ mod test {
         let pair = ("cache.example.com", 11211);
         let id = ServerID::from(pair);
         assert_eq!("cache.example.com:11211", id.to_string());
+    }
+
+    #[test]
+    fn test_server_resolved_id() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 11211));
+        let id = ServerID::from(addr);
+        let name = ServerName::try_from("cache.example.com").unwrap();
+        let server = Server::new(id, name);
+        assert_eq!("127.0.0.1:11211", server.id().to_string());
+    }
+
+    #[test]
+    fn test_server_resolved_address() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 11211));
+        let id = ServerID::from(addr);
+        let name = ServerName::try_from("cache.example.com").unwrap();
+        let server = Server::new(id, name);
+        assert_eq!("127.0.0.1:11211", server.address());
+    }
+
+    #[test]
+    fn test_server_unresolved_id() {
+        let id = ServerID::from(("cache01.example.com", 11211));
+        let name = ServerName::try_from("cache.example.com").unwrap();
+        let server = Server::new(id, name);
+        assert_eq!("cache01.example.com:11211", server.id().to_string());
+    }
+
+    #[test]
+    fn test_server_unresolved_address() {
+        let id = ServerID::from(("cache01.example.com", 11211));
+        let name = ServerName::try_from("cache.example.com").unwrap();
+        let server = Server::new(id, name);
+        assert_eq!("cache01.example.com:11211", server.address());
     }
 }

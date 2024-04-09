@@ -2,6 +2,7 @@
 
 pub mod bench;
 pub mod check;
+pub mod dns;
 pub mod profile;
 pub mod queue;
 pub mod tracing;

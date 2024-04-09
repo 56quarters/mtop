@@ -8,6 +8,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Name {
     labels: Vec<String>,
+    is_fqdn: bool,
 }
 
 impl Name {
@@ -16,7 +17,10 @@ impl Name {
     const MAX_POINTERS: u32 = 64;
 
     pub fn root() -> Self {
-        Name { labels: Vec::new() }
+        Name {
+            labels: Vec::new(),
+            is_fqdn: true,
+        }
     }
 
     pub fn size(&self) -> u16 {
@@ -24,13 +28,39 @@ impl Name {
     }
 
     pub fn is_root(&self) -> bool {
-        self.labels.is_empty()
+        self.labels.is_empty() && self.is_fqdn
+    }
+
+    pub fn is_fqdn(&self) -> bool {
+        self.is_fqdn
+    }
+
+    pub fn to_fqdn(mut self) -> Self {
+        self.is_fqdn = true;
+        self
+    }
+
+    pub fn append(mut self, other: Name) -> Self {
+        if self.is_fqdn {
+            return self;
+        }
+
+        self.labels.extend(other.labels);
+        Self {
+            labels: self.labels,
+            is_fqdn: other.is_fqdn,
+        }
     }
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
         T: WriteBytesExt,
     {
+        // We convert all incoming Names to fully qualified names. If we missed doing
+        // that, it's a bug and we should panic here. Encoded names all end with the
+        // root so trying to encode something that doesn't makes no sense.
+        assert!(self.is_fqdn, "only fully qualified domains can be encoded");
+
         for label in self.labels.iter() {
             buf.write_u8(label.len() as u8)?;
             buf.write_all(label.as_bytes())?;
@@ -167,7 +197,8 @@ impl Name {
 
 impl Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.", self.labels.join("."))
+        let suffix = if self.is_fqdn { "." } else { "" };
+        write!(f, "{}{}", self.labels.join("."), suffix)
     }
 }
 
@@ -187,13 +218,7 @@ impl FromStr for Name {
             )));
         }
 
-        if !s.ends_with('.') {
-            return Err(MtopError::runtime(format!(
-                "Names must be fully qualified and end with a '.': {}",
-                s
-            )));
-        }
-
+        let is_fqdn = s.ends_with('.');
         let mut labels = Vec::new();
         for label in s.trim_end_matches('.').split('.') {
             let len = label.len();
@@ -227,7 +252,7 @@ impl FromStr for Name {
             labels.push(label.to_lowercase());
         }
 
-        Ok(Name { labels })
+        Ok(Name { labels, is_fqdn })
     }
 }
 
@@ -276,27 +301,120 @@ mod test {
     }
 
     #[test]
-    fn test_name_from_str_error_not_fqdn() {
-        let res = Name::from_str("localhost");
-        assert!(res.is_err());
+    fn test_name_from_str_success_not_fqdn() {
+        let name = Name::from_str("example.com").unwrap();
+        assert!(!name.is_root());
+        assert!(!name.is_fqdn());
     }
 
     #[test]
     fn test_name_from_str_success_fqdn() {
         let name = Name::from_str("example.com.").unwrap();
         assert!(!name.is_root());
+        assert!(name.is_fqdn());
     }
 
     #[test]
     fn test_name_from_str_success_root_empty() {
         let name = Name::from_str("").unwrap();
         assert!(name.is_root());
+        assert!(name.is_fqdn());
     }
 
     #[test]
     fn test_name_from_str_success_root_dot() {
         let name = Name::from_str(".").unwrap();
         assert!(name.is_root());
+        assert!(name.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_to_string_not_fqdn() {
+        let name = Name::from_str("example.com").unwrap();
+        assert_eq!("example.com", name.to_string());
+        assert!(!name.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_to_string_fqdn() {
+        let name = Name::from_str("example.com.").unwrap();
+        assert_eq!("example.com.", name.to_string());
+        assert!(name.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_to_string_root() {
+        let name = Name::root();
+        assert_eq!(".", name.to_string());
+        assert!(name.is_fqdn());
+    }
+
+    #[test]
+    fn test_to_fqdn_not_fqdn() {
+        let name = Name::from_str("example.com").unwrap();
+        assert!(!name.is_fqdn());
+
+        let fqdn = name.to_fqdn();
+        assert!(fqdn.is_fqdn());
+    }
+
+    #[test]
+    fn test_to_fqdn_already_fqdn() {
+        let name = Name::from_str("example.com.").unwrap();
+        assert!(name.is_fqdn());
+
+        let fqdn = name.to_fqdn();
+        assert!(fqdn.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_append_already_fqdn() {
+        let name1 = Name::from_str("example.com.").unwrap();
+        let name2 = Name::from_str("example.net.").unwrap();
+        let combined = name1.clone().append(name2);
+
+        assert_eq!(name1, combined);
+        assert!(combined.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_append_with_non_fqdn() {
+        let name1 = Name::from_str("www").unwrap();
+        let name2 = Name::from_str("example").unwrap();
+        let combined = name1.clone().append(name2);
+
+        assert_eq!(Name::from_str("www.example").unwrap(), combined);
+        assert!(!combined.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_append_with_fqdn() {
+        let name1 = Name::from_str("www").unwrap();
+        let name2 = Name::from_str("example.net.").unwrap();
+        let combined = name1.clone().append(name2);
+
+        assert_eq!(Name::from_str("www.example.net.").unwrap(), combined);
+        assert!(combined.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_append_with_root() {
+        let name = Name::from_str("example.com").unwrap();
+        let combined = name.clone().append(Name::root());
+
+        assert_eq!(Name::from_str("example.com.").unwrap(), combined);
+        assert!(combined.is_fqdn());
+    }
+
+    #[test]
+    fn test_name_append_multiple() {
+        let name1 = Name::from_str("dev").unwrap();
+        let name2 = Name::from_str("www").unwrap();
+        let name3 = Name::from_str("example.com").unwrap();
+
+        let combined = name1.append(name2).append(name3).append(Name::root());
+        assert_eq!(Name::from_str("dev.www.example.com.").unwrap(), combined);
+        assert!(combined.is_fqdn());
     }
 
     #[test]
@@ -341,6 +459,14 @@ mod test {
         );
     }
 
+    #[should_panic]
+    #[test]
+    fn test_name_write_network_bytes_not_fqdn() {
+        let mut cur = Cursor::new(Vec::new());
+        let name = Name::from_str("example.com").unwrap();
+        let _ = name.write_network_bytes(&mut cur);
+    }
+
     #[rustfmt::skip]
     #[test]
     fn test_name_read_network_bytes_no_pointer() {
@@ -354,6 +480,7 @@ mod test {
 
         let name = Name::read_network_bytes(cur).unwrap();
         assert_eq!("example.com.", name.to_string());
+        assert!(name.is_fqdn());
     }
 
     #[rustfmt::skip]
@@ -374,6 +501,7 @@ mod test {
 
         let name = Name::read_network_bytes(cur).unwrap();
         assert_eq!("www.example.com.", name.to_string());
+        assert!(name.is_fqdn());
     }
 
     #[rustfmt::skip]
@@ -397,6 +525,7 @@ mod test {
 
         let name = Name::read_network_bytes(cur).unwrap();
         assert_eq!("dev.www.example.com.", name.to_string());
+        assert!(name.is_fqdn());
     }
 
     #[test]

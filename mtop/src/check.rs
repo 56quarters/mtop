@@ -82,12 +82,7 @@ impl<'a> Checker<'a> {
 
             let dns_time = dns_start.elapsed();
             let conn_start = Instant::now();
-            let mut conn = match self
-                .client
-                .raw_open(&server)
-                .timeout(self.timeout, "client.raw_open")
-                .await
-            {
+            let mut conn = match self.client.raw_open(&server).timeout(self.timeout, "client.raw_open").await {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!(message = "failed to connect to host", host = host, addr = %server.address(), err = %e);
@@ -99,11 +94,7 @@ impl<'a> Checker<'a> {
 
             let conn_time = conn_start.elapsed();
             let set_start = Instant::now();
-            match conn
-                .set(&key, 0, 60, &val)
-                .timeout(self.timeout, "connection.set")
-                .await
-            {
+            match conn.set(&key, 0, 60, &val).timeout(self.timeout, "connection.set").await {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!(message = "failed to set key", host = host, addr = %server.address(), err = %e);

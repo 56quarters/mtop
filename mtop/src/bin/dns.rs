@@ -1,17 +1,16 @@
-use clap::{Args, Parser, Subcommand};
-use mtop_client::dns::{DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
-use mtop_client::Timeout;
+use clap::{Args, Parser, Subcommand, ValueHint};
+use mtop_client::dns::{Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use std::fmt::Write;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::Level;
 
 const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-const DEFAULT_DNS_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
+const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_RECORD_TYPE: RecordType = RecordType::A;
 const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
@@ -20,6 +19,11 @@ const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
 #[derive(Debug, Parser)]
 #[command(name = "dns", version = clap::crate_version!())]
 struct DnsConfig {
+    /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
+    /// (case-insensitive).
+    #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
+    log_level: Level,
+
     #[command(subcommand)]
     mode: Action,
 }
@@ -38,9 +42,10 @@ struct QueryCommand {
     #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
     dns_local: SocketAddr,
 
-    /// DNS server for service discovery in the form 'address:port'
-    #[arg(long, default_value_t = DEFAULT_DNS_SERVER)]
-    dns_server: SocketAddr,
+    /// Path to resolv.conf file for loading DNS configuration information. If this file
+    /// can't be loaded, default values for DNS configuration are used instead.
+    #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    resolv_conf: PathBuf,
 
     /// Timeout for making requests to a DNS server, in seconds.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
@@ -63,6 +68,10 @@ struct QueryCommand {
     /// Domain name to lookup.
     #[arg(required = true)]
     name: String,
+}
+
+fn default_resolv_conf() -> PathBuf {
+    PathBuf::from("/etc/resolv.conf")
 }
 
 /// Read a binary format DNS message from standard input and display it as dig-like text output.
@@ -89,7 +98,8 @@ struct WriteCommand {
 async fn main() -> ExitCode {
     let opts = DnsConfig::parse();
 
-    let console_subscriber = mtop::tracing::console_subscriber(Level::DEBUG).expect("failed to setup console logging");
+    let console_subscriber =
+        mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
     match &opts.mode {
@@ -100,7 +110,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run_query(cmd: &QueryCommand) -> ExitCode {
-    let timeout = Duration::from_secs(cmd.timeout_secs);
+    let client = mtop::dns::new_client(cmd.dns_local, &cmd.resolv_conf).await;
     let name = match Name::from_str(&cmd.name) {
         Ok(n) => n,
         Err(e) => {
@@ -109,15 +119,10 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
         }
     };
 
-    let id = MessageId::random();
-    let msg = Message::new(id, Flags::default().set_query().set_recursion_desired())
-        .add_question(Question::new(name, cmd.rtype).set_qclass(cmd.rclass));
-
-    let client = DnsClient::new(cmd.dns_local, cmd.dns_server);
-    let response = match client.exchange(&msg).timeout(timeout, "client.exchange").await {
+    let response = match client.resolve(name, cmd.rtype, cmd.rclass).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(message = "unable to exchange message", "server" = %cmd.dns_server, err = %e);
+            tracing::error!(message = "unable to perform DNS query", err = %e);
             return ExitCode::FAILURE;
         }
     };

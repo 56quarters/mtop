@@ -3,6 +3,7 @@ mod core;
 mod message;
 mod name;
 mod rdata;
+mod resolv;
 
 pub use crate::dns::client::DnsClient;
 pub use crate::dns::core::{RecordClass, RecordType};
@@ -12,3 +13,4 @@ pub use crate::dns::rdata::{
     RecordData, RecordDataA, RecordDataAAAA, RecordDataCNAME, RecordDataNS, RecordDataSOA, RecordDataSRV,
     RecordDataTXT, RecordDataUnknown,
 };
+pub use resolv::{config, ResolvConf, ResolvConfOptions};
