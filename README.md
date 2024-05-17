@@ -116,10 +116,12 @@ mtop cache01.example.com:11211 cache02.example.com:11211 cache03.example.com:112
 
 ### Connecting to multiple servers with a single DNS name
 
-In this example, a DNS lookup for `memcached.local` returns three DNS `A` records.
+#### A or AAAA
+
+In this example, a DNS `A` lookup for `memcached.local` returns three DNS `A` records.
 
 ```
-dig memcached.local
+dig -t A memcached.local
 ;; QUESTION SECTION:
 ;memcached.local.         IN      A
 
@@ -129,8 +131,34 @@ memcached.local.  0       IN      A       127.0.0.2
 memcached.local.  0       IN      A       127.0.0.1
 ```
 
+`mtop` will connect to all three servers: `127.0.0.1`, `127.0.0.2`, and `127.0.0.3`.
+
 ```
 mtop dns+memcached.local:11211
+```
+
+#### SRV
+
+In this example, a DNS `SRV` lookup for `_memcached._tcp.example.com` returns three DNS `SRV` records.
+
+```
+dig -t SRV _memcached._tcp.example.com
+;; QUESTION SECTION:
+;_memcached._tcp.example.com.        IN      SRV
+
+;; ANSWER SECTION:
+_memcached._tcp.example.com. 300 IN  SRV     100 100 11211 memcached01.example.com.
+_memcached._tcp.example.com. 300 IN  SRV     100 100 11211 memcached02.example.com.
+_memcached._tcp.example.com. 300 IN  SRV     100 100 11211 memcached03.example.com.
+```
+
+`mtop` will connect to all three servers, resolving their names to `A` or `AAAA` records
+when connections are established: `memcached01.example.com.`, `memcached02.example.com.`,
+and `memcached03.example.com.`. Note that the port number from the `SRV` records are ignored,
+only the port from the command line argument is used.
+
+```
+mtop dnssrv+_memcached._tcp.example.com:11211
 ```
 
 ### Connecting to a port-forwarded Kubernetes pod
