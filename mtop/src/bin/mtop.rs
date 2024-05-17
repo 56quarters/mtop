@@ -1,7 +1,6 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{Theme, TAILWIND};
-use mtop_client::dns::DnsClient;
 use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig,
     Timeout,
@@ -19,7 +18,6 @@ use tracing::{Instrument, Level};
 use webpki::types::{InvalidDnsNameError, ServerName};
 
 const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-const DEFAULT_DNS_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_THEME: Theme = TAILWIND;
 // Update interval of more than a second to minimize the chance that stats returned by the
@@ -41,9 +39,10 @@ struct MtopConfig {
     #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
     dns_local: SocketAddr,
 
-    /// DNS server for service discovery in the form 'address:port'
-    #[arg(long, default_value_t = DEFAULT_DNS_SERVER)]
-    dns_server: SocketAddr,
+    /// Path to resolv.conf file for loading DNS configuration information. If this file
+    /// can't be loaded, default values for DNS configuration are used instead.
+    #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    resolv_conf: PathBuf,
 
     /// Timeout for connecting to Memcached and fetching statistics, in seconds.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
@@ -51,7 +50,7 @@ struct MtopConfig {
 
     /// File to log errors to since they cannot be logged to the console. If the path is not
     /// writable, mtop will not start.
-    #[arg(long, default_value=default_log_file().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, default_value = default_log_file().into_os_string(), value_hint = ValueHint::FilePath)]
     log_file: PathBuf,
 
     /// Color scheme to use for the UI. Available options are "ansi", "material", and "tailwind".
@@ -94,6 +93,10 @@ struct MtopConfig {
     hosts: Vec<String>,
 }
 
+fn default_resolv_conf() -> PathBuf {
+    PathBuf::from("/etc/resolv.conf")
+}
+
 fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {
     ServerName::try_from(s).map(|n| n.to_owned())
 }
@@ -122,7 +125,8 @@ async fn main() -> ExitCode {
 
     let timeout = Duration::from_secs(opts.timeout_secs);
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
-    let resolver = DiscoveryDefault::new(DnsClient::new(opts.dns_local, opts.dns_server));
+    let dns_client = mtop::dns::new_client(opts.dns_local, &opts.resolv_conf).await;
+    let resolver = DiscoveryDefault::new(dns_client);
 
     let servers = match expand_hosts(&opts.hosts, &resolver, timeout).await {
         Ok(v) => v,

@@ -179,12 +179,7 @@ impl MemcachedPool {
 
     async fn connect(&self, server: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
-            let name = self
-                .config
-                .tls
-                .server_name
-                .clone()
-                .unwrap_or_else(|| server.server_name());
+            let name = self.config.tls.server_name.clone().unwrap_or_else(|| server.server_name());
             tracing::debug!(message = "using server name for TLS validation", server_name = ?name);
             tls_connect(server.address(), name, cfg.clone()).await
         } else {
@@ -272,9 +267,11 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{MemcachedPool, PoolConfig, PooledMemcached, Server};
+    use super::{MemcachedPool, PoolConfig, PooledMemcached};
     use crate::core::{ErrorKind, Memcached, MtopError};
+    use crate::discovery::{Server, ServerID};
     use std::io::{self, Cursor};
+    use std::net::SocketAddr;
     use tokio::runtime::Handle;
     use webpki::types::ServerName;
 
@@ -292,10 +289,8 @@ mod test {
     async fn test_get_new_connection() {
         let cfg = PoolConfig::default();
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
-        let server = Server::from_addr(
-            "127.0.0.1:11211".parse().unwrap(),
-            ServerName::try_from("localhost").unwrap().to_owned(),
-        );
+        let id = ServerID::from("127.0.0.1:11211".parse::<SocketAddr>().unwrap());
+        let server = Server::new(id, ServerName::try_from("localhost").unwrap().to_owned());
 
         let connect = async {
             Ok(client!(
@@ -313,10 +308,9 @@ mod test {
     async fn test_get_existing_connection() {
         let cfg = PoolConfig::default();
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
-        let server = Server::from_addr(
-            "127.0.0.1:11211".parse().unwrap(),
-            ServerName::try_from("localhost").unwrap().to_owned(),
-        );
+
+        let id = ServerID::from("127.0.0.1:11211".parse::<SocketAddr>().unwrap());
+        let server = Server::new(id, ServerName::try_from("localhost").unwrap().to_owned());
 
         pool.put(PooledMemcached {
             host: server.clone(),
@@ -339,10 +333,8 @@ mod test {
         };
 
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
-        let server = Server::from_addr(
-            "127.0.0.1:11211".parse().unwrap(),
-            ServerName::try_from("localhost").unwrap().to_owned(),
-        );
+        let id = ServerID::from("127.0.0.1:11211".parse::<SocketAddr>().unwrap());
+        let server = Server::new(id, ServerName::try_from("localhost").unwrap().to_owned());
 
         pool.put(PooledMemcached {
             host: server.clone(),
@@ -363,10 +355,8 @@ mod test {
         let cfg = PoolConfig::default();
         let pool = MemcachedPool::new(Handle::current(), cfg).await.unwrap();
 
-        let server = Server::from_addr(
-            "127.0.0.1:11211".parse().unwrap(),
-            ServerName::try_from("localhost").unwrap().to_owned(),
-        );
+        let id = ServerID::from("127.0.0.1:11211".parse::<SocketAddr>().unwrap());
+        let server = Server::new(id, ServerName::try_from("localhost").unwrap().to_owned());
 
         let connect = async { Err(MtopError::from(io::Error::new(io::ErrorKind::TimedOut, "timeout"))) };
         let res = pool.get_with_connect(&server, connect).await;

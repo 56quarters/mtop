@@ -1,44 +1,79 @@
 use crate::core::MtopError;
-use crate::dns::core::RecordType;
+use crate::dns::core::{RecordClass, RecordType};
 use crate::dns::message::{Flags, Message, MessageId, Question};
 use crate::dns::name::Name;
+use crate::dns::resolv::ResolvConf;
+use crate::timeout::Timeout;
 use std::io::Cursor;
 use std::net::SocketAddr;
-use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::UdpSocket;
 
 const DEFAULT_RECV_BUF: usize = 512;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DnsClient {
     local: SocketAddr,
-    server: SocketAddr,
+    config: ResolvConf,
+    server: AtomicUsize,
 }
 
 impl DnsClient {
-    pub fn new(local: SocketAddr, server: SocketAddr) -> Self {
-        Self { local, server }
+    /// Create a new DnsClient that will use a local address to open UDP or TCP
+    /// connections and behavior based on a resolv.conf configuration file.
+    pub fn new(local: SocketAddr, config: ResolvConf) -> Self {
+        Self {
+            local,
+            config,
+            server: AtomicUsize::new(0),
+        }
     }
 
-    pub async fn exchange(&self, msg: &Message) -> Result<Message, MtopError> {
-        let id = msg.id();
-        let sock = self.connect_udp().await?;
-        self.send_udp(&sock, msg).await?;
-        self.recv_udp(&sock, id).await
-    }
-
-    pub async fn resolve_srv(&self, name: &str) -> Result<Message, MtopError> {
-        let n = Name::from_str(name)?;
+    /// Perform a DNS lookup with the configured nameservers.
+    ///
+    /// Timeouts and network errors will result in up to one additional attempt
+    /// to perform a DNS lookup when using the default configuration.
+    pub async fn resolve(&self, name: Name, rtype: RecordType, rclass: RecordClass) -> Result<Message, MtopError> {
+        let full = name.to_fqdn();
         let id = MessageId::random();
         let flags = Flags::default().set_recursion_desired();
-        let msg = Message::new(id, flags).add_question(Question::new(n, RecordType::SRV));
+        let question = Question::new(full, rtype).set_qclass(rclass);
+        let message = Message::new(id, flags).add_question(question);
 
-        self.exchange(&msg).await
+        let mut attempt = 0;
+        loop {
+            match self.exchange(&message, usize::from(attempt)).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    if attempt + 1 >= self.config.options.attempts {
+                        return Err(e);
+                    }
+
+                    tracing::debug!(message = "retrying failed query", attempt = attempt + 1, max_attempts = self.config.options.attempts, err = %e);
+                    attempt += 1;
+                }
+            }
+        }
+    }
+    async fn exchange(&self, msg: &Message, attempt: usize) -> Result<Message, MtopError> {
+        let id = msg.id();
+        let server = self.nameserver(attempt);
+
+        // Wrap creating the socket, sending, and receiving in an async block
+        // so that we can apply a single timeout to all operations and ensure
+        // we have access to the nameserver to make the timeout message useful.
+        async {
+            let sock = self.connect_udp(server).await?;
+            self.send_udp(&sock, msg).await?;
+            self.recv_udp(&sock, id).await
+        }
+        .timeout(self.config.options.timeout, format!("client.exchange {}", server))
+        .await
     }
 
-    async fn connect_udp(&self) -> Result<UdpSocket, MtopError> {
+    async fn connect_udp(&self, server: SocketAddr) -> Result<UdpSocket, MtopError> {
         let sock = UdpSocket::bind(&self.local).await?;
-        sock.connect(&self.server).await?;
+        sock.connect(server).await?;
         Ok(sock)
     }
 
@@ -57,6 +92,26 @@ impl DnsClient {
             if msg.id() == id {
                 return Ok(msg);
             }
+        }
+    }
+
+    fn nameserver(&self, attempt: usize) -> SocketAddr {
+        let idx = if self.config.options.rotate {
+            self.server.fetch_add(1, Ordering::Relaxed)
+        } else {
+            attempt
+        };
+
+        self.config.nameservers[idx % self.config.nameservers.len()]
+    }
+}
+
+impl Clone for DnsClient {
+    fn clone(&self) -> Self {
+        Self {
+            local: self.local,
+            config: self.config.clone(),
+            server: AtomicUsize::new(0),
         }
     }
 }

@@ -206,10 +206,7 @@ impl TryFrom<&HashMap<String, String>> for Slabs {
         // $active_slabs + 1.
         let mut ids = BTreeSet::new();
         for k in value.keys() {
-            let key_id: Option<u64> = k
-                .split_once(':')
-                .map(|(raw, _rest)| raw)
-                .and_then(|raw| raw.parse().ok());
+            let key_id: Option<u64> = k.split_once(':').map(|(raw, _rest)| raw).and_then(|raw| raw.parse().ok());
 
             if let Some(id) = key_id {
                 ids.insert(id);
@@ -1287,9 +1284,7 @@ mod test {
     macro_rules! test_store_command_success {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("STORED\r\n");
-            let res = client
-                .$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes())
-                .await;
+            let res = client.$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes()).await;
 
             assert!(res.is_ok());
             let bytes = rx.recv().await.unwrap();
@@ -1301,9 +1296,7 @@ mod test {
     macro_rules! test_store_command_error {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("NOT_STORED\r\n");
-            let res = client
-                .$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes())
-                .await;
+            let res = client.$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes()).await;
 
             assert!(res.is_err());
             let err = res.unwrap_err();

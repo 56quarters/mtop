@@ -2,7 +2,6 @@ use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Checker, TimingBundle};
 use mtop::profile::Profiler;
-use mtop_client::dns::DnsClient;
 use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, Meta, MtopError, PoolConfig, SelectorRendezvous, Server,
     TLSConfig, Timeout, Value,
@@ -20,7 +19,6 @@ use tracing::{Instrument, Level};
 use webpki::types::{InvalidDnsNameError, ServerName};
 
 const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-const DEFAULT_DNS_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_HOST: &str = "localhost:11211";
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -39,9 +37,10 @@ struct McConfig {
     #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
     dns_local: SocketAddr,
 
-    /// DNS server for service discovery in the form 'address:port'
-    #[arg(long, default_value_t = DEFAULT_DNS_SERVER)]
-    dns_server: SocketAddr,
+    /// Path to resolv.conf file for loading DNS configuration information. If this file
+    /// can't be loaded, default values for DNS configuration are used instead.
+    #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    resolv_conf: PathBuf,
 
     /// Memcached host to connect to in the form 'hostname:port'.
     #[arg(long, default_value_t = DEFAULT_HOST.to_owned(), value_hint = ValueHint::Hostname)]
@@ -86,6 +85,10 @@ struct McConfig {
 
     #[command(subcommand)]
     mode: Action,
+}
+
+fn default_resolv_conf() -> PathBuf {
+    PathBuf::from("/etc/resolv.conf")
 }
 
 fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {
@@ -296,8 +299,9 @@ async fn main() -> ExitCode {
         mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
+    let dns_client = mtop::dns::new_client(opts.dns_local, &opts.resolv_conf).await;
+    let resolver = DiscoveryDefault::new(dns_client);
     let timeout = Duration::from_secs(opts.timeout_secs);
-    let resolver = DiscoveryDefault::new(DnsClient::new(opts.dns_local, opts.dns_server));
     let servers = match resolver
         .resolve_by_proto(&opts.host)
         .timeout(timeout, "resolver.resolve_by_proto")

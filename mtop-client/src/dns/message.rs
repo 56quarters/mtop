@@ -240,18 +240,12 @@ impl Header {
 pub struct Flags(u16);
 
 impl Flags {
-    const MASK_QR: u16 = 0b1000_0000_0000_0000;
-    // query / response
-    const MASK_OP: u16 = 0b0111_1000_0000_0000;
-    // 4 bits, op code
-    const MASK_AA: u16 = 0b0000_0100_0000_0000;
-    // authoritative answer
-    const MASK_TC: u16 = 0b0000_0010_0000_0000;
-    // truncated
-    const MASK_RD: u16 = 0b0000_0001_0000_0000;
-    // recursion desired
-    const MASK_RA: u16 = 0b0000_0000_1000_0000;
-    // recursion available
+    const MASK_QR: u16 = 0b1000_0000_0000_0000; // query / response
+    const MASK_OP: u16 = 0b0111_1000_0000_0000; // 4 bits, op code
+    const MASK_AA: u16 = 0b0000_0100_0000_0000; // authoritative answer
+    const MASK_TC: u16 = 0b0000_0010_0000_0000; // truncated
+    const MASK_RD: u16 = 0b0000_0001_0000_0000; // recursion desired
+    const MASK_RA: u16 = 0b0000_0000_1000_0000; // recursion available
     const MASK_RC: u16 = 0b0000_0000_0000_1111; // 4 bits, response code
 
     const OFFSET_QR: usize = 15;
