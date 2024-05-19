@@ -264,7 +264,7 @@ mod test {
 
     #[test]
     fn test_name_from_str_max_length() {
-        let parts = vec![
+        let parts = [
             "a".repeat(Name::MAX_LABEL_LENGTH),
             "b".repeat(Name::MAX_LABEL_LENGTH),
             "c".repeat(Name::MAX_LABEL_LENGTH),
@@ -277,7 +277,7 @@ mod test {
 
     #[test]
     fn test_name_from_str_error_max_label() {
-        let parts = vec!["a".repeat(Name::MAX_LABEL_LENGTH + 1), "com.".to_owned()];
+        let parts = ["a".repeat(Name::MAX_LABEL_LENGTH + 1), "com.".to_owned()];
         let res = Name::from_str(&parts.join("."));
         assert!(res.is_err());
     }
