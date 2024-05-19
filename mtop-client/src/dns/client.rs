@@ -7,7 +7,8 @@ use crate::timeout::Timeout;
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::net::{TcpStream, UdpSocket};
 
 const DEFAULT_RECV_BUF: usize = 512;
 
@@ -62,13 +63,27 @@ impl DnsClient {
         // Wrap creating the socket, sending, and receiving in an async block
         // so that we can apply a single timeout to all operations and ensure
         // we have access to the nameserver to make the timeout message useful.
-        async {
+        let res = async {
             let sock = self.connect_udp(server).await?;
             self.send_udp(&sock, msg).await?;
             self.recv_udp(&sock, id).await
         }
-        .timeout(self.config.options.timeout, format!("client.exchange {}", server))
-        .await
+        .timeout(self.config.options.timeout, format!("client.exchange udp://{}", server))
+        .await?;
+
+        // If the UDP response indicates the message was truncated, we discard
+        // it and repeat the query using TCP.
+        if res.flags().is_truncated() {
+            tracing::debug!(message = "UDP response truncated, repeating with TCP", flags = ?res.flags(), server = %server);
+            async {
+                let mut sock = self.connect_tcp(server).await?;
+                self.send_recv_tcp(&mut sock, msg).await
+            }
+            .timeout(self.config.options.timeout, format!("client.exchange tcp://{}", server))
+            .await
+        } else {
+            Ok(res)
+        }
     }
 
     async fn connect_udp(&self, server: SocketAddr) -> Result<UdpSocket, MtopError> {
@@ -92,6 +107,43 @@ impl DnsClient {
             if msg.id() == id {
                 return Ok(msg);
             }
+        }
+    }
+
+    async fn connect_tcp(&self, server: SocketAddr) -> Result<TcpStream, MtopError> {
+        Ok(TcpStream::connect(server).await?)
+    }
+
+    async fn send_recv_tcp(&self, stream: &mut TcpStream, msg: &Message) -> Result<Message, MtopError> {
+        let mut buf = Vec::with_capacity(DEFAULT_RECV_BUF);
+        let (read, write) = stream.split();
+        let mut read = BufReader::new(read);
+        let mut write = BufWriter::new(write);
+
+        // Write the message to a local buffer and then send it, prefixed
+        // with the size of the message.
+        msg.write_network_bytes(&mut buf)?;
+        write.write_u16(buf.len() as u16).await?;
+        write.write_all(&buf).await?;
+        write.flush().await?;
+
+        // Read the prefixed size of the response and then read exactly that
+        // many bytes into our buffer.
+        let sz = read.read_u16().await?;
+        buf.clear();
+        buf.resize(usize::from(sz), 0);
+        read.read_exact(&mut buf).await?;
+
+        let mut cur = Cursor::new(buf);
+        let res = Message::read_network_bytes(&mut cur)?;
+        if res.id() != msg.id() {
+            Err(MtopError::runtime(format!(
+                "unexpected DNS MessageId. expected {}, got {}",
+                msg.id(),
+                res.id()
+            )))
+        } else {
+            Ok(res)
         }
     }
 
