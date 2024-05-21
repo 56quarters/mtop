@@ -57,6 +57,7 @@ impl DnsClient {
             }
         }
     }
+
     async fn exchange(&self, msg: &Message, attempt: usize) -> Result<Message, MtopError> {
         let server = self.nameserver(attempt);
 
