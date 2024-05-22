@@ -1,10 +1,8 @@
 # Changelog
 
-## v0.10.0 - unreleased
+## v0.10.0 - 2024-05-21
 
-- Add support for discovering hosts using DNS `SRV` records. #133 #131 #136
-- Add support for reading DNS configuration from system `/etc/resolv.conf`
-  files. #134
+- Add support for discovering hosts using DNS `SRV` records. #133 #131 #134 #136 #137
 - Use a shorter TTL for entries written via `mc bench`. #130
 
 ## v0.9.0 - 2024-02-12
