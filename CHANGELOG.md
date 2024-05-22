@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.10.1 - 2024-05-21
+
+- Add `dns` binary to Docker image. #139
+
 ## v0.10.0 - 2024-05-21
 
 - Add support for discovering hosts using DNS `SRV` records. #133 #131 #134 #136 #137

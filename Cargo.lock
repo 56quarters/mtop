@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "mtop"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "clap",
  "crossterm",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "mtop-client"
-version = "0.9.0"
+version = "0.10.1"
 dependencies = [
  "byteorder",
  "pin-project-lite",
