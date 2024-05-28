@@ -21,7 +21,7 @@ pub enum RecordData {
 }
 
 impl RecordData {
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> usize {
         match self {
             Self::A(rd) => rd.size(),
             Self::NS(rd) => rd.size(),
@@ -100,7 +100,7 @@ impl RecordDataA {
         self.0
     }
 
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> usize {
         4
     }
 
@@ -139,7 +139,7 @@ impl RecordDataNS {
         &self.0
     }
 
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> usize {
         self.0.size()
     }
 
@@ -176,7 +176,7 @@ impl RecordDataCNAME {
         &self.0
     }
 
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> usize {
         self.0.size()
     }
 
@@ -252,7 +252,7 @@ impl RecordDataSOA {
         self.minimum
     }
 
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> usize {
         self.mname.size() + self.rname.size() + (4 * 5)
     }
 
@@ -300,8 +300,8 @@ impl Display for RecordDataSOA {
 pub struct RecordDataTXT(Vec<Vec<u8>>);
 
 impl RecordDataTXT {
-    const MAX_LENGTH: usize = 255;
-    const MAX_TOTAL_SIZE: usize = 65535;
+    const MAX_LENGTH: usize = 65535;
+    const MAX_SEGMENT_LENGTH: usize = 255;
 
     pub fn new<I, B>(items: I) -> Result<Self, MtopError>
     where
@@ -313,20 +313,20 @@ impl RecordDataTXT {
 
         for txt in items {
             let bytes = txt.into();
-            if bytes.len() > Self::MAX_LENGTH {
+            if bytes.len() > Self::MAX_SEGMENT_LENGTH {
                 return Err(MtopError::runtime(format!(
                     "TXT record segment too long; {} bytes, max {} bytes",
                     bytes.len(),
-                    Self::MAX_LENGTH
+                    Self::MAX_SEGMENT_LENGTH
                 )));
             }
 
             total += bytes.len();
-            if total > Self::MAX_TOTAL_SIZE {
+            if total > Self::MAX_LENGTH {
                 return Err(MtopError::runtime(format!(
                     "TXT record too long; {} bytes, max {} bytes",
                     total,
-                    Self::MAX_TOTAL_SIZE
+                    Self::MAX_LENGTH
                 )));
             }
 
@@ -340,8 +340,8 @@ impl RecordDataTXT {
         &self.0
     }
 
-    pub fn size(&self) -> u16 {
-        (self.0.iter().map(|v| v.len()).sum::<usize>() + self.0.len()) as u16
+    pub fn size(&self) -> usize {
+        self.0.iter().map(|v| v.len()).sum::<usize>() + self.0.len()
     }
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
@@ -360,22 +360,23 @@ impl RecordDataTXT {
     where
         T: ReadBytesExt + Seek,
     {
+        let rdata_len = usize::from(rdata_len);
         let mut all = Vec::new();
-
         let mut consumed = 0;
+
         while consumed < rdata_len {
             let len = buf.read_u8()?;
-            if len as u16 + consumed > rdata_len {
+            if usize::from(len) + consumed > rdata_len {
                 return Err(MtopError::runtime(format!(
                     "text for RecordDataTXT exceeds rdata size; len: {}, consumed: {}, rdata: {}",
                     len, consumed, rdata_len
                 )));
             }
 
-            let mut txt = Vec::new();
-            let mut handle = buf.take(len as u64);
+            let mut txt = Vec::with_capacity(usize::from(len));
+            let mut handle = buf.take(u64::from(len));
             let n = handle.read_to_end(&mut txt)?;
-            if n != len as usize {
+            if n != usize::from(len) {
                 return Err(MtopError::runtime(format!(
                     "short read for RecordDataTXT text; expected {}, got {}",
                     len, n
@@ -383,7 +384,7 @@ impl RecordDataTXT {
             }
 
             all.push(txt);
-            consumed += n as u16 + 1;
+            consumed += n + 1;
             buf = handle.into_inner();
         }
 
@@ -417,7 +418,7 @@ impl RecordDataAAAA {
         self.0
     }
 
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> usize {
         16
     }
 
@@ -478,7 +479,7 @@ impl RecordDataSRV {
         &self.target
     }
 
-    pub fn size(&self) -> u16 {
+    pub fn size(&self) -> usize {
         (2 * 3) + self.target.size()
     }
 
@@ -515,22 +516,22 @@ impl Display for RecordDataSRV {
 pub struct RecordDataUnknown(Vec<u8>);
 
 impl RecordDataUnknown {
-    const MAX_SIZE: usize = 65535;
+    const MAX_LENGTH: usize = 65535;
 
     pub fn new(bytes: Vec<u8>) -> Result<Self, MtopError> {
-        if bytes.len() > Self::MAX_SIZE {
+        if bytes.len() > Self::MAX_LENGTH {
             Err(MtopError::runtime(format!(
                 "record data too long; {} bytes, max {} bytes",
                 bytes.len(),
-                Self::MAX_SIZE
+                Self::MAX_LENGTH
             )))
         } else {
             Ok(Self(bytes))
         }
     }
 
-    pub fn size(&self) -> u16 {
-        self.0.len() as u16
+    pub fn size(&self) -> usize {
+        self.0.len()
     }
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
@@ -545,9 +546,9 @@ impl RecordDataUnknown {
     where
         T: ReadBytesExt + Seek,
     {
-        let mut bytes = Vec::new();
-        let n = buf.take(rdata_len as u64).read_to_end(&mut bytes)?;
-        if n != rdata_len as usize {
+        let mut bytes = Vec::with_capacity(usize::from(rdata_len));
+        let n = buf.take(u64::from(rdata_len)).read_to_end(&mut bytes)?;
+        if n != usize::from(rdata_len) {
             return Err(MtopError::runtime(format!(
                 "short read for RecordDataUnknown; expected {} got {}",
                 rdata_len, n

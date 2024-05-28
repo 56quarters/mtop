@@ -23,8 +23,8 @@ impl Name {
         }
     }
 
-    pub fn size(&self) -> u16 {
-        (self.labels.iter().map(|l| l.len()).sum::<usize>() + self.labels.len()) as u16 + 1
+    pub fn size(&self) -> usize {
+        (self.labels.iter().map(|l| l.len()).sum::<usize>() + self.labels.len()) + 1
     }
 
     pub fn is_root(&self) -> bool {

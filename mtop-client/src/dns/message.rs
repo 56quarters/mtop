@@ -61,18 +61,8 @@ impl Message {
         self.id
     }
 
-    pub fn set_id(mut self, id: MessageId) -> Self {
-        self.id = id;
-        self
-    }
-
     pub fn flags(&self) -> Flags {
         self.flags
-    }
-
-    pub fn set_flags(mut self, flags: Flags) -> Self {
-        self.flags = flags;
-        self
     }
 
     pub fn questions(&self) -> &[Question] {
@@ -534,11 +524,15 @@ impl Record {
     where
         T: WriteBytesExt,
     {
+        // It shouldn't be possible to overflow u16 so if we do, that's a bug.
+        let size = self.rdata.size();
+        assert!(size <= usize::from(u16::MAX), "rdata length exceeds {} bytes", u16::MAX);
+
         self.name.write_network_bytes(&mut buf)?;
         buf.write_u16::<NetworkEndian>(self.rtype.into())?;
         buf.write_u16::<NetworkEndian>(self.rclass.into())?;
         buf.write_u32::<NetworkEndian>(self.ttl)?;
-        buf.write_u16::<NetworkEndian>(self.rdata.size())?;
+        buf.write_u16::<NetworkEndian>(size as u16)?;
         self.rdata.write_network_bytes(&mut buf)
     }
 
