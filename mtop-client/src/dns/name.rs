@@ -154,14 +154,14 @@ impl Name {
         // Only six bits of the length are supposed to be used to encode the
         // length of a label so 63 is the max length but double check just in
         // case one of the pointer bits was set for some reason.
-        if len as usize > Self::MAX_LABEL_LENGTH {
+        if usize::from(len) > Self::MAX_LABEL_LENGTH {
             return Err(MtopError::runtime(format!(
                 "max size for label would be exceeded reading {} bytes",
                 len,
             )));
         }
 
-        if len as usize + out.len() + 1 > Self::MAX_LENGTH {
+        if usize::from(len) + out.len() + 1 > Self::MAX_LENGTH {
             return Err(MtopError::runtime(format!(
                 "max size for name would be exceeded adding {} bytes to {}",
                 len,
@@ -169,9 +169,9 @@ impl Name {
             )));
         }
 
-        let mut handle = buf.take(len as u64);
+        let mut handle = buf.take(u64::from(len));
         let n = handle.read_to_end(out)?;
-        if n != len as usize {
+        if n != usize::from(len) {
             return Err(MtopError::runtime(format!(
                 "short read for Name segment. expected {} got {}",
                 len, n
@@ -190,8 +190,8 @@ impl Name {
     }
 
     fn get_offset(len: u8, next: u8) -> u64 {
-        let pointer = ((len & 0b0011_1111) as u16) << 8;
-        (pointer | (next as u16)) as u64
+        let pointer = u16::from(len & 0b0011_1111) << 8;
+        u64::from(pointer | u16::from(next))
     }
 }
 
