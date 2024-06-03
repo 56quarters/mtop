@@ -321,7 +321,10 @@ impl RecordDataTXT {
                 )));
             }
 
-            total += bytes.len();
+            // One extra byte for each segment to store the length as a u8. This
+            // ensures that we don't allow the creation of RecordDataTXT objects
+            // that can't actually be serialized because they're too large.
+            total += 1 + bytes.len();
             if total > Self::MAX_LENGTH {
                 return Err(MtopError::runtime(format!(
                     "TXT record too long; {} bytes, max {} bytes",
@@ -341,6 +344,8 @@ impl RecordDataTXT {
     }
 
     pub fn size(&self) -> usize {
+        // Total size is the size in bytes of each segment plus number of segments
+        // since the length of each is stored as a single u8
         self.0.iter().map(|v| v.len()).sum::<usize>() + self.0.len()
     }
 
@@ -750,6 +755,28 @@ mod test {
         assert_eq!(300, rdata.retry());
         assert_eq!(3600, rdata.expire());
         assert_eq!(600, rdata.minimum());
+    }
+
+    #[test]
+    fn test_record_data_txt_new_exceeds_max_size() {
+        // Max total size of TXT record data is 65535 bytes. 255 bytes * 256 segments is
+        // 65280 bytes. BUT this doesn't account for the extra byte needed for each segment
+        // to store the length of the segment. In reality, we need 256 bytes for each segment
+        // so having 256 bytes * 256 segments should be an error.
+        let segment = "a".repeat(255);
+        let data: Vec<String> = (0..256).into_iter().map(|_| segment.clone()).collect();
+        let res = RecordDataTXT::new(data);
+
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_record_data_txt_new_success() {
+        let segment = "a".repeat(255);
+        let data: Vec<String> = (0..255).into_iter().map(|_| segment.clone()).collect();
+        let txt = RecordDataTXT::new(data).unwrap();
+
+        assert_eq!(65280, txt.size());
     }
 
     #[test]
