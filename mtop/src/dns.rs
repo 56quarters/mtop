@@ -7,10 +7,10 @@ use tokio::fs::File;
 
 const DEFAULT_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 
-/// Load configuration from the provided resolv.conf file and crated a new DnsClient
+/// Load configuration from the provided resolv.conf file and create a new DnsClient
 /// based on it. If the resolv.conf file cannot be opened or is malformed, default
 /// configuration values will be used. See `man 5 resolv.conf` for more information.
-pub async fn new_client<P>(local: SocketAddr, resolv: P) -> DnsClient
+pub async fn new_client<P>(resolv: P) -> DnsClient
 where
     P: AsRef<Path> + fmt::Debug,
 {
@@ -29,7 +29,7 @@ where
         cfg.nameservers.push(DEFAULT_SERVER);
     }
 
-    DnsClient::new(local, cfg)
+    DnsClient::new(cfg)
 }
 
 async fn load_config<P>(resolv: P) -> Result<ResolvConf, MtopError>

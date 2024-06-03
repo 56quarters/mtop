@@ -361,6 +361,7 @@ pub enum ResponseCode {
     NxRrSet = 8,
     NotAuth = 9,
     NotZone = 10,
+    BadVersion = 16,
 }
 
 impl Default for ResponseCode {
@@ -385,6 +386,7 @@ impl TryFrom<u16> for ResponseCode {
             8 => Ok(ResponseCode::NxRrSet),
             9 => Ok(ResponseCode::NotAuth),
             10 => Ok(ResponseCode::NotZone),
+            16 => Ok(ResponseCode::BadVersion),
             _ => Err(MtopError::runtime(format!(
                 "invalid or unsupported response code {}",
                 value
@@ -524,9 +526,14 @@ impl Record {
     where
         T: WriteBytesExt,
     {
-        // It shouldn't be possible to overflow u16 so if we do, that's a bug.
+        // It shouldn't be possible for rdata to overflow u16 so if we do, that's a bug.
         let size = self.rdata.size();
-        assert!(size <= usize::from(u16::MAX), "rdata length exceeds {} bytes", u16::MAX);
+        assert!(
+            size <= usize::from(u16::MAX),
+            "rdata length of {} bytes exceeds max of {} bytes",
+            size,
+            u16::MAX
+        );
 
         self.name.write_network_bytes(&mut buf)?;
         buf.write_u16::<NetworkEndian>(self.rtype.into())?;

@@ -1,9 +1,8 @@
 use crate::core::MtopError;
 use crate::dns::core::RecordType;
 use crate::dns::name::Name;
-use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use std::fmt;
-use std::fmt::Display;
+use byteorder::{BigEndian, NetworkEndian, ReadBytesExt, WriteBytesExt};
+use std::fmt::{self, Display, Formatter};
 use std::io::{Read, Seek};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -16,7 +15,7 @@ pub enum RecordData {
     TXT(RecordDataTXT),
     AAAA(RecordDataAAAA),
     SRV(RecordDataSRV),
-    OPT(RecordDataUnknown),
+    OPT(RecordDataOpt),
     Unknown(RecordDataUnknown),
 }
 
@@ -64,7 +63,7 @@ impl RecordData {
             RecordType::TXT => Ok(RecordData::TXT(RecordDataTXT::read_network_bytes(rdata_len, buf)?)),
             RecordType::AAAA => Ok(RecordData::AAAA(RecordDataAAAA::read_network_bytes(buf)?)),
             RecordType::SRV => Ok(RecordData::SRV(RecordDataSRV::read_network_bytes(buf)?)),
-            RecordType::OPT => Ok(RecordData::OPT(RecordDataUnknown::read_network_bytes(rdata_len, buf)?)),
+            RecordType::OPT => Ok(RecordData::OPT(RecordDataOpt::read_network_bytes(rdata_len, buf)?)),
             RecordType::Unknown(_) => Ok(RecordData::Unknown(RecordDataUnknown::read_network_bytes(
                 rdata_len, buf,
             )?)),
@@ -404,7 +403,7 @@ impl Display for RecordDataTXT {
             // a string but don't return an error or panic if there's invalid UTF-8. We
             // also escape any double quotes within the string since we use those to
             // delimit the string.
-            write!(f, "\"{}\"", String::from_utf8_lossy(txt).replace('\"', "\\\""))?
+            write!(f, "\"{}\"", String::from_utf8_lossy(txt).replace('\"', "\\\""))?;
         }
 
         Ok(())
@@ -518,6 +517,138 @@ impl Display for RecordDataSRV {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RecordDataOptPair {
+    code: u16,
+    data: Vec<u8>,
+}
+
+impl RecordDataOptPair {
+    const MAX_DATA_LENGTH: usize = 65535;
+
+    pub fn new(code: u16, data: Vec<u8>) -> Result<Self, MtopError> {
+        if data.len() > Self::MAX_DATA_LENGTH {
+            Err(MtopError::runtime(format!(
+                "OPT attribute data too long; {} bytes, max {} bytes",
+                data.len(),
+                Self::MAX_DATA_LENGTH,
+            )))
+        } else {
+            Ok(Self { code, data })
+        }
+    }
+
+    pub fn code(&self) -> u16 {
+        self.code
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    fn size(&self) -> usize {
+        2 + 2 + self.data.len() // code + data length + data
+    }
+
+    fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
+    where
+        T: WriteBytesExt,
+    {
+        buf.write_u16::<BigEndian>(self.code)?;
+        buf.write_u16::<BigEndian>(self.data.len() as u16)?;
+        Ok(buf.write_all(&self.data)?)
+    }
+
+    fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
+    where
+        T: ReadBytesExt + Seek,
+    {
+        let code = buf.read_u16::<BigEndian>()?;
+        let data_len = buf.read_u16::<BigEndian>()?;
+        let mut data = Vec::with_capacity(usize::from(data_len));
+        buf.take(u64::from(data_len)).read_to_end(&mut data)?;
+        Ok(Self { code, data })
+    }
+}
+
+impl Display for RecordDataOptPair {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code, String::from_utf8_lossy(&self.data))
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RecordDataOpt {
+    options: Vec<RecordDataOptPair>,
+}
+
+impl RecordDataOpt {
+    const MAX_LENGTH: usize = 65535;
+
+    pub fn new(options: Vec<RecordDataOptPair>) -> Result<Self, MtopError> {
+        let size = Self::options_size(&options);
+        if size > Self::MAX_LENGTH {
+            Err(MtopError::runtime(format!(
+                "OPT record data too long; {} bytes, max {} bytes",
+                size,
+                Self::MAX_LENGTH,
+            )))
+        } else {
+            Ok(Self { options })
+        }
+    }
+
+    fn options_size(opts: &[RecordDataOptPair]) -> usize {
+        opts.iter().map(|o| o.size()).sum()
+    }
+
+    pub fn options(&self) -> &[RecordDataOptPair] {
+        &self.options
+    }
+
+    pub fn size(&self) -> usize {
+        Self::options_size(&self.options)
+    }
+
+    pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
+    where
+        T: WriteBytesExt,
+    {
+        for opt in self.options.iter() {
+            opt.write_network_bytes(&mut buf)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn read_network_bytes<T>(rdata_len: u16, mut buf: T) -> Result<Self, MtopError>
+    where
+        T: ReadBytesExt + Seek,
+    {
+        let rdata_len = usize::from(rdata_len);
+        let mut options = Vec::new();
+        let mut consumed = 0;
+
+        while consumed < rdata_len {
+            let opt = RecordDataOptPair::read_network_bytes(&mut buf)?;
+            consumed += opt.size();
+            options.push(opt);
+        }
+
+        Ok(Self { options })
+    }
+}
+
+impl Display for RecordDataOpt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for opt in self.options.iter() {
+            write!(f, "{}", opt)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RecordDataUnknown(Vec<u8>);
 
 impl RecordDataUnknown {
@@ -554,13 +685,13 @@ impl RecordDataUnknown {
         let mut bytes = Vec::with_capacity(usize::from(rdata_len));
         let n = buf.take(u64::from(rdata_len)).read_to_end(&mut bytes)?;
         if n != usize::from(rdata_len) {
-            return Err(MtopError::runtime(format!(
+            Err(MtopError::runtime(format!(
                 "short read for RecordDataUnknown; expected {} got {}",
                 rdata_len, n
-            )));
+            )))
+        } else {
+            Self::new(bytes)
         }
-
-        Self::new(bytes)
     }
 }
 
@@ -573,9 +704,11 @@ impl Display for RecordDataUnknown {
 #[cfg(test)]
 mod test {
     use super::{
-        RecordDataA, RecordDataAAAA, RecordDataCNAME, RecordDataNS, RecordDataSOA, RecordDataSRV, RecordDataTXT,
+        RecordDataA, RecordDataAAAA, RecordDataCNAME, RecordDataNS, RecordDataOptPair, RecordDataSOA, RecordDataSRV,
+        RecordDataTXT,
     };
     use crate::dns::name::Name;
+    use crate::dns::RecordDataOpt;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
@@ -888,5 +1021,76 @@ mod test {
         assert_eq!(20, rdata.weight());
         assert_eq!(11211, rdata.port());
         assert_eq!("_cache.example.com.", rdata.target().to_string());
+    }
+
+    #[test]
+    fn test_record_data_opt_pair_new_exceeds_max_size() {
+        let res = RecordDataOptPair::new(0, "a".repeat(65536).into_bytes());
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_record_data_opt_pair_new_success() {
+        let opt = RecordDataOptPair::new(0, "a".repeat(100).into_bytes()).unwrap();
+        assert_eq!(0, opt.code());
+        assert_eq!(2 + 2 + 100, opt.size());
+    }
+
+    #[test]
+    fn test_record_data_opt_new_exceeds_max_size() {
+        let opts = vec![
+            RecordDataOptPair::new(0, "a".repeat(65535).into_bytes()).unwrap(),
+            RecordDataOptPair::new(1, "a".repeat(65535).into_bytes()).unwrap(),
+        ];
+
+        let res = RecordDataOpt::new(opts);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_record_data_opt_new_success() {
+        let opts = vec![
+            RecordDataOptPair::new(0, "a".repeat(100).into_bytes()).unwrap(),
+            RecordDataOptPair::new(1, "a".repeat(100).into_bytes()).unwrap(),
+        ];
+
+        let res = RecordDataOpt::new(opts).unwrap();
+        assert_eq!(2 * (2 + 2 + 100), res.size());
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_record_data_opt_write_network_bytes() {
+        let opt = RecordDataOpt::new(vec![RecordDataOptPair::new(1, "abc".as_bytes().to_vec()).unwrap()]).unwrap();
+        let mut cur = Cursor::new(Vec::new());
+        opt.write_network_bytes(&mut cur).unwrap();
+        let buf = cur.into_inner();
+
+        assert_eq!(
+            vec![
+                0, 1,       // code
+                0, 3,       // size
+                97, 98, 99, // data
+            ],
+            buf,
+        )
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_record_data_opt_read_network_bytes() {
+        let cur = Cursor::new(vec![
+            0, 1,       // code
+            0, 3,       // size
+            97, 98, 99, // data
+        ]);
+
+        let rdata = RecordDataOpt::read_network_bytes(7, cur).unwrap();
+        let options = rdata.options();
+
+        assert_eq!(
+            RecordDataOptPair::new(1, "abc".as_bytes().to_vec()).unwrap(),
+            options[0]
+        );
     }
 }
