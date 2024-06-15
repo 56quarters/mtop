@@ -115,6 +115,8 @@ impl DiscoveryDefault {
             Ok(self.resolve_a_aaaa(name.trim_start_matches(DNS_A_PREFIX)).await?)
         } else if name.starts_with(DNS_SRV_PREFIX) {
             Ok(self.resolve_srv(name.trim_start_matches(DNS_SRV_PREFIX)).await?)
+        } else if let Ok(addr) = name.parse::<SocketAddr>() {
+            Ok(self.resolv_socket_addr(name, addr)?)
         } else {
             Ok(self.resolve_a_aaaa(name).await?.pop().into_iter().collect())
         }
@@ -141,6 +143,12 @@ impl DiscoveryDefault {
         out.extend(self.servers_from_answers(port, &server_name, res.answers()));
 
         Ok(out)
+    }
+
+    fn resolv_socket_addr(&self, name: &str, addr: SocketAddr) -> Result<Vec<Server>, MtopError> {
+        let (host, _port) = Self::host_and_port(name)?;
+        let server_name = Self::server_name(host)?;
+        Ok(vec![Server::new(ServerID::from(addr), server_name)])
     }
 
     fn servers_from_answers(&self, port: u16, server_name: &ServerName, answers: &[Record]) -> Vec<Server> {
