@@ -82,18 +82,26 @@ impl Name {
             // offsets and read the labels for the name into `parts`. After resolving
             // all pointers and reading labels, reset the stream back to immediately
             // after the pointer.
-            if Self::is_offset(len) {
+            if Self::is_compressed_label(len) {
                 let offset = Self::get_offset(len, buf.read_u8()?);
                 let current = buf.stream_position()?;
                 Self::read_offset_into(&mut buf, offset, &mut parts)?;
                 buf.seek(SeekFrom::Start(current))?;
                 break;
-            }
-
-            // If the length is a length, read the next label (segment) of the name breaking
-            // the loop once we read the "root" label (`.`) signified by a length of 0.
-            if Self::read_label_into(&mut buf, len, &mut parts)? {
-                break;
+            } else if Self::is_standard_label(len) {
+                // If the length is a length, read the next label (segment) of the name
+                // breaking the loop once we read the "root" label (`.`) signified by a
+                // length of 0.
+                if Self::read_label_into(&mut buf, len, &mut parts)? {
+                    break;
+                }
+            } else {
+                // Binary labels are deprecated (RFC 6891) and there are (currently) no other
+                // types of labels that we should expect. Return an error to make this obvious.
+                return Err(MtopError::runtime(format!(
+                    "unsupported Name label type found: {}",
+                    len
+                )));
             }
         }
 
@@ -121,22 +129,25 @@ impl Name {
             }
 
             let len = buf.read_u8()?;
-            if Self::is_offset(len) {
+            if Self::is_compressed_label(len) {
                 // If this length is actually a pointer to another name or label within
                 // the message, seek there to read it on the next iteration. We don't
                 // bother keeping track of where to seek back to after resolving it because
                 // this is unnecessary since we're already resolving a pointer if this
-                // method is being called from `read_ne_bytes`.
+                // method is being called from `read_network_bytes`.
                 let offset = Self::get_offset(len, buf.read_u8()?);
                 buf.seek(SeekFrom::Start(offset))?;
                 pointers += 1;
-                continue;
-            }
-
-            // If the length is a length, read the next label (segment) of the name
-            // returning once we read the "root" label (`.`) signified by a length of 0.
-            if Self::read_label_into(&mut buf, len, out)? {
-                return Ok(());
+            } else if Self::is_standard_label(len) {
+                // If the length is a length, read the next label (segment) of the name
+                // returning once we read the "root" label (`.`) signified by a length of 0.
+                if Self::read_label_into(&mut buf, len, out)? {
+                    return Ok(());
+                }
+            } else {
+                // Binary labels are deprecated (RFC 6891) and there are (currently) no other
+                // types of labels that we should expect. Return an error to make this obvious.
+                return Err(MtopError::runtime(format!("unsupported Name label type: {}", len)));
             }
         }
     }
@@ -182,7 +193,11 @@ impl Name {
         Ok(false)
     }
 
-    fn is_offset(len: u8) -> bool {
+    fn is_standard_label(len: u8) -> bool {
+        len & 0b1100_0000 == 0
+    }
+
+    fn is_compressed_label(len: u8) -> bool {
         // The top two bits of the length byte of a name label (section) are used
         // to indicate the name is actually an offset in the DNS message to a previous
         // name to avoid duplicating the same names over and over.
@@ -212,7 +227,7 @@ impl FromStr for Name {
 
         if s.len() > Self::MAX_LENGTH {
             return Err(MtopError::runtime(format!(
-                "Names are limited to {} bytes max: {}",
+                "Name too long; max {} bytes, got {}",
                 Self::MAX_LENGTH,
                 s
             )));
@@ -224,7 +239,7 @@ impl FromStr for Name {
             let len = label.len();
             if len > Self::MAX_LABEL_LENGTH {
                 return Err(MtopError::runtime(format!(
-                    "Name labels are limited to {} bytes max: {}",
+                    "Name label too long; max {} bytes, got {}",
                     Self::MAX_LABEL_LENGTH,
                     label
                 )));
@@ -233,17 +248,17 @@ impl FromStr for Name {
             for (i, c) in label.char_indices() {
                 if i == 0 && !c.is_ascii_alphanumeric() && c != '_' {
                     return Err(MtopError::runtime(format!(
-                        "label must begin with ASCII letter, number, or underscore: {}",
+                        "Name label must begin with ASCII letter, number, or underscore; got {}",
                         label
                     )));
                 } else if i == len - 1 && !c.is_ascii_alphanumeric() {
                     return Err(MtopError::runtime(format!(
-                        "label must end with ASCII letter or number: {}",
+                        "Name label must end with ASCII letter or number; got {}",
                         label
                     )));
                 } else if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
                     return Err(MtopError::runtime(format!(
-                        "label must be ASCII letter, number, hyphen, or underscore: {}",
+                        "Name label must be ASCII letter, number, hyphen, or underscore; got {}",
                         label
                     )));
                 }
@@ -350,7 +365,7 @@ mod test {
     }
 
     #[test]
-    fn test_to_fqdn_not_fqdn() {
+    fn test_name_to_fqdn_not_fqdn() {
         let name = Name::from_str("example.com").unwrap();
         assert!(!name.is_fqdn());
 
@@ -359,7 +374,7 @@ mod test {
     }
 
     #[test]
-    fn test_to_fqdn_already_fqdn() {
+    fn test_name_to_fqdn_already_fqdn() {
         let name = Name::from_str("example.com.").unwrap();
         assert!(name.is_fqdn());
 
@@ -481,6 +496,37 @@ mod test {
         let name = Name::read_network_bytes(cur).unwrap();
         assert_eq!("example.com.", name.to_string());
         assert!(name.is_fqdn());
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_name_read_network_bytes_bad_label_type() {
+        let cur = Cursor::new(vec![
+            64, // length, deprecated binary labels from RFC 2673
+            0,  // count of binary labels
+        ]);
+
+        let res = Name::read_network_bytes(cur);
+        assert!(res.is_err());
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_name_read_network_bytes_bad_label_type_after_single_pointer() {
+        let mut cur = Cursor::new(vec![
+            7,                                // length
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            64,                               // length, deprecated binary labels from RFC 2673
+            0,                                // count of binary labels
+            3,                                // length
+            119, 119, 119,                    // "www"
+            192, 0,                           // pointer to offset 0
+        ]);
+
+        cur.set_position(10);
+
+        let res = Name::read_network_bytes(cur);
+        assert!(res.is_err());
     }
 
     #[rustfmt::skip]

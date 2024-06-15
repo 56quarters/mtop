@@ -164,14 +164,11 @@ impl OptionsToken {
     const MAX_ATTEMPTS: u8 = 5;
 
     fn parse(line: &str, val: &str, max: u8) -> Result<u8, MtopError> {
-        let n = val
+        let n: u8 = val
             .parse()
             .map_err(|e| MtopError::configuration_cause(format!("unable to parse {} value '{}'", line, val), e))?;
-        if n > max {
-            Ok(max)
-        } else {
-            Ok(n)
-        }
+
+        Ok(n.min(max))
     }
 }
 

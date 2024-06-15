@@ -8,7 +8,6 @@ use mtop_client::{
 };
 use std::fs::File;
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -18,7 +17,6 @@ use tokio::runtime::Handle;
 use tracing::{Instrument, Level};
 use webpki::types::{InvalidDnsNameError, ServerName};
 
-const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_HOST: &str = "localhost:11211";
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -32,10 +30,6 @@ struct McConfig {
     /// (case-insensitive).
     #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
     log_level: Level,
-
-    /// Local address for DNS requests for service discovery in the form 'address:port'
-    #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
-    dns_local: SocketAddr,
 
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
@@ -299,7 +293,7 @@ async fn main() -> ExitCode {
         mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
-    let dns_client = mtop::dns::new_client(opts.dns_local, &opts.resolv_conf).await;
+    let dns_client = mtop::dns::new_client(&opts.resolv_conf).await;
     let resolver = DiscoveryDefault::new(dns_client);
     let timeout = Duration::from_secs(opts.timeout_secs);
     let servers = match resolver

@@ -2,16 +2,13 @@ use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop_client::dns::{Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use std::fmt::Write;
 use std::io::Cursor;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::Level;
+use tracing::{Instrument, Level};
 
-const DEFAULT_DNS_LOCAL: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
-const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_RECORD_TYPE: RecordType = RecordType::A;
 const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
 
@@ -38,18 +35,10 @@ enum Action {
 /// Perform a DNS query and display the result as dig-like text output.
 #[derive(Debug, Args)]
 struct QueryCommand {
-    /// Local address for DNS requests for service discovery in the form 'address:port'
-    #[arg(long, default_value_t = DEFAULT_DNS_LOCAL)]
-    dns_local: SocketAddr,
-
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
     #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
-
-    /// Timeout for making requests to a DNS server, in seconds.
-    #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
-    timeout_secs: u64,
 
     /// Output query results in raw binary format instead of human-readable
     /// text. NOTE, this may break your terminal and so should probably be piped
@@ -110,7 +99,9 @@ async fn main() -> ExitCode {
 }
 
 async fn run_query(cmd: &QueryCommand) -> ExitCode {
-    let client = mtop::dns::new_client(cmd.dns_local, &cmd.resolv_conf).await;
+    let client = mtop::dns::new_client(&cmd.resolv_conf)
+        .instrument(tracing::span!(Level::INFO, "dns.new_client"))
+        .await;
     let name = match Name::from_str(&cmd.name) {
         Ok(n) => n,
         Err(e) => {
@@ -119,7 +110,11 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
         }
     };
 
-    let response = match client.resolve(name, cmd.rtype, cmd.rclass).await {
+    let response = match client
+        .resolve(name, cmd.rtype, cmd.rclass)
+        .instrument(tracing::span!(Level::INFO, "client.resolve"))
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(message = "unable to perform DNS query", err = %e);

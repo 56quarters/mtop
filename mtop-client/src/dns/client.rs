@@ -15,17 +15,15 @@ const DEFAULT_MESSAGE_BUFFER: usize = 512;
 
 #[derive(Debug)]
 pub struct DnsClient {
-    local: SocketAddr,
     config: ResolvConf,
     server: AtomicUsize,
 }
 
 impl DnsClient {
-    /// Create a new DnsClient that will use a local address to open UDP or TCP
-    /// connections and behavior based on a resolv.conf configuration file.
-    pub fn new(local: SocketAddr, config: ResolvConf) -> Self {
+    /// Create a new DnsClient that will resolve names using UDP or TCP connections
+    /// and behavior based on a resolv.conf configuration file.
+    pub fn new(config: ResolvConf) -> Self {
         Self {
-            local,
             config,
             server: AtomicUsize::new(0),
         }
@@ -84,7 +82,8 @@ impl DnsClient {
     }
 
     async fn udp_client(&self, server: SocketAddr) -> Result<UdpClient<UdpSocket>, MtopError> {
-        let sock = UdpSocket::bind(&self.local).await?;
+        let local = if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+        let sock = UdpSocket::bind(local).await?;
         sock.connect(server).await?;
         Ok(UdpClient::new(sock, DEFAULT_MESSAGE_BUFFER))
     }
@@ -109,7 +108,6 @@ impl DnsClient {
 impl Clone for DnsClient {
     fn clone(&self) -> Self {
         Self {
-            local: self.local,
             config: self.config.clone(),
             server: AtomicUsize::new(0),
         }
@@ -160,7 +158,7 @@ where
         let res = Message::read_network_bytes(&mut cur)?;
         if res.id() != msg.id() {
             Err(MtopError::runtime(format!(
-                "unexpected DNS MessageId. expected {}, got {}",
+                "unexpected DNS MessageId; expected {}, got {}",
                 msg.id(),
                 res.id()
             )))
