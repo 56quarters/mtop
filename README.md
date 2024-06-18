@@ -223,5 +223,5 @@ Steps for releasing new versions of `mtop` are described below.
 * Update local `master` from Github remote. Make sure to build once with updated versions to update `Cargo.lock`.
 * Create but do not push a tag of the format `v1.2.3`
 * Run `cargo package` and `cargo publish` for the `mtop-client` crate.
-* Run `cargo pacakge` and `cargo publish` for the `mtop` crate.
+* Run `cargo package` and `cargo publish` for the `mtop` crate.
 * Push tags to all remotes `git push --tags origin`, `git push --tags github`
