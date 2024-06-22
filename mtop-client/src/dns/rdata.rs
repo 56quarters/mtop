@@ -897,7 +897,7 @@ mod test {
         // to store the length of the segment. In reality, we need 256 bytes for each segment
         // so having 256 bytes * 256 segments should be an error.
         let segment = "a".repeat(255);
-        let data: Vec<String> = (0..256).into_iter().map(|_| segment.clone()).collect();
+        let data: Vec<String> = (0..256).map(|_| segment.clone()).collect();
         let res = RecordDataTXT::new(data);
 
         assert!(res.is_err());
@@ -906,7 +906,7 @@ mod test {
     #[test]
     fn test_record_data_txt_new_success() {
         let segment = "a".repeat(255);
-        let data: Vec<String> = (0..255).into_iter().map(|_| segment.clone()).collect();
+        let data: Vec<String> = (0..255).map(|_| segment.clone()).collect();
         let txt = RecordDataTXT::new(data).unwrap();
 
         assert_eq!(65280, txt.size());
