@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
+use mtop::profile;
 use mtop_client::dns::{Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use std::fmt::Write;
 use std::io::Cursor;
@@ -20,6 +21,11 @@ struct DnsConfig {
     /// (case-insensitive).
     #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
     log_level: Level,
+
+    /// Output pprof protobuf profile data to this file if profiling support was enabled
+    /// at build time.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    profile_output: Option<PathBuf>,
 
     #[command(subcommand)]
     mode: Action,
@@ -91,11 +97,18 @@ async fn main() -> ExitCode {
         mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
-    match &opts.mode {
+    let profiling = profile::Writer::default();
+    let code = match &opts.mode {
         Action::Query(cmd) => run_query(cmd).await,
         Action::Read(cmd) => run_read(cmd).await,
         Action::Write(cmd) => run_write(cmd).await,
+    };
+
+    if let Some(p) = opts.profile_output {
+        profiling.finish(p);
     }
+
+    code
 }
 
 async fn run_query(cmd: &QueryCommand) -> ExitCode {
