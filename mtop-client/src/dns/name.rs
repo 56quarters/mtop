@@ -226,7 +226,7 @@ impl FromStr for Name {
         }
 
         if s.len() > Self::MAX_LENGTH {
-            return Err(MtopError::runtime(format!(
+            return Err(MtopError::configuration(format!(
                 "Name too long; max {} bytes, got {}",
                 Self::MAX_LENGTH,
                 s
@@ -240,7 +240,7 @@ impl FromStr for Name {
         for label in s.trim_end_matches('.').split('.') {
             let len = label.len();
             if len > Self::MAX_LABEL_LENGTH {
-                return Err(MtopError::runtime(format!(
+                return Err(MtopError::configuration(format!(
                     "Name label too long; max {} bytes, got {}",
                     Self::MAX_LABEL_LENGTH,
                     label
@@ -251,17 +251,17 @@ impl FromStr for Name {
 
             for (i, c) in label.char_indices() {
                 if i == 0 && !c.is_ascii_alphanumeric() && c != '_' {
-                    return Err(MtopError::runtime(format!(
+                    return Err(MtopError::configuration(format!(
                         "Name label must begin with ASCII letter, number, or underscore; got {}",
                         label
                     )));
                 } else if i == len - 1 && !c.is_ascii_alphanumeric() {
-                    return Err(MtopError::runtime(format!(
+                    return Err(MtopError::configuration(format!(
                         "Name label must end with ASCII letter or number; got {}",
                         label
                     )));
                 } else if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
-                    return Err(MtopError::runtime(format!(
+                    return Err(MtopError::configuration(format!(
                         "Name label must be ASCII letter, number, hyphen, or underscore; got {}",
                         label
                     )));
