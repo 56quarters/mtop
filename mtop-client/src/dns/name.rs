@@ -234,7 +234,9 @@ impl FromStr for Name {
         }
 
         let is_fqdn = s.ends_with('.');
+        let mut buf = String::new();
         let mut labels = Vec::new();
+
         for label in s.trim_end_matches('.').split('.') {
             let len = label.len();
             if len > Self::MAX_LABEL_LENGTH {
@@ -244,6 +246,8 @@ impl FromStr for Name {
                     label
                 )));
             }
+
+            buf.clear();
 
             for (i, c) in label.char_indices() {
                 if i == 0 && !c.is_ascii_alphanumeric() && c != '_' {
@@ -261,10 +265,16 @@ impl FromStr for Name {
                         "Name label must be ASCII letter, number, hyphen, or underscore; got {}",
                         label
                     )));
+                } else {
+                    // If this character isn't otherwise invalid, convert it to lowercase
+                    // and add it to our buffer which will be added to the list of labels
+                    // for this Name. This avoids an extra iteration through the Name to
+                    // convert to lowercase afterward.
+                    buf.push(c.to_ascii_lowercase());
                 }
             }
 
-            labels.push(label.to_lowercase());
+            labels.push(buf.clone());
         }
 
         Ok(Name { labels, is_fqdn })
