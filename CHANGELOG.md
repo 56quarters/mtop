@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.11.0 - 2024-06-24
+
+- Add `dns ping` subcommand to `dns` binary to repeatedly perform DNS queries. #149
+- Performance improvements when parsing DNS names. #148
+- Add support for profiling to `dns` binary. #147
+- Don't try to resolve IP address hostnames. #144
+- Fix off-by-one error when validating DNS `TXT` record lengths. #142
+
 ## v0.10.1 - 2024-05-21
 
 - Add `dns` binary to Docker image. #139
