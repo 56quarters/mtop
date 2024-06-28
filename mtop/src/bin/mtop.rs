@@ -2,8 +2,8 @@ use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{Theme, TAILWIND};
 use mtop_client::{
-    DiscoveryDefault, MemcachedClient, MemcachedPool, MtopError, PoolConfig, SelectorRendezvous, Server, TLSConfig,
-    Timeout,
+    DiscoveryDefault, MemcachedClient, MemcachedPool, MemcachedPoolConfig, MtopError, SelectorRendezvous, Server,
+    Timeout, TlsConfig,
 };
 use std::env;
 use std::path::PathBuf;
@@ -223,7 +223,7 @@ async fn expand_hosts(
 }
 
 async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
-    let tls = TLSConfig {
+    let tls_config = TlsConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
         cert_path: opts.tls_cert.clone(),
@@ -231,19 +231,14 @@ async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedCl
         server_name: opts.tls_server_name.clone(),
     };
 
-    MemcachedPool::new(
-        Handle::current(),
-        PoolConfig {
-            tls,
-            check_on_put: true,
-            ..Default::default()
-        },
-    )
-    .await
-    .map(|pool| {
-        let selector = SelectorRendezvous::new(servers.to_vec());
-        MemcachedClient::new(Handle::current(), selector, pool)
-    })
+    let pool_config = MemcachedPoolConfig {
+        tls: tls_config,
+        ..Default::default()
+    };
+
+    let selector = SelectorRendezvous::new(servers.to_vec());
+    let pool = MemcachedPool::new(Handle::current(), pool_config).await?;
+    Ok(MemcachedClient::new(Handle::current(), selector, pool))
 }
 
 #[derive(Debug)]

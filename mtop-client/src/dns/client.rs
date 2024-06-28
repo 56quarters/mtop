@@ -2,30 +2,85 @@ use crate::core::MtopError;
 use crate::dns::core::{RecordClass, RecordType};
 use crate::dns::message::{Flags, Message, MessageId, Question};
 use crate::dns::name::Name;
-use crate::dns::resolv::ResolvConf;
+use crate::net::tcp_connect;
+use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig};
 use crate::timeout::Timeout;
 use std::io::{self, Cursor};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::{TcpStream, UdpSocket};
 
+const DEFAULT_NAMESERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_MESSAGE_BUFFER: usize = 512;
+
+/// Configuration for creating a new `DnsClient` instance.
+#[derive(Debug, Clone)]
+pub struct DnsClientConfig {
+    /// One or more DNS nameservers to use for resolution. These servers will be tried
+    /// in order for each resolution unless `rotate` is set.
+    pub nameservers: Vec<SocketAddr>,
+
+    /// Timeout for each resolution. This timeout is applied to each attempt and so a
+    /// single call to `DnsClient::resolve` may take longer based on the value of `attempts`.
+    pub timeout: Duration,
+
+    /// Number of attempts to make performing a resolution for a single name. Note that
+    /// any response from a DNS server counts as "success". Only timeout or network errors
+    /// will trigger retries.
+    pub attempts: u8,
+
+    /// If true, `nameservers` will be round-robin load balanced for each resolution. If false
+    /// the nameservers are tried in-order for each resolution.
+    pub rotate: bool,
+
+    /// Max number of open sockets or connections to each for each nameserver. Default is
+    /// to keep one open socket or connection per nameserver. Set to 0 to disable this
+    /// behavior.
+    pub pool_max_idle: u64,
+}
+
+impl Default for DnsClientConfig {
+    fn default() -> Self {
+        // Default values picked based on `man 5 resolv.conf` when relevant.
+        Self {
+            nameservers: vec![DEFAULT_NAMESERVER],
+            timeout: Duration::from_secs(5),
+            attempts: 2,
+            rotate: false,
+            pool_max_idle: 1,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct DnsClient {
-    config: ResolvConf,
-    server: AtomicUsize,
+    config: DnsClientConfig,
+    server_idx: AtomicUsize,
+    udp_pool: ClientPool<SocketAddr, UdpClient<UdpSocket>, UdpFactory>,
+    tcp_pool: ClientPool<SocketAddr, TcpClient<ReadHalf<TcpStream>, WriteHalf<TcpStream>>, TcpFactory>,
 }
 
 impl DnsClient {
     /// Create a new DnsClient that will resolve names using UDP or TCP connections
     /// and behavior based on a resolv.conf configuration file.
-    pub fn new(config: ResolvConf) -> Self {
+    pub fn new(config: DnsClientConfig) -> Self {
+        let udp_config = ClientPoolConfig {
+            name: "dns-udp".to_owned(),
+            max_idle: config.pool_max_idle,
+        };
+
+        let tcp_config = ClientPoolConfig {
+            name: "dns-tcp".to_owned(),
+            max_idle: config.pool_max_idle,
+        };
+
         Self {
             config,
-            server: AtomicUsize::new(0),
+            server_idx: AtomicUsize::new(0),
+            udp_pool: ClientPool::new(udp_config, UdpFactory),
+            tcp_pool: ClientPool::new(tcp_config, TcpFactory),
         }
     }
 
@@ -45,11 +100,11 @@ impl DnsClient {
             match self.exchange(&message, usize::from(attempt)).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    if attempt + 1 >= self.config.options.attempts {
+                    if attempt + 1 >= self.config.attempts {
                         return Err(e);
                     }
 
-                    tracing::debug!(message = "retrying failed query", attempt = attempt + 1, max_attempts = self.config.options.attempts, err = %e);
+                    tracing::debug!(message = "retrying failed query", attempt = attempt + 1, max_attempts = self.config.attempts, err = %e);
                     attempt += 1;
                 }
             }
@@ -60,10 +115,15 @@ impl DnsClient {
         let server = self.nameserver(attempt);
 
         let res = async {
-            let client = self.udp_client(server).await?;
-            client.exchange(msg).await
+            let client = self.udp_pool.get(&server).await?;
+            let res = client.exchange(msg).await;
+            if res.is_ok() {
+                self.udp_pool.put(client).await;
+            }
+
+            res
         }
-        .timeout(self.config.options.timeout, format!("client.exchange udp://{}", server))
+        .timeout(self.config.timeout, format!("client.exchange udp://{}", server))
         .await?;
 
         // If the UDP response indicates the message was truncated, we discard
@@ -71,32 +131,24 @@ impl DnsClient {
         if res.flags().is_truncated() {
             tracing::debug!(message = "UDP response truncated, retrying with TCP", flags = ?res.flags(), server = %server);
             async {
-                let mut client = self.tcp_client(server).await?;
-                client.exchange(msg).await
+                let mut client = self.tcp_pool.get(&server).await?;
+                let res = client.exchange(msg).await;
+                if res.is_ok() {
+                    self.tcp_pool.put(client).await;
+                }
+
+                res
             }
-            .timeout(self.config.options.timeout, format!("client.exchange tcp://{}", server))
+            .timeout(self.config.timeout, format!("client.exchange tcp://{}", server))
             .await
         } else {
             Ok(res)
         }
     }
 
-    async fn udp_client(&self, server: SocketAddr) -> Result<UdpClient<UdpSocket>, MtopError> {
-        let local = if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
-        let sock = UdpSocket::bind(local).await?;
-        sock.connect(server).await?;
-        Ok(UdpClient::new(sock, DEFAULT_MESSAGE_BUFFER))
-    }
-
-    async fn tcp_client(&self, server: SocketAddr) -> Result<TcpClient<OwnedReadHalf, OwnedWriteHalf>, MtopError> {
-        let stream = TcpStream::connect(server).await?;
-        let (read, write) = stream.into_split();
-        Ok(TcpClient::new(read, write, DEFAULT_MESSAGE_BUFFER))
-    }
-
     fn nameserver(&self, attempt: usize) -> SocketAddr {
-        let idx = if self.config.options.rotate {
-            self.server.fetch_add(1, Ordering::Relaxed)
+        let idx = if self.config.rotate {
+            self.server_idx.fetch_add(1, Ordering::Relaxed)
         } else {
             attempt
         };
@@ -105,15 +157,12 @@ impl DnsClient {
     }
 }
 
-impl Clone for DnsClient {
-    fn clone(&self) -> Self {
-        Self {
-            config: self.config.clone(),
-            server: AtomicUsize::new(0),
-        }
-    }
-}
-
+/// Client for sending and receiving DNS messages over read and write streams,
+/// presumably a TCP connection. Messages are sent with a two byte prefix that
+/// indicates the size of the message. Responses are expected to have the same
+/// prefix. The message ID of responses is checked to ensure it matches the request
+/// ID. If it does not, an error is returned.
+#[derive(Debug)]
 struct TcpClient<R, W>
 where
     R: AsyncRead + Unpin + Send + Sync + 'static,
@@ -168,6 +217,11 @@ where
     }
 }
 
+/// Client for sending and receiving DNS messages over a datagram socket,
+/// presumably UDP. The message ID of responses is checked to ensure it matches
+/// the request ID. If it does not, the response is discarded and the client
+/// will wait for another response until it gets one with a matching ID.
+#[derive(Debug)]
 struct UdpClient<T>
 where
     T: AsyncDatagram + Unpin + Send + Sync + 'static,
@@ -203,6 +257,7 @@ where
     }
 }
 
+/// Trait to represent a UDP socket for easier testing.
 trait AsyncDatagram {
     async fn send(&self, buf: &[u8]) -> io::Result<usize>;
     async fn recv(&self, buf: &mut [u8]) -> io::Result<usize>;
@@ -215,6 +270,35 @@ impl AsyncDatagram for UdpSocket {
 
     async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         UdpSocket::recv(self, buf).await
+    }
+}
+
+/// Implementation of `ClientFactory` for creating concrete `UdpClient` instances
+/// that use UDP sockets.
+#[derive(Debug, Clone, Default)]
+struct UdpFactory;
+
+impl ClientFactory<SocketAddr, UdpClient<UdpSocket>> for UdpFactory {
+    async fn make(&self, address: &SocketAddr) -> Result<UdpClient<UdpSocket>, MtopError> {
+        let local = if address.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+        let sock = UdpSocket::bind(local).await?;
+        sock.connect(address).await?;
+        Ok(UdpClient::new(sock, DEFAULT_MESSAGE_BUFFER))
+    }
+}
+
+/// Implementation of `ClientFactory` for creating concrete `TcpClient` instances
+/// that uses a split TCP socket.
+#[derive(Debug, Clone, Default)]
+struct TcpFactory;
+
+impl ClientFactory<SocketAddr, TcpClient<ReadHalf<TcpStream>, WriteHalf<TcpStream>>> for TcpFactory {
+    async fn make(
+        &self,
+        address: &SocketAddr,
+    ) -> Result<TcpClient<ReadHalf<TcpStream>, WriteHalf<TcpStream>>, MtopError> {
+        let (read, write) = tcp_connect(address).await?;
+        Ok(TcpClient::new(read, write, DEFAULT_MESSAGE_BUFFER))
     }
 }
 

@@ -20,22 +20,11 @@ pub struct ResolvConf {
 /// Options to change the behavior of a DNS client based on a resolv.conf file.
 ///
 /// Note that only a subset of options are supported.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct ResolvConfOptions {
-    pub timeout: Duration,
-    pub attempts: u8,
-    pub rotate: bool,
-}
-
-impl Default for ResolvConfOptions {
-    fn default() -> Self {
-        // Defaults picked based on `man 5 resolv.conf`
-        Self {
-            timeout: Duration::from_secs(5),
-            attempts: 2,
-            rotate: false,
-        }
-    }
+    pub timeout: Option<Duration>,
+    pub attempts: Option<u8>,
+    pub rotate: Option<bool>,
 }
 
 /// Read settings for a DNS client from a resolv.conf configuration file.
@@ -71,13 +60,13 @@ where
                 for opt in parse_options(parts) {
                     match opt {
                         OptionsToken::Timeout(t) => {
-                            conf.options.timeout = Duration::from_secs(u64::from(t));
+                            conf.options.timeout = Some(Duration::from_secs(u64::from(t)));
                         }
                         OptionsToken::Attempts(n) => {
-                            conf.options.attempts = n;
+                            conf.options.attempts = Some(n);
                         }
                         OptionsToken::Rotate => {
-                            conf.options.rotate = true;
+                            conf.options.rotate = Some(true);
                         }
                     }
                 }
@@ -330,9 +319,9 @@ mod test {
                 "127.0.0.55:53".parse().unwrap(),
             ],
             options: ResolvConfOptions {
-                timeout: Duration::from_secs(10),
-                attempts: 5,
-                rotate: true,
+                timeout: Some(Duration::from_secs(10)),
+                attempts: Some(5),
+                rotate: Some(true),
             },
         };
 

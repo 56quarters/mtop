@@ -1,22 +1,97 @@
-use crate::core::{Key, Meta, MtopError, SlabItems, Slabs, Stats, Value};
+use crate::core::{Key, Memcached, Meta, MtopError, SlabItems, Slabs, Stats, Value};
 use crate::discovery::{Server, ServerID};
-use crate::pool::{MemcachedPool, PooledMemcached};
+use crate::net::{tcp_connect, tcp_tls_connect, tls_client_config, TlsConfig};
+use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig, PooledClient};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::Hasher;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::ClientConfig;
 use tracing::instrument::WithSubscriber;
 
-// Further reading on rendezvous hashing:
-//
-// - https://randorithms.com/2020/12/26/rendezvous-hashing.html
-// - https://www.snia.org/sites/default/files/SDC15_presentations/dist_sys/Jason_Resch_New_Consistent_Hashings_Rev.pdf
-// - https://dgryski.medium.com/consistent-hashing-algorithmic-tradeoffs-ef6b8e2fcae8
-// - https://medium.com/i0exception/rendezvous-hashing-8c00e2fb58b0
-// - https://stackoverflow.com/questions/69841546/consistent-hashing-why-are-vnodes-a-thing
-// - https://medium.com/@panchr/dynamic-replication-in-memcached-8939c6f81e7f
+#[derive(Debug, Clone)]
+pub struct MemcachedPoolConfig {
+    pub tls: TlsConfig,
+    pub pool_max_idle: u64,
+}
+
+impl Default for MemcachedPoolConfig {
+    fn default() -> Self {
+        Self {
+            tls: TlsConfig::default(),
+            pool_max_idle: 4,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MemcachedPool {
+    inner: ClientPool<Server, Memcached, MemcachedFactory>,
+}
+
+impl MemcachedPool {
+    pub async fn new(handle: Handle, config: MemcachedPoolConfig) -> Result<Self, MtopError> {
+        let pool_config = ClientPoolConfig {
+            name: "memcached-tcp".to_owned(),
+            max_idle: config.pool_max_idle,
+        };
+
+        let factory = MemcachedFactory::new(handle, config).await?;
+        let inner = ClientPool::new(pool_config, factory);
+        Ok(Self { inner })
+    }
+
+    pub async fn get(&self, server: &Server) -> Result<PooledClient<Server, Memcached>, MtopError> {
+        self.inner.get(server).await
+    }
+
+    pub async fn put(&self, client: PooledClient<Server, Memcached>) {
+        self.inner.put(client).await
+    }
+}
+
+#[derive(Debug)]
+struct MemcachedFactory {
+    client_config: Option<Arc<ClientConfig>>,
+    server_name: Option<ServerName<'static>>,
+}
+
+impl MemcachedFactory {
+    async fn new(handle: Handle, config: MemcachedPoolConfig) -> Result<Self, MtopError> {
+        let server_name = if config.tls.enabled {
+            config.tls.server_name.clone()
+        } else {
+            None
+        };
+
+        let client_config = if config.tls.enabled {
+            Some(Arc::new(tls_client_config(handle, config.tls).await?))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            client_config,
+            server_name,
+        })
+    }
+}
+
+impl ClientFactory<Server, Memcached> for MemcachedFactory {
+    async fn make(&self, addr: &Server) -> Result<Memcached, MtopError> {
+        if let Some(cfg) = &self.client_config {
+            let server_name = self.server_name.clone().unwrap_or_else(|| addr.server_name());
+            let (read, write) = tcp_tls_connect(addr.address(), server_name, cfg.clone()).await?;
+            Ok(Memcached::new(read, write))
+        } else {
+            let (read, write) = tcp_connect(addr.address()).await?;
+            Ok(Memcached::new(read, write))
+        }
+    }
+}
 
 /// Logic for picking a server to "own" a particular cache key that uses
 /// rendezvous hashing.
@@ -194,14 +269,14 @@ impl MemcachedClient {
 
     /// Get a connection to a particular server from the pool if available, otherwise
     /// establish a new connection.
-    pub async fn raw_open(&self, server: &Server) -> Result<PooledMemcached, MtopError> {
+    pub async fn raw_open(&self, server: &Server) -> Result<PooledClient<Server, Memcached>, MtopError> {
         self.pool.get(server).await
     }
 
     /// Return a connection to a particular server to the pool if fewer than the configured
     /// number of idle connections to that server are currently in the pool, otherwise close
     /// it immediately.
-    pub async fn raw_close(&self, connection: PooledMemcached) {
+    pub async fn raw_close(&self, connection: PooledClient<Server, Memcached>) {
         self.pool.put(connection).await
     }
 
