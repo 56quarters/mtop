@@ -7,6 +7,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
+use tracing::instrument::WithSubscriber;
 
 // Further reading on rendezvous hashing:
 //
@@ -125,7 +126,9 @@ macro_rules! spawn_for_host {
                 }
                 Err(e) => Err(e),
             }
-        })
+        }
+        // Ensure this new future uses the same subscriber as the current one.
+        .with_current_subscriber())
     }};
 }
 
