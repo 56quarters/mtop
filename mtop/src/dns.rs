@@ -1,11 +1,8 @@
-use mtop_client::dns::{DnsClient, ResolvConf};
+use mtop_client::dns::{DnsClient, DnsClientConfig, ResolvConf};
 use mtop_client::MtopError;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use tokio::fs::File;
-
-const DEFAULT_SERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 
 /// Load configuration from the provided resolv.conf file and create a new DnsClient
 /// based on it. If the resolv.conf file cannot be opened or is malformed, default
@@ -14,22 +11,30 @@ pub async fn new_client<P>(resolv: P) -> DnsClient
 where
     P: AsRef<Path> + fmt::Debug,
 {
-    let mut cfg = match load_config(&resolv).await {
-        Ok(cfg) => cfg,
-        Err(e) => {
+    let client_config = load_config(&resolv)
+        .await
+        .map(|c| {
+            let mut cfg = DnsClientConfig::default();
+            if !c.nameservers.is_empty() {
+                cfg.nameservers = c.nameservers;
+            }
+            if let Some(timeout) = c.options.timeout {
+                cfg.timeout = timeout;
+            }
+            if let Some(attempts) = c.options.attempts {
+                cfg.attempts = attempts;
+            }
+            if let Some(rotate) = c.options.rotate {
+                cfg.rotate = rotate;
+            }
+            cfg
+        })
+        .unwrap_or_else(|e| {
             tracing::warn!(message = "unable to load resolv.conf", path = ?resolv, err = %e);
-            ResolvConf::default()
-        }
-    };
+            DnsClientConfig::default()
+        });
 
-    // Either the resolv.conf file doesn't list any nameservers or we had to
-    // use Default::default() which also doesn't include any. Use localhost in
-    // the hopes that it will work.
-    if cfg.nameservers.is_empty() {
-        cfg.nameservers.push(DEFAULT_SERVER);
-    }
-
-    DnsClient::new(cfg)
+    DnsClient::new(client_config)
 }
 
 async fn load_config<P>(resolv: P) -> Result<ResolvConf, MtopError>

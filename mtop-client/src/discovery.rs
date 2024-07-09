@@ -100,6 +100,7 @@ impl fmt::Display for Server {
     }
 }
 
+/// Trait to represent our DNS client for easier testing
 trait AsyncDnsClient {
     async fn resolve(&self, name: Name, rtype: RecordType, rclass: RecordClass) -> Result<Message, MtopError>;
 }
@@ -110,7 +111,11 @@ impl AsyncDnsClient for &DnsClient {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Service discovery implementation for finding Memcached servers using DNS.
+///
+/// Different types of DNS records and different behaviors are used based on the
+/// presence of specific prefixes for hostnames. See `resolve_by_proto` for details.
+#[derive(Debug)]
 pub struct DiscoveryDefault {
     client: DnsClient,
 }
@@ -120,6 +125,18 @@ impl DiscoveryDefault {
         Self { client }
     }
 
+    /// Resolve a hostname to one or multiple Memcached servers based on DNS records
+    /// and the presence of `proto+` prefixes on the hostnames.
+    ///
+    /// * `dns+` will resolve a hostname into multiple A and AAAA records and use the
+    ///   IP addresses from the records as Memcached servers.
+    /// * `dnssrv+` will resolve a hostname into multiple SRV records and use the
+    ///   unresolved targets from the SRV records as Memcached servers. Resolution of
+    ///   the targets will happen at connection time using the system resolver.
+    /// * No prefix with an IPv4 or IPv6 address will use the address as a Memcached
+    ///   server.
+    /// * No prefix with a non-IP address will resolve the hostname into A or AAAA
+    ///   records and pick a single one as a Memcached server.
     pub async fn resolve_by_proto(&self, name: &str) -> Result<Vec<Server>, MtopError> {
         if name.starts_with(DNS_A_PREFIX) {
             Ok(Self::resolve_a_aaaa(&self.client, name.trim_start_matches(DNS_A_PREFIX)).await?)

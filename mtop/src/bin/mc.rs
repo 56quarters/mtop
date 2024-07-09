@@ -3,8 +3,8 @@ use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Checker, TimingBundle};
 use mtop::profile;
 use mtop_client::{
-    DiscoveryDefault, MemcachedClient, MemcachedPool, Meta, MtopError, PoolConfig, SelectorRendezvous, Server,
-    TLSConfig, Timeout, Value,
+    DiscoveryDefault, MemcachedClient, MemcachedPool, MemcachedPoolConfig, Meta, MtopError, SelectorRendezvous, Server,
+    Timeout, TlsConfig, Value,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -343,7 +343,7 @@ async fn main() -> ExitCode {
 }
 
 async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
-    let tls = TLSConfig {
+    let tls_config = TlsConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
         cert_path: opts.tls_cert.clone(),
@@ -351,19 +351,14 @@ async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClie
         server_name: opts.tls_server_name.clone(),
     };
 
-    MemcachedPool::new(
-        Handle::current(),
-        PoolConfig {
-            tls,
-            max_idle_per_host: opts.connections,
-            ..Default::default()
-        },
-    )
-    .await
-    .map(|pool| {
-        let selector = SelectorRendezvous::new(servers.to_vec());
-        MemcachedClient::new(Handle::current(), selector, pool)
-    })
+    let pool_config = MemcachedPoolConfig {
+        tls: tls_config,
+        pool_max_idle: opts.connections,
+    };
+
+    let selector = SelectorRendezvous::new(servers.to_vec());
+    let pool = MemcachedPool::new(Handle::current(), pool_config).await?;
+    Ok(MemcachedClient::new(Handle::current(), selector, pool))
 }
 
 async fn connect(client: &MemcachedClient, timeout: Duration) -> Result<(), MtopError> {
