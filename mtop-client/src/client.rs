@@ -1,4 +1,4 @@
-use crate::core::{Key, Memcached, Meta, MtopError, SlabItems, Slabs, Stats, Value};
+use crate::core::{ErrorKind, Key, Memcached, Meta, MtopError, SlabItems, Slabs, Stats, Value};
 use crate::discovery::{Server, ServerID};
 use crate::net::{tcp_connect, tcp_tls_connect, tls_client_config, TlsConfig};
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig, PooledClient};
@@ -193,13 +193,21 @@ macro_rules! spawn_for_host {
     ($self:ident, $method:ident, $host:expr $(, $args:expr)* $(,)?) => {{
         let pool = $self.pool.clone();
         $self.handle.spawn(async move {
-            match pool.get($host).await {
-                Ok(mut conn) => {
-                    let res = conn.$method($($args,)*).await;
+            let mut conn = pool.get($host).await?;
+            match conn.$method($($args,)*).await {
+                Ok(v) => {
                     pool.put(conn).await;
-                    res
+                    Ok(v)
                 }
-                Err(e) => Err(e),
+                Err(e) => {
+                    // Only return the client to the pool if error was due to an
+                    // expected server error. Otherwise, we have no way to know the
+                    // state of the client and associated connection.
+                    if e.kind() == ErrorKind::Protocol {
+                        pool.put(conn).await;
+                    }
+                    Err(e)
+                }
             }
         }
         // Ensure this new future uses the same subscriber as the current one.
@@ -213,9 +221,21 @@ macro_rules! operation_for_key {
         let key = Key::one($key)?;
         if let Some(s) = $self.selector.server(&key).await {
             let mut conn = $self.pool.get(&s).await?;
-            let res = conn.$method(&key, $($args,)*).await;
-            $self.pool.put(conn).await;
-            res
+            match conn.$method(&key, $($args,)*).await {
+                Ok(v) => {
+                    $self.pool.put(conn).await;
+                    Ok(v)
+                }
+                Err(e) => {
+                    // Only return the client to the pool if error was due to an expected
+                    // server error. Otherwise, we have no way to know the state of the client
+                    // and associated connection.
+                    if e.kind() == ErrorKind::Protocol {
+                        $self.pool.put(conn).await;
+                    }
+                    Err(e)
+                }
+            }
         } else {
             Err(MtopError::runtime("no servers available"))
         }
