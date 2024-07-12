@@ -1,15 +1,17 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
-use mtop::profile;
+use mtop::ping::{Bundle, DnsPinger};
+use mtop::{profile, sig};
 use mtop_client::dns::{Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use std::fmt::Write;
 use std::io::Cursor;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::{task, time};
+use tokio::runtime::Handle;
 use tracing::{Instrument, Level};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
@@ -60,6 +62,16 @@ struct PingCommand {
     #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
+    /// Nameserver to use for DNS queries, overriding whatever nameserver is configured in
+    /// resolv.conf.
+    #[arg(long, value_hint = ValueHint::Hostname)]
+    nameserver: Option<SocketAddr>,
+
+    /// Timeout for DNS network operations in seconds, overriding whatever timeout is
+    /// configured in resolv.conf.
+    #[arg(long)]
+    nameserver_timeout_secs: Option<u64>,
+
     /// Type of record to request. Supported: A, AAAA, CNAME, NS, SOA, SRV, TXT.
     #[arg(long, default_value_t = DEFAULT_RECORD_TYPE)]
     rtype: RecordType,
@@ -88,6 +100,16 @@ struct QueryCommand {
     /// can't be loaded, default values for DNS configuration are used instead.
     #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
+
+    /// Nameserver to use for DNS queries, overriding whatever nameserver is configured in
+    /// resolv.conf.
+    #[arg(long, value_hint = ValueHint::Hostname)]
+    nameserver: Option<SocketAddr>,
+
+    /// Timeout for DNS network operations in seconds, overriding whatever timeout is
+    /// configured in resolv.conf.
+    #[arg(long)]
+    nameserver_timeout_secs: Option<u64>,
 
     /// Output query results in raw binary format instead of human-readable
     /// text. NOTE, this may break your terminal and so should probably be piped
@@ -156,68 +178,32 @@ async fn main() -> ExitCode {
 }
 
 async fn run_ping(cmd: &PingCommand) -> ExitCode {
-    let client = mtop::dns::new_client(&cmd.resolv_conf)
-        .instrument(tracing::span!(Level::INFO, "dns.new_client"))
-        .await;
+    let client = mtop::dns::new_client(
+        &cmd.resolv_conf,
+        cmd.nameserver,
+        cmd.nameserver_timeout_secs.map(Duration::from_secs),
+    )
+    .instrument(tracing::span!(Level::INFO, "dns.new_client"))
+    .await;
 
-    // This command runs until interrupted, so we need to handle SIGINT
-    // to stop gracefully.
-    let run = Arc::new(AtomicBool::new(true));
-    let run_ref = run.clone();
-    task::spawn(async move {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                run_ref.store(false, Ordering::Release);
-            }
-        }
-    });
+    let stop = Arc::new(AtomicBool::new(false));
+    sig::wait_for_interrupt(Handle::current(), stop.clone()).await;
 
-    let mut interval = time::interval(Duration::from_secs_f64(cmd.interval_secs));
-    let mut iterations = 0;
-
-    while run.load(Ordering::Acquire) && (cmd.count == 0 || iterations < cmd.count) {
-        let _ = interval.tick().await;
-        // Create our own Instant to measure the time taken to perform the query since
-        // the one emitted by the interval isn't _immediately_ when the future resolves
-        // and so skews the measurement of queries.
-        let start = Instant::now();
-
-        match client
-            .resolve(cmd.name.clone(), cmd.rtype, cmd.rclass)
-            .instrument(tracing::span!(Level::INFO, "client.resolve"))
-            .await
-        {
-            Ok(r) => {
-                tracing::info!(
-                    id = %r.id(),
-                    name = %cmd.name,
-                    response_code = ?r.flags().get_response_code(),
-                    num_questions = r.questions().len(),
-                    num_answers = r.answers().len(),
-                    num_authority = r.authority().len(),
-                    num_extra = r.extra().len(),
-                    elapsed = ?start.elapsed(),
-                );
-            }
-            Err(e) => {
-                tracing::error!(message = "failed to resolve", name = %cmd.name, err = %e);
-            }
-        }
-
-        iterations += 1;
-    }
-
-    if !run.load(Ordering::Acquire) {
-        tracing::info!("stopping on SIGINT");
-    }
+    let ping = DnsPinger::new(client, Duration::from_secs_f64(cmd.interval_secs), stop.clone());
+    let result = ping.run(cmd.name.clone(), cmd.rtype, cmd.rclass, cmd.count).await;
+    print_ping_results(&result);
 
     ExitCode::SUCCESS
 }
 
 async fn run_query(cmd: &QueryCommand) -> ExitCode {
-    let client = mtop::dns::new_client(&cmd.resolv_conf)
-        .instrument(tracing::span!(Level::INFO, "dns.new_client"))
-        .await;
+    let client = mtop::dns::new_client(
+        &cmd.resolv_conf,
+        cmd.nameserver,
+        cmd.nameserver_timeout_secs.map(Duration::from_secs),
+    )
+    .instrument(tracing::span!(Level::INFO, "dns.new_client"))
+    .await;
 
     let response = match client
         .resolve(cmd.name.clone(), cmd.rtype, cmd.rclass)
@@ -349,4 +335,19 @@ fn format_records(buf: &mut String, records: &[Record]) {
             r.rdata()
         );
     }
+}
+
+fn print_ping_results(results: &Bundle) {
+    println!(
+        "type=timing min={:.6}s max={:.6}s avg={:.6}s stddev={:.6}s",
+        results.timing.min.as_secs_f64(),
+        results.timing.max.as_secs_f64(),
+        results.timing.avg.as_secs_f64(),
+        results.timing.std_dev.as_secs_f64(),
+    );
+
+    println!(
+        "type=queries total={} protocol_errors={} fatal_errors={}",
+        results.total, results.protocol_errors, results.fatal_errors,
+    );
 }

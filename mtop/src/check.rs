@@ -1,5 +1,6 @@
 use mtop_client::{DiscoveryDefault, Key, MemcachedClient, Timeout};
-use std::cmp;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time;
 
@@ -8,43 +9,46 @@ const VALUE: &[u8] = "test".as_bytes();
 
 /// Repeatedly make connections to a Memcached server to verify connectivity.
 #[derive(Debug)]
-pub struct Checker<'a> {
-    client: &'a MemcachedClient,
-    resolver: &'a DiscoveryDefault,
+pub struct Checker {
+    client: MemcachedClient,
+    resolver: DiscoveryDefault,
     delay: Duration,
     timeout: Duration,
+    stop: Arc<AtomicBool>,
 }
 
-impl<'a> Checker<'a> {
-    /// Create a new `Checker` that uses connections created from the provided `pool`. `delay`
+impl Checker {
+    /// Create a new `Checker` that uses connections created from the provided `client`. `delay`
     /// is the amount of time to wait between each test. `timeout` is how long each individual
     /// part of the test may take (DNS resolution, connecting, setting a value, and fetching
     /// a value).
     pub fn new(
-        client: &'a MemcachedClient,
-        resolver: &'a DiscoveryDefault,
+        client: MemcachedClient,
+        resolver: DiscoveryDefault,
         delay: Duration,
         timeout: Duration,
+        stop: Arc<AtomicBool>,
     ) -> Self {
         Self {
             client,
             resolver,
             delay,
             timeout,
+            stop,
         }
     }
 
-    /// Perform connection tests for a particular hosts in a loop and return information
+    /// Perform connection tests for a particular host in a loop and return information
     /// about the time taken for each step of the test (DNS resolution, connecting, setting
     /// a value, and fetching a value) and counts of failures or timeouts during each step.
     ///
-    /// Note that each test run performs a DNS lookup and creates a brand new connection.
-    pub async fn run(&self, host: &str, time: Duration) -> TimingBundle {
+    /// Note that each test run performs a DNS lookup and creates a brand-new connection.
+    pub async fn run(&self, host: &str, time: Duration) -> Bundle {
         let mut dns_builder = TimingBuilder::default();
         let mut conn_builder = TimingBuilder::default();
         let mut set_builder = TimingBuilder::default();
         let mut get_builder = TimingBuilder::default();
-        let mut total_builder = TimingBuilder::default();
+        let mut overall_builder = TimingBuilder::default();
         let mut failures = Failures::default();
         let mut interval = time::interval(self.delay);
         let start = Instant::now();
@@ -52,7 +56,7 @@ impl<'a> Checker<'a> {
         // Note that we don't return the connection to the client each iteration. This ensures
         // we're creating a new connection each time and thus actually testing the network
         // when doing the check.
-        while start.elapsed() < time {
+        while !self.stop.load(Ordering::Acquire) && start.elapsed() < time {
             let _ = interval.tick().await;
             let key = Key::one(KEY).unwrap();
             let val = VALUE.to_vec();
@@ -117,11 +121,11 @@ impl<'a> Checker<'a> {
             }
 
             let get_time = get_start.elapsed();
-            let total_time = dns_start.elapsed();
+            let overall_time = dns_start.elapsed();
 
             tracing::info!(
                 timeout = ?self.timeout,
-                total = ?total_time,
+                total = ?overall_time,
                 dns = ?dns_time,
                 connection = ?conn_time,
                 set = ?set_time,
@@ -132,17 +136,17 @@ impl<'a> Checker<'a> {
             conn_builder.add(conn_time);
             set_builder.add(set_time);
             get_builder.add(get_time);
-            total_builder.add(total_time);
+            overall_builder.add(overall_time);
         }
 
         let dns = dns_builder.build();
         let connections = conn_builder.build();
         let gets = get_builder.build();
         let sets = set_builder.build();
-        let total = total_builder.build();
+        let overall = overall_builder.build();
 
-        TimingBundle {
-            total,
+        Bundle {
+            overall,
             dns,
             connections,
             sets,
@@ -154,43 +158,58 @@ impl<'a> Checker<'a> {
 
 /// Accumulate measurements of how long a particular operation takes and compute
 /// the min, max, average, and standard deviation of them.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TimingBuilder {
-    times: Vec<Duration>,
+    min: Duration,
+    max: Duration,
+    sum: f64,
+    sum2: f64,
+    count: u32,
+}
+
+impl Default for TimingBuilder {
+    fn default() -> Self {
+        Self {
+            min: Duration::MAX,
+            max: Duration::ZERO,
+            sum: 0.0,
+            sum2: 0.0,
+            count: 0,
+        }
+    }
 }
 
 impl TimingBuilder {
     pub fn add(&mut self, d: Duration) {
-        self.times.push(d);
+        self.min = self.min.min(d);
+        self.max = self.max.max(d);
+        self.sum += d.as_secs_f64();
+        self.sum2 += d.as_secs_f64() * d.as_secs_f64();
+        self.count += 1;
     }
 
-    pub fn build(self) -> Timing {
-        let mut min = Duration::MAX;
-        let mut max = Duration::ZERO;
-        let mut sum = Duration::ZERO;
-        let count = self.times.len();
-
-        for d in self.times.iter().cloned() {
-            min = cmp::min(min, d);
-            max = cmp::max(max, d);
-            sum += d;
-        }
-
-        let avg = sum.checked_div(count as u32).unwrap_or(Duration::ZERO);
-        let avg_f64 = avg.as_secs_f64();
-        let mut deviance = 0f64;
-
-        for d in self.times.iter() {
-            deviance += (d.as_secs_f64() - avg_f64).powi(2)
-        }
-
-        let std_dev = if count != 0 {
-            Duration::from_secs_f64((deviance / count as f64).sqrt())
+    pub fn build(&self) -> Timing {
+        // Alternate method of calculating standard deviation that works in constant
+        // memory and doesn't require keeping all samples. This is the same method that
+        // the `man 8 ping` command uses.
+        // See https://serverfault.com/a/333203
+        let (avg, std_dev) = if self.count != 0 {
+            let mean = self.sum / self.count as f64;
+            let mean2 = self.sum2 / self.count as f64;
+            (
+                Duration::from_secs_f64(mean),
+                Duration::from_secs_f64((mean2 - (mean * mean)).sqrt()),
+            )
         } else {
-            Duration::ZERO
+            (Duration::ZERO, Duration::ZERO)
         };
 
-        Timing { min, max, avg, std_dev }
+        Timing {
+            min: self.min,
+            max: self.max,
+            avg,
+            std_dev,
+        }
     }
 }
 
@@ -203,8 +222,8 @@ pub struct Timing {
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct TimingBundle {
-    pub total: Timing,
+pub struct Bundle {
+    pub overall: Timing,
     pub dns: Timing,
     pub connections: Timing,
     pub sets: Timing,
