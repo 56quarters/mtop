@@ -119,7 +119,7 @@ async fn main() -> ExitCode {
 
     let timeout = Duration::from_secs(opts.timeout_secs);
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
-    let dns_client = mtop::dns::new_client(&opts.resolv_conf).await;
+    let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let resolver = DiscoveryDefault::new(dns_client);
 
     let servers = match expand_hosts(&opts.hosts, &resolver, timeout).await {

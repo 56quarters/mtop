@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
-use mtop::check::{Checker, TimingBundle};
+use mtop::check::{Bundle, Checker};
 use mtop::profile;
 use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, MemcachedPoolConfig, Meta, MtopError, SelectorRendezvous, Server,
@@ -8,6 +8,8 @@ use mtop_client::{
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, io};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -38,7 +40,7 @@ struct McConfig {
     #[arg(long, default_value_t = DEFAULT_HOST.to_owned(), value_hint = ValueHint::Hostname)]
     host: String,
 
-    /// Timeout for network operations, in seconds.
+    /// Timeout for Memcached network operations, in seconds.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
     timeout_secs: u64,
 
@@ -291,7 +293,7 @@ async fn main() -> ExitCode {
         mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
-    let dns_client = mtop::dns::new_client(&opts.resolv_conf).await;
+    let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let resolver = DiscoveryDefault::new(dns_client);
     let timeout = Duration::from_secs(opts.timeout_secs);
     let servers = match resolver
@@ -324,7 +326,7 @@ async fn main() -> ExitCode {
     let code = match &opts.mode {
         Action::Add(cmd) => run_add(&opts, cmd, &client).await,
         Action::Bench(cmd) => run_bench(&opts, cmd, client).await,
-        Action::Check(cmd) => run_check(&opts, cmd, &client, &resolver).await,
+        Action::Check(cmd) => run_check(&opts, cmd, client, resolver).await,
         Action::Decr(cmd) => run_decr(&opts, cmd, &client).await,
         Action::Delete(cmd) => run_delete(&opts, cmd, &client).await,
         Action::Get(cmd) => run_get(&opts, cmd, &client).await,
@@ -398,6 +400,9 @@ async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) ->
 }
 
 async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient) -> ExitCode {
+    let stop = Arc::new(AtomicBool::new(false));
+    mtop::sig::wait_for_interrupt(Handle::current(), stop.clone()).await;
+
     let bencher = Bencher::new(
         client,
         Handle::current(),
@@ -406,6 +411,7 @@ async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient)
         Duration::from_secs(cmd.ttl_secs as u64),
         cmd.write_percent,
         cmd.concurrency,
+        stop.clone(),
     );
 
     let measurements = bencher.run(Duration::from_secs(cmd.time_secs)).await;
@@ -417,14 +423,18 @@ async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient)
 async fn run_check(
     opts: &McConfig,
     cmd: &CheckCommand,
-    client: &MemcachedClient,
-    resolver: &DiscoveryDefault,
+    client: MemcachedClient,
+    resolver: DiscoveryDefault,
 ) -> ExitCode {
+    let stop = Arc::new(AtomicBool::new(false));
+    mtop::sig::wait_for_interrupt(Handle::current(), stop.clone()).await;
+
     let checker = Checker::new(
         client,
         resolver,
         Duration::from_millis(cmd.delay_millis),
         Duration::from_secs(opts.timeout_secs),
+        stop.clone(),
     );
     let results = checker.run(&opts.host, Duration::from_secs(cmd.time_secs)).await;
     print_check_results(&results);
@@ -650,10 +660,10 @@ fn print_bench_results(results: &[Summary]) {
     }
 }
 
-fn print_check_results(results: &TimingBundle) {
+fn print_check_results(results: &Bundle) {
     println!(
-        "type=min total={:.9} dns={:.9} connection={:.9} set={:.9} get={:.9}",
-        results.total.min.as_secs_f64(),
+        "type=min overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
+        results.overall.min.as_secs_f64(),
         results.dns.min.as_secs_f64(),
         results.connections.min.as_secs_f64(),
         results.sets.min.as_secs_f64(),
@@ -661,8 +671,8 @@ fn print_check_results(results: &TimingBundle) {
     );
 
     println!(
-        "type=max total={:.9} dns={:.9} connection={:.9} set={:.9} get={:.9}",
-        results.total.max.as_secs_f64(),
+        "type=max overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
+        results.overall.max.as_secs_f64(),
         results.dns.max.as_secs_f64(),
         results.connections.max.as_secs_f64(),
         results.sets.max.as_secs_f64(),
@@ -670,8 +680,8 @@ fn print_check_results(results: &TimingBundle) {
     );
 
     println!(
-        "type=avg total={:.9} dns={:.9} connection={:.9} set={:.9} get={:.9}",
-        results.total.avg.as_secs_f64(),
+        "type=avg overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
+        results.overall.avg.as_secs_f64(),
         results.dns.avg.as_secs_f64(),
         results.connections.avg.as_secs_f64(),
         results.sets.avg.as_secs_f64(),
@@ -679,8 +689,8 @@ fn print_check_results(results: &TimingBundle) {
     );
 
     println!(
-        "type=stddev total={:.9} dns={:.9} connection={:.9} set={:.9} get={:.9}",
-        results.total.std_dev.as_secs_f64(),
+        "type=stddev overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
+        results.overall.std_dev.as_secs_f64(),
         results.dns.std_dev.as_secs_f64(),
         results.connections.std_dev.as_secs_f64(),
         results.sets.std_dev.as_secs_f64(),
