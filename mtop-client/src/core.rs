@@ -897,6 +897,9 @@ impl Memcached {
             if let Some(e) = Self::parse_error(&v) {
                 return Err(MtopError::from(e));
             }
+            if !v.starts_with("VERSION") {
+                return Err(MtopError::runtime(format!("unable to parse '{}'", v)));
+            }
         }
 
         Ok(())
@@ -1279,6 +1282,34 @@ mod test {
         let bytes = rx.recv().await.unwrap();
         let command = String::from_utf8(bytes).unwrap();
         assert_eq!("decr test 1\r\n", command);
+    }
+
+    //////////
+    // ping //
+    //////////
+
+    #[tokio::test]
+    async fn test_memcached_ping_bad_val() {
+        let (mut rx, mut client) = client!("220 localhost ESMTP Postfix\r\n");
+        let res = client.ping().await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Runtime, err.kind());
+
+        let bytes = rx.recv().await.unwrap();
+        let command = String::from_utf8(bytes).unwrap();
+        assert_eq!("version\r\n", command);
+    }
+
+    #[tokio::test]
+    async fn test_memcached_ping_success() {
+        let (mut rx, mut client) = client!("VERSION 1.6.22\r\n");
+        let _res = client.ping().await.unwrap();
+
+        let bytes = rx.recv().await.unwrap();
+        let command = String::from_utf8(bytes).unwrap();
+        assert_eq!("version\r\n", command);
     }
 
     macro_rules! test_store_command_success {
