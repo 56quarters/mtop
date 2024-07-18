@@ -64,7 +64,7 @@ impl Checker {
             let dns_start = Instant::now();
             let server = match self
                 .resolver
-                .resolve_by_proto(host)
+                .resolve(host)
                 .timeout(self.timeout, "resolver.resolve_by_proto")
                 .await
                 .map(|mut v| v.pop())

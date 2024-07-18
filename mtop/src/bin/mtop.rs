@@ -211,9 +211,9 @@ async fn expand_hosts(
     for host in hosts {
         out.extend(
             resolver
-                .resolve_by_proto(host)
-                .timeout(timeout, "resolver.resolve_by_proto")
-                .instrument(tracing::span!(Level::INFO, "resolver.resolve_by_proto"))
+                .resolve(host)
+                .timeout(timeout, "resolver.resolve")
+                .instrument(tracing::span!(Level::INFO, "resolver.resolve"))
                 .await?,
         );
     }

@@ -297,9 +297,9 @@ async fn main() -> ExitCode {
     let resolver = DiscoveryDefault::new(dns_client);
     let timeout = Duration::from_secs(opts.timeout_secs);
     let servers = match resolver
-        .resolve_by_proto(&opts.host)
-        .timeout(timeout, "resolver.resolve_by_proto")
-        .instrument(tracing::span!(Level::INFO, "resolver.resolve_by_proto"))
+        .resolve(&opts.host)
+        .timeout(timeout, "resolver.resolve")
+        .instrument(tracing::span!(Level::INFO, "resolver.resolve"))
         .await
     {
         Ok(v) => v,
