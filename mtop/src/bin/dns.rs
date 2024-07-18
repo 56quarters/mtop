@@ -251,8 +251,9 @@ async fn run_read(_: &ReadCommand) -> ExitCode {
 
 async fn run_write(cmd: &WriteCommand) -> ExitCode {
     let id = MessageId::random();
+    let name = cmd.name.clone().to_fqdn();
     let msg = Message::new(id, Flags::default().set_query().set_recursion_desired())
-        .add_question(Question::new(cmd.name.clone(), cmd.rtype).set_qclass(cmd.rclass));
+        .add_question(Question::new(name, cmd.rtype).set_qclass(cmd.rclass));
 
     write_binary_message(&msg).await
 }
