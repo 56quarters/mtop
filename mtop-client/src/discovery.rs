@@ -1,9 +1,9 @@
 use crate::core::MtopError;
 use crate::dns::{DnsClient, Message, Name, Record, RecordClass, RecordData, RecordType};
+use rustls_pki_types::ServerName;
 use std::cmp::Ordering;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
-use webpki::types::ServerName;
 
 const DNS_A_PREFIX: &str = "dns+";
 const DNS_SRV_PREFIX: &str = "dnssrv+";
@@ -253,10 +253,10 @@ mod test {
         Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordData, RecordDataA, RecordDataAAAA,
         RecordDataSRV, RecordType,
     };
+    use rustls_pki_types::ServerName;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::str::FromStr;
     use tokio::sync::Mutex;
-    use webpki::types::ServerName;
 
     #[test]
     fn test_server_id_from_ipv4_addr() {

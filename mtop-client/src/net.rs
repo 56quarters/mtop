@@ -1,4 +1,5 @@
 use crate::core::MtopError;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use std::fmt::{self, Debug};
 use std::fs::File;
 use std::io::{self, BufReader};
@@ -10,7 +11,6 @@ use tokio::runtime::Handle;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
-use webpki::types::{CertificateDer, PrivateKeyDer, ServerName};
 
 /// Configuration for establishing a TLS connection to server with optional mTLS.
 #[derive(Debug, Clone, Default)]

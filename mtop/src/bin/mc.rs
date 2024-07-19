@@ -6,6 +6,7 @@ use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, MemcachedPoolConfig, Meta, MtopError, SelectorRendezvous, Server,
     Timeout, TlsConfig, Value,
 };
+use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
@@ -15,7 +16,6 @@ use std::{env, io};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::runtime::Handle;
 use tracing::{Instrument, Level};
-use webpki::types::{InvalidDnsNameError, ServerName};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_HOST: &str = "localhost:11211";

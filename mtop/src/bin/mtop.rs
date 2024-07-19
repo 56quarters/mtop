@@ -5,6 +5,7 @@ use mtop_client::{
     DiscoveryDefault, MemcachedClient, MemcachedPool, MemcachedPoolConfig, MtopError, SelectorRendezvous, Server,
     Timeout, TlsConfig,
 };
+use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,7 +15,6 @@ use tokio::runtime::Handle;
 use tokio::task;
 use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, Level};
-use webpki::types::{InvalidDnsNameError, ServerName};
 
 const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_THEME: Theme = TAILWIND;
