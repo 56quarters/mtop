@@ -108,7 +108,7 @@ fn render_host_area(
     f.render_widget(tabs, tab_area);
 
     let scrollbar = host_tabs_scrollbar(theme);
-    let inner_tab_area = tab_area.inner(&Margin {
+    let inner_tab_area = tab_area.inner(Margin {
         vertical: 0,
         horizontal: 1,
     });
