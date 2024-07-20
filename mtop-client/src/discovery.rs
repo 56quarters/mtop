@@ -132,12 +132,13 @@ impl DiscoveryDefault {
     ///   IP addresses from the records as Memcached servers.
     /// * `dnssrv+` will resolve a hostname into multiple SRV records and use the
     ///   unresolved targets from the SRV records as Memcached servers. Resolution of
-    ///   the targets will happen at connection time using the system resolver.
-    /// * No prefix with an IPv4 or IPv6 address will use the address as a Memcached
+    ///   the targets to IP addresses will happen at connection time using the system
+    ///   resolver.
+    /// * No prefix with an IPv4 or IPv6 address will use the IP address as a Memcached
     ///   server.
     /// * No prefix with a non-IP address will use the host as a Memcached server.
-    ///   Resolution of the host will happen at connection time using the system
-    ///   resolver.
+    ///   Resolution of the host to an IP address will happen at connection time using the
+    ///   system resolver.
     pub async fn resolve(&self, name: &str) -> Result<Vec<Server>, MtopError> {
         Self::resolve_by_proto(&self.client, name).await
     }

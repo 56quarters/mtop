@@ -198,8 +198,8 @@ fn fmt_servers(servers: &[Server]) -> String {
     format!("[{}]", ids.join(", "))
 }
 
-/// Perform DNS resolution on provided hostnames, expanding any "dns+" prefixed hosts
-/// that have multiple A or AAAA records.
+/// Perform DNS resolution on provided hostnames, expanding any "dns+" or "dnssrv+" prefixed
+/// hosts that have multiple A, AAAA, or SRV records.
 async fn expand_hosts(
     hosts: &[String],
     resolver: &DiscoveryDefault,
