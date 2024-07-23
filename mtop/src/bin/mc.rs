@@ -3,8 +3,8 @@ use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Bundle, Checker};
 use mtop::profile;
 use mtop_client::{
-    DiscoveryDefault, MemcachedClient, MemcachedPool, MemcachedPoolConfig, Meta, MtopError, SelectorRendezvous, Server,
-    Timeout, TlsConfig, Value,
+    DiscoveryDefault, MemcachedClient, MemcachedClientConfig, MemcachedFactory, Meta, MtopError, SelectorRendezvous,
+    Server, Timeout, TlsConfig, Value,
 };
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::path::PathBuf;
@@ -344,7 +344,7 @@ async fn main() -> ExitCode {
     code
 }
 
-async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
+async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClient<MemcachedFactory>, MtopError> {
     let tls_config = TlsConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
@@ -353,17 +353,16 @@ async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClie
         server_name: opts.tls_server_name.clone(),
     };
 
-    let pool_config = MemcachedPoolConfig {
-        tls: tls_config,
+    let cfg = MemcachedClientConfig {
         pool_max_idle: opts.connections,
     };
 
     let selector = SelectorRendezvous::new(servers.to_vec());
-    let pool = MemcachedPool::new(Handle::current(), pool_config).await?;
-    Ok(MemcachedClient::new(Handle::current(), selector, pool))
+    let factory = MemcachedFactory::new(Handle::current(), tls_config).await?;
+    Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
 }
 
-async fn connect(client: &MemcachedClient, timeout: Duration) -> Result<(), MtopError> {
+async fn connect(client: &MemcachedClient<MemcachedFactory>, timeout: Duration) -> Result<(), MtopError> {
     let pings = client
         .ping()
         .timeout(timeout, "client.ping")
@@ -377,7 +376,7 @@ async fn connect(client: &MemcachedClient, timeout: Duration) -> Result<(), Mtop
     Ok(())
 }
 
-async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     let buf = match read_input().await {
         Ok(v) => v,
         Err(e) => {
@@ -399,7 +398,7 @@ async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) ->
     }
 }
 
-async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient) -> ExitCode {
+async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient<MemcachedFactory>) -> ExitCode {
     let stop = Arc::new(AtomicBool::new(false));
     mtop::sig::wait_for_interrupt(Handle::current(), stop.clone()).await;
 
@@ -423,7 +422,7 @@ async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient)
 async fn run_check(
     opts: &McConfig,
     cmd: &CheckCommand,
-    client: MemcachedClient,
+    client: MemcachedClient<MemcachedFactory>,
     resolver: DiscoveryDefault,
 ) -> ExitCode {
     let stop = Arc::new(AtomicBool::new(false));
@@ -446,7 +445,7 @@ async fn run_check(
     }
 }
 
-async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     if let Err(e) = client
         .decr(&cmd.key, cmd.delta)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.decr")
@@ -460,7 +459,7 @@ async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient) 
     }
 }
 
-async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     if let Err(e) = client
         .delete(&cmd.key)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.delete")
@@ -474,7 +473,7 @@ async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClie
     }
 }
 
-async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     let response = match client
         .get(&[cmd.key.clone()])
         .timeout(Duration::from_secs(opts.timeout_secs), "client.get")
@@ -505,7 +504,7 @@ async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) ->
     }
 }
 
-async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     if let Err(e) = client
         .incr(&cmd.key, cmd.delta)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.incr")
@@ -519,7 +518,7 @@ async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) 
     }
 }
 
-async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     let response = match client
         .metas()
         .timeout(Duration::from_secs(opts.timeout_secs), "client.metas")
@@ -552,7 +551,7 @@ async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient) 
     }
 }
 
-async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     let buf = match read_input().await {
         Ok(v) => v,
         Err(e) => {
@@ -574,7 +573,7 @@ async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedCl
     }
 }
 
-async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     let buf = match read_input().await {
         Ok(v) => v,
         Err(e) => {
@@ -596,7 +595,7 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) ->
     }
 }
 
-async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient) -> ExitCode {
+async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
     if let Err(e) = client
         .touch(&cmd.key, cmd.ttl)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.touch")

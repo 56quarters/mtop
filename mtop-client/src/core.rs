@@ -1305,7 +1305,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_ping_success() {
         let (mut rx, mut client) = client!("VERSION 1.6.22\r\n");
-        let _res = client.ping().await.unwrap();
+        client.ping().await.unwrap();
 
         let bytes = rx.recv().await.unwrap();
         let command = String::from_utf8(bytes).unwrap();

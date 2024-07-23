@@ -13,62 +13,30 @@ use tokio_rustls::rustls::ClientConfig;
 use tracing::instrument::WithSubscriber;
 
 #[derive(Debug, Clone)]
-pub struct MemcachedPoolConfig {
-    pub tls: TlsConfig,
+pub struct MemcachedClientConfig {
     pub pool_max_idle: u64,
 }
 
-impl Default for MemcachedPoolConfig {
+impl Default for MemcachedClientConfig {
     fn default() -> Self {
-        Self {
-            tls: TlsConfig::default(),
-            pool_max_idle: 4,
-        }
+        Self { pool_max_idle: 4 }
     }
 }
 
+/// Implementation of a `ClientFactory` that creates new Memcached clients that
+/// use plaintext or TLS TCP connections.
 #[derive(Debug)]
-pub struct MemcachedPool {
-    inner: ClientPool<Server, Memcached, MemcachedFactory>,
-}
-
-impl MemcachedPool {
-    pub async fn new(handle: Handle, config: MemcachedPoolConfig) -> Result<Self, MtopError> {
-        let pool_config = ClientPoolConfig {
-            name: "memcached-tcp".to_owned(),
-            max_idle: config.pool_max_idle,
-        };
-
-        let factory = MemcachedFactory::new(handle, config).await?;
-        let inner = ClientPool::new(pool_config, factory);
-        Ok(Self { inner })
-    }
-
-    pub async fn get(&self, server: &Server) -> Result<PooledClient<Server, Memcached>, MtopError> {
-        self.inner.get(server).await
-    }
-
-    pub async fn put(&self, client: PooledClient<Server, Memcached>) {
-        self.inner.put(client).await
-    }
-}
-
-#[derive(Debug)]
-struct MemcachedFactory {
+pub struct MemcachedFactory {
     client_config: Option<Arc<ClientConfig>>,
     server_name: Option<ServerName<'static>>,
 }
 
 impl MemcachedFactory {
-    async fn new(handle: Handle, config: MemcachedPoolConfig) -> Result<Self, MtopError> {
-        let server_name = if config.tls.enabled {
-            config.tls.server_name.clone()
-        } else {
-            None
-        };
+    pub async fn new(handle: Handle, tls: TlsConfig) -> Result<Self, MtopError> {
+        let server_name = if tls.enabled { tls.server_name.clone() } else { None };
 
-        let client_config = if config.tls.enabled {
-            Some(Arc::new(tls_client_config(handle, config.tls).await?))
+        let client_config = if tls.enabled {
+            Some(Arc::new(tls_client_config(handle, tls).await?))
         } else {
             None
         };
@@ -182,10 +150,13 @@ impl ValuesResponse {
 }
 
 #[derive(Debug)]
-pub struct MemcachedClient {
+pub struct MemcachedClient<F>
+where
+    F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
+{
     handle: Handle,
     selector: SelectorRendezvous,
-    pool: Arc<MemcachedPool>,
+    pool: Arc<ClientPool<Server, Memcached, F>>,
 }
 
 /// Run a method for a particular server in a spawned future.
@@ -272,18 +243,26 @@ macro_rules! operation_for_all {
     }};
 }
 
-impl MemcachedClient {
+impl<F> MemcachedClient<F>
+where
+    F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
+{
     /// Create a new `MemcachedClient` instance.
     ///
     /// `handle` is used to spawn multiple async tasks to fetch data from servers in
     /// parallel. `selector` is used to determine which server "owns" a particular key.
     /// `pool` is used for pooling or establishing new connections to each server as
     /// needed.
-    pub fn new(handle: Handle, selector: SelectorRendezvous, pool: MemcachedPool) -> Self {
+    pub fn new(cfg: MemcachedClientConfig, handle: Handle, selector: SelectorRendezvous, factory: F) -> Self {
+        let pool_config = ClientPoolConfig {
+            name: "memcached-tcp".to_owned(),
+            max_idle: cfg.pool_max_idle,
+        };
+
         Self {
             handle,
             selector,
-            pool: Arc::new(pool),
+            pool: Arc::new(ClientPool::new(pool_config, factory)),
         }
     }
 

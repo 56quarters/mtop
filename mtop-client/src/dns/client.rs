@@ -5,12 +5,15 @@ use crate::dns::name::Name;
 use crate::net::tcp_connect;
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig};
 use crate::timeout::Timeout;
-use std::io::{self, Cursor};
+use std::fmt::{self, Formatter};
+use std::io::{self, Cursor, Error};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadBuf};
+use tokio::net::UdpSocket;
 
 const DEFAULT_NAMESERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_MESSAGE_BUFFER: usize = 512;
@@ -58,8 +61,8 @@ impl Default for DnsClientConfig {
 pub struct DnsClient {
     config: DnsClientConfig,
     server_idx: AtomicUsize,
-    udp_pool: ClientPool<SocketAddr, UdpClient<UdpSocket>, UdpFactory>,
-    tcp_pool: ClientPool<SocketAddr, TcpClient<ReadHalf<TcpStream>, WriteHalf<TcpStream>>, TcpFactory>,
+    udp_pool: ClientPool<SocketAddr, UdpClient, UdpFactory>,
+    tcp_pool: ClientPool<SocketAddr, TcpClient, TcpFactory>,
 }
 
 impl DnsClient {
@@ -115,7 +118,7 @@ impl DnsClient {
         let server = self.nameserver(attempt);
 
         let res = async {
-            let client = self.udp_pool.get(&server).await?;
+            let mut client = self.udp_pool.get(&server).await?;
             let res = client.exchange(msg).await;
             if res.is_ok() {
                 self.udp_pool.put(client).await;
@@ -158,30 +161,25 @@ impl DnsClient {
 }
 
 /// Client for sending and receiving DNS messages over read and write streams,
-/// presumably a TCP connection. Messages are sent with a two byte prefix that
+/// usually a TCP connection. Messages are sent with a two byte prefix that
 /// indicates the size of the message. Responses are expected to have the same
 /// prefix. The message ID of responses is checked to ensure it matches the request
 /// ID. If it does not, an error is returned.
-#[derive(Debug)]
-struct TcpClient<R, W>
-where
-    R: AsyncRead + Unpin + Send + Sync + 'static,
-    W: AsyncWrite + Unpin + Send + Sync + 'static,
-{
-    read: BufReader<R>,
-    write: BufWriter<W>,
+struct TcpClient {
+    read: BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>>,
+    write: BufWriter<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
     size: usize,
 }
 
-impl<R, W> TcpClient<R, W>
-where
-    R: AsyncRead + Unpin + Sync + Send + 'static,
-    W: AsyncWrite + Unpin + Sync + Send + 'static,
-{
-    fn new(read: R, write: W, size: usize) -> Self {
+impl TcpClient {
+    fn new<R, W>(read: R, write: W, size: usize) -> Self
+    where
+        R: AsyncRead + Unpin + Sync + Send + 'static,
+        W: AsyncWrite + Unpin + Sync + Send + 'static,
+    {
         Self {
-            read: BufReader::new(read),
-            write: BufWriter::new(write),
+            read: BufReader::new(Box::new(read)),
+            write: BufWriter::new(Box::new(write)),
             size,
         }
     }
@@ -217,37 +215,55 @@ where
     }
 }
 
-/// Client for sending and receiving DNS messages over a datagram socket,
-/// presumably UDP. The message ID of responses is checked to ensure it matches
-/// the request ID. If it does not, the response is discarded and the client
-/// will wait for another response until it gets one with a matching ID.
-#[derive(Debug)]
-struct UdpClient<T>
-where
-    T: AsyncDatagram + Unpin + Send + Sync + 'static,
-{
-    sock: T,
+impl fmt::Debug for TcpClient {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "TcpClient {{ read: ..., write: ..., size: {} }}", self.size)
+    }
+}
+
+/// Client for sending and receiving DNS messages over read and write streams,
+/// usually an adapter over a UDP socket. The message ID of responses is checked
+/// to ensure it matches the request ID. If it does not, the response is discarded
+/// and the client will wait for another response until it gets one with a matching
+/// ID.
+struct UdpClient {
+    read: Box<dyn AsyncRead + Send + Sync + Unpin>,
+    write: Box<dyn AsyncWrite + Send + Sync + Unpin>,
     size: usize,
 }
 
-impl<T> UdpClient<T>
-where
-    T: AsyncDatagram + Unpin + Send + Sync + 'static,
-{
-    fn new(sock: T, size: usize) -> Self {
-        Self { sock, size }
+impl UdpClient {
+    fn new<R, W>(read: R, write: W, size: usize) -> Self
+    where
+        R: AsyncRead + Unpin + Sync + Send + 'static,
+        W: AsyncWrite + Unpin + Sync + Send + 'static,
+    {
+        Self {
+            read: Box::new(read),
+            write: Box::new(write),
+            size,
+        }
     }
 
-    async fn exchange(&self, msg: &Message) -> Result<Message, MtopError> {
+    async fn exchange(&mut self, msg: &Message) -> Result<Message, MtopError> {
         let mut buf = Vec::with_capacity(self.size);
         msg.write_network_bytes(&mut buf)?;
-        self.sock.send(&buf).await?;
+        // We expect this to be a datagram socket so we only do a single write.
+        let n = self.write.write(&buf).await?;
+        if n != buf.len() {
+            return Err(MtopError::runtime(format!(
+                "short write to UDP socket. expected {}, got {}",
+                buf.len(),
+                n
+            )));
+        }
+        self.write.flush().await?;
 
         buf.clear();
         buf.resize(self.size, 0);
 
         loop {
-            let n = self.sock.recv(&mut buf).await?;
+            let n = self.read.read(&mut buf).await?;
             let cur = Cursor::new(&buf[0..n]);
             let res = Message::read_network_bytes(cur)?;
             if res.id() == msg.id() {
@@ -257,19 +273,40 @@ where
     }
 }
 
-/// Trait to represent a UDP socket for easier testing.
-trait AsyncDatagram {
-    async fn send(&self, buf: &[u8]) -> io::Result<usize>;
-    async fn recv(&self, buf: &mut [u8]) -> io::Result<usize>;
+impl fmt::Debug for UdpClient {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "UdpClient {{ read: ..., write: ..., size: {} }}", self.size)
+    }
 }
 
-impl AsyncDatagram for UdpSocket {
-    async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        UdpSocket::send(self, buf).await
+/// Adapter for reading and writing to a `UdpSocket` using the `AsyncRead` and `AsyncWrite`
+/// traits. This exists to enable easier testing of `UdpClient` by allowing alternate
+/// implementations of those traits to be used.
+pub(crate) struct SocketAdapter(UdpSocket);
+
+impl SocketAdapter {
+    pub fn new(sock: UdpSocket) -> Self {
+        Self(sock)
+    }
+}
+
+impl AsyncRead for SocketAdapter {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        self.0.poll_recv(cx, buf)
+    }
+}
+
+impl AsyncWrite for SocketAdapter {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, Error>> {
+        self.0.poll_send(cx, buf)
     }
 
-    async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        UdpSocket::recv(self, buf).await
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -278,12 +315,15 @@ impl AsyncDatagram for UdpSocket {
 #[derive(Debug, Clone, Default)]
 struct UdpFactory;
 
-impl ClientFactory<SocketAddr, UdpClient<UdpSocket>> for UdpFactory {
-    async fn make(&self, address: &SocketAddr) -> Result<UdpClient<UdpSocket>, MtopError> {
+impl ClientFactory<SocketAddr, UdpClient> for UdpFactory {
+    async fn make(&self, address: &SocketAddr) -> Result<UdpClient, MtopError> {
         let local = if address.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
         let sock = UdpSocket::bind(local).await?;
         sock.connect(address).await?;
-        Ok(UdpClient::new(sock, DEFAULT_MESSAGE_BUFFER))
+
+        let adapter = SocketAdapter::new(sock);
+        let (read, write) = tokio::io::split(adapter);
+        Ok(UdpClient::new(read, write, DEFAULT_MESSAGE_BUFFER))
     }
 }
 
@@ -292,11 +332,8 @@ impl ClientFactory<SocketAddr, UdpClient<UdpSocket>> for UdpFactory {
 #[derive(Debug, Clone, Default)]
 struct TcpFactory;
 
-impl ClientFactory<SocketAddr, TcpClient<ReadHalf<TcpStream>, WriteHalf<TcpStream>>> for TcpFactory {
-    async fn make(
-        &self,
-        address: &SocketAddr,
-    ) -> Result<TcpClient<ReadHalf<TcpStream>, WriteHalf<TcpStream>>, MtopError> {
+impl ClientFactory<SocketAddr, TcpClient> for TcpFactory {
+    async fn make(&self, address: &SocketAddr) -> Result<TcpClient, MtopError> {
         let (read, write) = tcp_connect(address).await?;
         Ok(TcpClient::new(read, write, DEFAULT_MESSAGE_BUFFER))
     }
@@ -304,17 +341,21 @@ impl ClientFactory<SocketAddr, TcpClient<ReadHalf<TcpStream>, WriteHalf<TcpStrea
 
 #[cfg(test)]
 mod test {
-    use super::{AsyncDatagram, TcpClient, UdpClient};
+    use super::{TcpClient, UdpClient};
     use crate::core::ErrorKind;
     use crate::dns::core::{RecordClass, RecordType};
     use crate::dns::message::{Flags, Message, MessageId, Question, Record};
     use crate::dns::name::Name;
     use crate::dns::rdata::{RecordData, RecordDataA};
-    use std::io::{self, Cursor, Write};
+    use std::collections::VecDeque;
+    use std::io::Cursor;
     use std::net::Ipv4Addr;
+    use std::pin::Pin;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, ReadBuf};
 
     #[rustfmt::skip]
     fn new_message_bytes(id: u16, size_prefix: bool) -> Vec<u8> {
@@ -438,64 +479,50 @@ mod test {
         );
     }
 
-    #[derive(Debug, Default)]
-    struct MockAsyncDatagram {
-        writes: Mutex<Vec<Vec<u8>>>,
-        reads: Mutex<Vec<Vec<u8>>>,
-        reads_idx: AtomicUsize,
+    struct MockReadSocket {
+        values: VecDeque<Vec<u8>>,
+        reads: Arc<AtomicU64>,
     }
 
-    impl MockAsyncDatagram {
-        fn new(reads: Vec<Vec<u8>>, writes: Vec<Vec<u8>>) -> Self {
+    impl MockReadSocket {
+        fn new(values: Vec<Vec<u8>>, reads: Arc<AtomicU64>) -> Self {
             Self {
-                writes: Mutex::new(writes),
-                reads: Mutex::new(reads),
-                reads_idx: AtomicUsize::new(0),
+                values: VecDeque::from(values),
+                reads,
             }
-        }
-
-        fn num_reads(&self) -> usize {
-            self.reads_idx.load(Ordering::Relaxed)
         }
     }
 
-    impl AsyncDatagram for MockAsyncDatagram {
-        async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-            let len = buf.len();
-            let mut writes = self.writes.lock().await;
-            writes.push(buf.to_vec());
-            Ok(len)
-        }
-
-        async fn recv(&self, mut buf: &mut [u8]) -> io::Result<usize> {
-            let reads = self.reads.lock().await;
-            if reads.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "unexpected EOF reading buffer",
-                ));
-            }
-
-            let idx = self.reads_idx.fetch_add(1, Ordering::Relaxed) % reads.len();
-            let bytes = &reads[idx];
-            buf.write(bytes)
+    impl AsyncRead for MockReadSocket {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            self.reads.fetch_add(1, Ordering::AcqRel);
+            let b = self.values.pop_front().unwrap();
+            buf.put_slice(&b);
+            Poll::Ready(Ok(()))
         }
     }
 
     #[tokio::test]
     async fn test_udp_client_one_id_mismatch() {
         let write = Vec::new();
-        let read = vec![
-            new_message_bytes(111 /* purposefully wrong */, false),
-            new_message_bytes(123, false),
-        ];
+        let read_count = Arc::new(AtomicU64::new(0));
+        let read = MockReadSocket::new(
+            vec![
+                new_message_bytes(111 /* purposefully wrong */, false),
+                new_message_bytes(123, false),
+            ],
+            read_count.clone(),
+        );
 
         let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
         let message =
             Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
 
-        let sock = MockAsyncDatagram::new(read, write);
-        let client = UdpClient::new(sock, 512);
+        let mut client = UdpClient::new(read, write, 512);
         let res = client.exchange(&message).await.unwrap();
 
         assert_eq!(message.id(), res.id());
@@ -510,20 +537,20 @@ mod test {
             ),
             res.answers()[0]
         );
-        assert_eq!(2, client.sock.num_reads());
+        assert_eq!(2, read_count.load(Ordering::Acquire));
     }
 
     #[tokio::test]
     async fn test_udp_client_success() {
         let write = Vec::new();
-        let read = vec![new_message_bytes(123, false)];
+        let read_count = Arc::new(AtomicU64::new(0));
+        let read = MockReadSocket::new(vec![new_message_bytes(123, false)], read_count.clone());
 
         let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
         let message =
             Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
 
-        let sock = MockAsyncDatagram::new(read, write);
-        let client = UdpClient::new(sock, 512);
+        let mut client = UdpClient::new(read, write, 512);
         let res = client.exchange(&message).await.unwrap();
 
         assert_eq!(message.id(), res.id());
@@ -538,6 +565,6 @@ mod test {
             ),
             res.answers()[0]
         );
-        assert_eq!(1, client.sock.num_reads());
+        assert_eq!(1, read_count.load(Ordering::Acquire));
     }
 }
