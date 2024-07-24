@@ -1,12 +1,18 @@
 use crate::core::MtopError;
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use tokio::sync::Mutex;
 
-pub(crate) trait ClientFactory<K, V> {
-    async fn make(&self, key: &K) -> Result<V, MtopError>;
+/// Trait used by a client pool for creating new client instances when needed.
+///
+/// Implementations are expected to retain any required configuration for client
+/// instances beyond the identifier for an instance (usually a server address).
+pub trait ClientFactory<K, V> {
+    /// Create a new client instance based on its ID.
+    fn make(&self, key: &K) -> impl Future<Output = Result<V, MtopError>> + Send + Sync;
 }
 
 #[derive(Debug, Clone)]

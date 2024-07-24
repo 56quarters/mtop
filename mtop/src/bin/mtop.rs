@@ -2,8 +2,7 @@ use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{Theme, TAILWIND};
 use mtop_client::{
-    DiscoveryDefault, MemcachedClient, MemcachedPool, MemcachedPoolConfig, MtopError, SelectorRendezvous, Server,
-    Timeout, TlsConfig,
+    DiscoveryDefault, MemcachedClient, MemcachedFactory, MtopError, SelectorRendezvous, Server, Timeout, TlsConfig,
 };
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::env;
@@ -222,7 +221,7 @@ async fn expand_hosts(
     Ok(out)
 }
 
-async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
+async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedClient<MemcachedFactory>, MtopError> {
     let tls_config = TlsConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
@@ -231,25 +230,25 @@ async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedCl
         server_name: opts.tls_server_name.clone(),
     };
 
-    let pool_config = MemcachedPoolConfig {
-        tls: tls_config,
-        ..Default::default()
-    };
-
     let selector = SelectorRendezvous::new(servers.to_vec());
-    let pool = MemcachedPool::new(Handle::current(), pool_config).await?;
-    Ok(MemcachedClient::new(Handle::current(), selector, pool))
+    let factory = MemcachedFactory::new(Handle::current(), tls_config).await?;
+    Ok(MemcachedClient::new(
+        Default::default(),
+        Handle::current(),
+        selector,
+        factory,
+    ))
 }
 
 #[derive(Debug)]
 struct UpdateTask {
-    client: MemcachedClient,
+    client: MemcachedClient<MemcachedFactory>,
     queue: Arc<StatsQueue>,
     timeout: Duration,
 }
 
 impl UpdateTask {
-    fn new(client: MemcachedClient, queue: Arc<StatsQueue>, timeout: Duration) -> Self {
+    fn new(client: MemcachedClient<MemcachedFactory>, queue: Arc<StatsQueue>, timeout: Duration) -> Self {
         UpdateTask { client, queue, timeout }
     }
 
