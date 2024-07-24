@@ -38,9 +38,8 @@ pub struct DnsClientConfig {
     /// the nameservers are tried in-order for each resolution.
     pub rotate: bool,
 
-    /// Max number of open sockets or connections to each for each nameserver. Default is
-    /// to keep one open socket or connection per nameserver. Set to 0 to disable this
-    /// behavior.
+    /// Max number of open sockets or connections to each nameserver. Default is to keep one
+    /// open socket or connection per nameserver. Set to 0 to disable this behavior.
     pub pool_max_idle: u64,
 }
 
