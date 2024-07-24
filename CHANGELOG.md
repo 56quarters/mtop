@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.12.0 - 2024-07-24
+## v0.12.1 - 2024-07-24
 
 - Document architecture and limitations of internal DNS resolver. #166
 - Fix a bug where hostnames were not fully qualified when encoded by 
