@@ -554,7 +554,7 @@ checksum = "c9be0862c1b3f26a88803c4a49de6889c10e608b3ee9344e6ef5b45fb37ad3d1"
 
 [[package]]
 name = "mtop"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "mtop-client"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "byteorder",
  "pin-project-lite",

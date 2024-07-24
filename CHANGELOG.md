@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.12.0 - 2024-07-24
+
+- Document architecture and limitations of internal DNS resolver. #166
+- Fix a bug where hostnames were not fully qualified when encoded by 
+  `dns write`. #162
+- Validate the response to a connection tests to ensure we're talking to a
+  Memcached server. #161
+- Don't attempt to resolve Memcached hostnames without special prefixes. #159
+- Add `--nameserver` flag to `dns` binary to allow setting a server 
+  directly. #158
+- Gracefully handle `SIGINT` in `mc` and `dns` binaries. #158
+- Close Memcached connections when the last request resulted in an error. #156
+- Ensure newly introduced `trace` logging doesn't break the terminal UI. #152
+
 ## v0.11.0 - 2024-06-24
 
 - Add `dns ping` subcommand to `dns` binary to repeatedly perform DNS queries. #149
