@@ -15,12 +15,9 @@ use tokio::task;
 use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, Level};
 
-const DEFAULT_LOG_LEVEL: Level = Level::INFO;
-const DEFAULT_THEME: Theme = TAILWIND;
 // Update interval of more than a second to minimize the chance that stats returned by the
 // memcached server have the exact same "time" value (which has one-second granularity).
-const DEFAULT_STATS_INTERVAL: Duration = Duration::from_millis(1073);
-const DEFAULT_TIMEOUT_SECS: u64 = 5;
+const STATS_INTERVAL: Duration = Duration::from_millis(1073);
 const NUM_MEASUREMENTS: usize = 10;
 
 /// mtop: top for memcached
@@ -29,49 +26,49 @@ const NUM_MEASUREMENTS: usize = 10;
 struct MtopConfig {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
     /// (case-insensitive).
-    #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
+    #[arg(long, env = "MTOP_LOG_LEVEL", default_value_t = Level::INFO)]
     log_level: Level,
 
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
-    #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MTOP_RESOLV_CONF", default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
     /// Timeout for connecting to Memcached and fetching statistics, in seconds.
-    #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
+    #[arg(long, env = "MTOP_TIMEOUT_SECS", default_value_t = 5)]
     timeout_secs: u64,
 
     /// File to log errors to since they cannot be logged to the console. If the path is not
     /// writable, mtop will not start.
-    #[arg(long, default_value = default_log_file().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MTOP_LOG_FILE", default_value = default_log_file().into_os_string(), value_hint = ValueHint::FilePath)]
     log_file: PathBuf,
 
     /// Color scheme to use for the UI. Available options are "ansi", "material", and "tailwind".
-    #[arg(long, default_value_t = DEFAULT_THEME)]
+    #[arg(long, env = "MTOP_THEME", default_value_t = TAILWIND)]
     theme: Theme,
 
     /// Enable TLS connections to the Memcached server.
-    #[arg(long)]
+    #[arg(long, env = "MTOP_TLS_ENABLED")]
     tls_enabled: bool,
 
     /// Optional certificate authority to use for validating the server certificate instead of
     /// the default root certificates.
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MTOP_TLS_CA", value_hint = ValueHint::FilePath)]
     tls_ca: Option<PathBuf>,
 
     /// Optional server name to use for validating the server certificate. If not set, the
     /// hostname of the server is used for checking that the certificate matches the server.
-    #[arg(long, value_parser = parse_server_name)]
+    #[arg(long, env = "MTOP_TLS_SERVER_NAME", value_parser = parse_server_name)]
     tls_server_name: Option<ServerName<'static>>,
 
     /// Optional client certificate to use to authenticate with the Memcached server. Note that
     /// this may or may not be required based on how the Memcached server is configured.
-    #[arg(long, requires = "tls_key", value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MTOP_TLS_CERT", requires = "tls_key", value_hint = ValueHint::FilePath)]
     tls_cert: Option<PathBuf>,
 
     /// Optional client key to use to authenticate with the Memcached server. Note that this may
     /// or may not be required based on how the Memcached server is configured.
-    #[arg(long, requires = "tls_cert", value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MTOP_TLS_KEY", requires = "tls_cert", value_hint = ValueHint::FilePath)]
     tls_key: Option<PathBuf>,
 
     /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least
@@ -150,7 +147,7 @@ async fn main() -> ExitCode {
 
     task::spawn(
         async move {
-            let mut interval = tokio::time::interval(DEFAULT_STATS_INTERVAL);
+            let mut interval = tokio::time::interval(STATS_INTERVAL);
             loop {
                 let _ = interval.tick().await;
                 if let Err(e) = update_task
