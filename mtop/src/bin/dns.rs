@@ -14,10 +14,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tracing::{Instrument, Level};
 
-const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 const DEFAULT_RECORD_TYPE: RecordType = RecordType::A;
 const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
-const DEFAULT_PING_INTERVAL_SECS: f64 = 1.0;
 const MIN_PING_INTERVAL_SECS: f64 = 0.01;
 
 /// dns: Make DNS queries or read/write binary format DNS messages
@@ -26,7 +24,7 @@ const MIN_PING_INTERVAL_SECS: f64 = 0.01;
 struct DnsConfig {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
     /// (case-insensitive).
-    #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
+    #[arg(long, default_value_t = Level::INFO)]
     log_level: Level,
 
     /// Output pprof protobuf profile data to this file if profiling support was enabled
@@ -50,7 +48,7 @@ enum Action {
 #[derive(Debug, Args)]
 struct PingCommand {
     /// How often to run queries, in seconds. Fractional seconds are allowed.
-    #[arg(long, value_parser = parse_interval, default_value_t = DEFAULT_PING_INTERVAL_SECS)]
+    #[arg(long, value_parser = parse_interval, default_value_t = 1.0)]
     interval_secs: f64,
 
     /// Stop after performing `count` queries. Default is to run until interrupted.

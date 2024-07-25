@@ -17,64 +17,59 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::runtime::Handle;
 use tracing::{Instrument, Level};
 
-const DEFAULT_LOG_LEVEL: Level = Level::INFO;
-const DEFAULT_HOST: &str = "localhost:11211";
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
-const DEFAULT_CONNECTIONS_PER_HOST: u64 = 4;
-
 /// mc: memcached command line utility
 #[derive(Debug, Parser)]
 #[command(name = "mc", version = clap::crate_version!())]
 struct McConfig {
     /// Logging verbosity. Allowed values are 'trace', 'debug', 'info', 'warn', and 'error'
     /// (case-insensitive).
-    #[arg(long, default_value_t = DEFAULT_LOG_LEVEL)]
+    #[arg(long, env = "MC_LOG_LEVEL", default_value_t = Level::INFO)]
     log_level: Level,
 
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
-    #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MC_RESOLV_CONF", default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
     /// Memcached host to connect to in the form 'hostname:port'.
-    #[arg(long, default_value_t = DEFAULT_HOST.to_owned(), value_hint = ValueHint::Hostname)]
+    #[arg(long, env = "MC_HOST", default_value = "localhost:11211", value_hint = ValueHint::Hostname)]
     host: String,
 
     /// Timeout for Memcached network operations, in seconds.
-    #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
+    #[arg(long, env = "MC_TIMEOUT_SECS", default_value_t = 30)]
     timeout_secs: u64,
 
     /// Maximum number of idle connections to maintain per host.
-    #[arg(long, default_value_t = DEFAULT_CONNECTIONS_PER_HOST)]
+    #[arg(long, env = "MC_CONNECTIONS", default_value_t = 4)]
     connections: u64,
 
     /// Output pprof protobuf profile data to this file if profiling support was enabled
     /// at build time.
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MC_PROFILE_OUTPUT", value_hint = ValueHint::FilePath)]
     profile_output: Option<PathBuf>,
 
     /// Enable TLS connections to the Memcached server.
-    #[arg(long)]
+    #[arg(long, env = "MC_TLS_ENABLED")]
     tls_enabled: bool,
 
     /// Optional certificate authority to use for validating the server certificate instead of
     /// the default root certificates.
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MC_TLS_CA", value_hint = ValueHint::FilePath)]
     tls_ca: Option<PathBuf>,
 
     /// Optional server name to use for validating the server certificate. If not set, the
     /// hostname of the server is used for checking that the certificate matches the server.
-    #[arg(long, value_parser = parse_server_name)]
+    #[arg(long, env = "MC_TLS_SERVER_NAME", value_parser = parse_server_name)]
     tls_server_name: Option<ServerName<'static>>,
 
     /// Optional client certificate to use to authenticate with the Memcached server. Note that
     /// this may or may not be required based on how the Memcached server is configured.
-    #[arg(long, requires = "tls_key", value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MC_TLS_CERT", requires = "tls_key", value_hint = ValueHint::FilePath)]
     tls_cert: Option<PathBuf>,
 
     /// Optional client key to use to authenticate with the Memcached server. Note that this may
     /// or may not be required based on how the Memcached server is configured.
-    #[arg(long, requires = "tls_cert", value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MC_TLS_KEY", requires = "tls_cert", value_hint = ValueHint::FilePath)]
     tls_key: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -134,7 +129,7 @@ struct AddCommand {
 #[derive(Debug, Args)]
 struct BenchCommand {
     /// How long to run the benchmark for in seconds.
-    #[arg(long, default_value_t = 60)]
+    #[arg(long, env = "MC_BENCH_TIME_SECS", default_value_t = 60)]
     time_secs: u64,
 
     /// How many writes to the cache as a percentage of reads from the cache, 0 to 1.
@@ -142,13 +137,13 @@ struct BenchCommand {
     /// A value of `1.0` means that for 100 gets, there will be 100 sets. A value of `0.5`
     /// means that for 100 gets, there will be 50 sets. Default is to perform many more gets
     /// than sets since cache workloads tend to have more reads than writes.
-    #[arg(long, default_value_t = Percent::unchecked(0.05))]
+    #[arg(long, env = "MC_BENCH_WRITE_PERCENT", default_value_t = Percent::unchecked(0.05))]
     write_percent: Percent,
 
     /// How many workers to run at once, performing gets and sets against the cache.
     ///
     /// Each worker does 10,000 gets and 500 sets per second in the default configuration.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, env = "MC_BENCH_CONCURRENCY", default_value_t = 1)]
     concurrency: usize,
 
     /// How long to wait between each batch of gets and sets performed against the cache.
@@ -157,11 +152,11 @@ struct BenchCommand {
     /// there will be 10,000 gets and 500 sets per second. To increase the number of gets
     /// and sets performed by a worker, reduce this number. To decrease the number of gets
     /// and sets performed by a worker, increase this number.
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, env = "MC_BENCH_DELAY_MILLIS", default_value_t = 100)]
     delay_millis: u64,
 
     /// TTL to use for test values stored in the cache in seconds.
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, env = "MC_BENCH_TTL_SECS", default_value_t = 300)]
     ttl_secs: u32,
 }
 
@@ -174,11 +169,11 @@ struct BenchCommand {
 #[derive(Debug, Args)]
 struct CheckCommand {
     /// How long to run the checks for in seconds.
-    #[arg(long, default_value_t = 60)]
+    #[arg(long, env = "MC_CHECK_TIME_SECS", default_value_t = 60)]
     time_secs: u64,
 
     /// How long to wait between each health check in milliseconds.
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, env = "MC_CHECK_DELAY_MILLIS", default_value_t = 100)]
     delay_millis: u64,
 }
 
@@ -232,7 +227,7 @@ struct IncrCommand {
 struct KeysCommand {
     /// Print key name, expiration as a UNIX timestamp, and value size in bytes as tab separated
     /// values instead of only the key name.
-    #[arg(long)]
+    #[arg(long, env = "MC_KEYS_DETAILS")]
     details: bool,
 }
 

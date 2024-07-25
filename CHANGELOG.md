@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.13.0 - unreleased
+
+- Add support for using environment variables to set all optional arguments
+  of the `mtop`, `mc`, and `dns` binaries. #169
+
 ## v0.12.1 - 2024-07-24
 
 - Document architecture and limitations of internal DNS resolver. #166
