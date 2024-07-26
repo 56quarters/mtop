@@ -218,7 +218,10 @@ async fn expand_hosts(
     Ok(out)
 }
 
-async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedClient<MemcachedFactory>, MtopError> {
+async fn new_client(
+    opts: &MtopConfig,
+    servers: &[Server],
+) -> Result<MemcachedClient<SelectorRendezvous, MemcachedFactory>, MtopError> {
     let tls_config = TlsConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
@@ -239,13 +242,17 @@ async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedCl
 
 #[derive(Debug)]
 struct UpdateTask {
-    client: MemcachedClient<MemcachedFactory>,
+    client: MemcachedClient<SelectorRendezvous, MemcachedFactory>,
     queue: Arc<StatsQueue>,
     timeout: Duration,
 }
 
 impl UpdateTask {
-    fn new(client: MemcachedClient<MemcachedFactory>, queue: Arc<StatsQueue>, timeout: Duration) -> Self {
+    fn new(
+        client: MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+        queue: Arc<StatsQueue>,
+        timeout: Duration,
+    ) -> Self {
         UpdateTask { client, queue, timeout }
     }
 
@@ -298,7 +305,7 @@ impl UpdateTask {
             };
 
             self.queue
-                .insert(Host::from(id), stats, slabs, items)
+                .insert(Host::from(&id), stats, slabs, items)
                 .instrument(tracing::span!(Level::INFO, "queue.insert"))
                 .await;
         }

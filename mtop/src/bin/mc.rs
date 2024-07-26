@@ -339,7 +339,10 @@ async fn main() -> ExitCode {
     code
 }
 
-async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClient<MemcachedFactory>, MtopError> {
+async fn new_client(
+    opts: &McConfig,
+    servers: &[Server],
+) -> Result<MemcachedClient<SelectorRendezvous, MemcachedFactory>, MtopError> {
     let tls_config = TlsConfig {
         enabled: opts.tls_enabled,
         ca_path: opts.tls_ca.clone(),
@@ -357,7 +360,10 @@ async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClie
     Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
 }
 
-async fn connect(client: &MemcachedClient<MemcachedFactory>, timeout: Duration) -> Result<(), MtopError> {
+async fn connect(
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+    timeout: Duration,
+) -> Result<(), MtopError> {
     let pings = client
         .ping()
         .timeout(timeout, "client.ping")
@@ -371,7 +377,11 @@ async fn connect(client: &MemcachedClient<MemcachedFactory>, timeout: Duration) 
     Ok(())
 }
 
-async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_add(
+    opts: &McConfig,
+    cmd: &AddCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     let buf = match read_input().await {
         Ok(v) => v,
         Err(e) => {
@@ -393,7 +403,11 @@ async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient<Mem
     }
 }
 
-async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_bench(
+    opts: &McConfig,
+    cmd: &BenchCommand,
+    client: MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     let stop = Arc::new(AtomicBool::new(false));
     mtop::sig::wait_for_interrupt(Handle::current(), stop.clone()).await;
 
@@ -417,7 +431,7 @@ async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient<
 async fn run_check(
     opts: &McConfig,
     cmd: &CheckCommand,
-    client: MemcachedClient<MemcachedFactory>,
+    client: MemcachedClient<SelectorRendezvous, MemcachedFactory>,
     resolver: DiscoveryDefault,
 ) -> ExitCode {
     let stop = Arc::new(AtomicBool::new(false));
@@ -440,7 +454,11 @@ async fn run_check(
     }
 }
 
-async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_decr(
+    opts: &McConfig,
+    cmd: &DecrCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     if let Err(e) = client
         .decr(&cmd.key, cmd.delta)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.decr")
@@ -454,7 +472,11 @@ async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient<M
     }
 }
 
-async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_delete(
+    opts: &McConfig,
+    cmd: &DeleteCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     if let Err(e) = client
         .delete(&cmd.key)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.delete")
@@ -468,7 +490,11 @@ async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClie
     }
 }
 
-async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_get(
+    opts: &McConfig,
+    cmd: &GetCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     let response = match client
         .get(&[cmd.key.clone()])
         .timeout(Duration::from_secs(opts.timeout_secs), "client.get")
@@ -499,7 +525,11 @@ async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient<Mem
     }
 }
 
-async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_incr(
+    opts: &McConfig,
+    cmd: &IncrCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     if let Err(e) = client
         .incr(&cmd.key, cmd.delta)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.incr")
@@ -513,7 +543,11 @@ async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient<M
     }
 }
 
-async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_keys(
+    opts: &McConfig,
+    cmd: &KeysCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     let response = match client
         .metas()
         .timeout(Duration::from_secs(opts.timeout_secs), "client.metas")
@@ -546,7 +580,11 @@ async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient<M
     }
 }
 
-async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_replace(
+    opts: &McConfig,
+    cmd: &ReplaceCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     let buf = match read_input().await {
         Ok(v) => v,
         Err(e) => {
@@ -568,7 +606,11 @@ async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedCl
     }
 }
 
-async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_set(
+    opts: &McConfig,
+    cmd: &SetCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     let buf = match read_input().await {
         Ok(v) => v,
         Err(e) => {
@@ -590,7 +632,11 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient<Mem
     }
 }
 
-async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient<MemcachedFactory>) -> ExitCode {
+async fn run_touch(
+    opts: &McConfig,
+    cmd: &TouchCommand,
+    client: &MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+) -> ExitCode {
     if let Err(e) = client
         .touch(&cmd.key, cmd.ttl)
         .timeout(Duration::from_secs(opts.timeout_secs), "client.touch")

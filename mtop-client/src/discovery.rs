@@ -69,16 +69,16 @@ impl Server {
         Self { id, name }
     }
 
-    pub fn id(&self) -> ServerID {
-        self.id.clone()
+    pub fn id(&self) -> &ServerID {
+        &self.id
     }
 
-    pub fn server_name(&self) -> ServerName<'static> {
-        self.name.clone()
+    pub fn server_name(&self) -> &ServerName<'static> {
+        &self.name
     }
 
-    pub fn address(&self) -> String {
-        self.id.to_string()
+    pub fn address(&self) -> &str {
+        self.id.as_ref()
     }
 }
 
@@ -90,13 +90,13 @@ impl PartialOrd for Server {
 
 impl Ord for Server {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.id().cmp(&other.id())
+        self.id.cmp(&other.id)
     }
 }
 
 impl fmt::Display for Server {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.id())
+        write!(f, "{}", self.id)
     }
 }
 
@@ -388,7 +388,7 @@ mod test {
         let servers = DiscoveryDefault::resolve_by_proto(&client, "dns+example.com:11211")
             .await
             .unwrap();
-        let ids = servers.iter().map(|s| s.id()).collect::<Vec<_>>();
+        let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id_a = ServerID::from(("10.1.1.1", 11211));
         let id_aaaa = ServerID::from(("[::1]", 11211));
@@ -433,7 +433,7 @@ mod test {
         let servers = DiscoveryDefault::resolve_by_proto(&client, "dnssrv+_cache.example.com:11211")
             .await
             .unwrap();
-        let ids = servers.iter().map(|s| s.id()).collect::<Vec<_>>();
+        let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id1 = ServerID::from(("cache01.example.com.", 11211));
         let id2 = ServerID::from(("cache02.example.com.", 11211));
@@ -449,7 +449,7 @@ mod test {
 
         let client = MockDnsClient::new(vec![]);
         let servers = DiscoveryDefault::resolve_by_proto(&client, name).await.unwrap();
-        let ids = servers.iter().map(|s| s.id()).collect::<Vec<_>>();
+        let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id = ServerID::from(addr);
         assert!(ids.contains(&id), "expected {:?} to contain {:?}", ids, id);
@@ -461,7 +461,7 @@ mod test {
 
         let client = MockDnsClient::new(vec![]);
         let servers = DiscoveryDefault::resolve_by_proto(&client, name).await.unwrap();
-        let ids = servers.iter().map(|s| s.id()).collect::<Vec<_>>();
+        let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id = ServerID::from(("localhost", 11211));
         assert!(ids.contains(&id), "expected {:?} to contain {:?}", ids, id);

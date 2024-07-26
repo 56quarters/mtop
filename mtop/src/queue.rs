@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 pub struct Host(String);
 
 impl Host {
-    pub fn from(id: ServerID) -> Self {
+    pub fn from(id: &ServerID) -> Self {
         Self(id.to_string())
     }
 }

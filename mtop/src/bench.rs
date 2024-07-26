@@ -1,4 +1,4 @@
-use mtop_client::{MemcachedClient, MemcachedFactory, MtopError, Timeout};
+use mtop_client::{MemcachedClient, MemcachedFactory, MtopError, SelectorRendezvous, Timeout};
 use rand::Rng;
 use rand_distr::Exp;
 use std::fmt;
@@ -54,7 +54,7 @@ impl fmt::Display for Percent {
 /// Spawn one or more workers to perform gets and sets against a Memcached server as fast as possible.
 #[derive(Debug)]
 pub struct Bencher {
-    client: Arc<MemcachedClient<MemcachedFactory>>,
+    client: Arc<MemcachedClient<SelectorRendezvous, MemcachedFactory>>,
     handle: Handle,
     delay: Duration,
     timeout: Duration,
@@ -75,7 +75,7 @@ impl Bencher {
     // STFU clippy
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        client: MemcachedClient<MemcachedFactory>,
+        client: MemcachedClient<SelectorRendezvous, MemcachedFactory>,
         handle: Handle,
         delay: Duration,
         timeout: Duration,

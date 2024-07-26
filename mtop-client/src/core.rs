@@ -621,6 +621,12 @@ pub struct ProtocolError {
     message: Option<String>,
 }
 
+impl ProtocolError {
+    pub fn kind(&self) -> ProtocolErrorKind {
+        self.kind
+    }
+}
+
 impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(msg) = &self.message {
