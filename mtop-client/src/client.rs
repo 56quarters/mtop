@@ -4,10 +4,10 @@ use crate::net::{tcp_connect, tcp_tls_connect, tls_client_config, TlsConfig};
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig, PooledClient};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::future::Future;
 use std::hash::Hasher;
 use std::sync::Arc;
 use tokio::runtime::Handle;
-use tokio::sync::RwLock;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::ClientConfig;
 use tracing::instrument::WithSubscriber;
@@ -51,7 +51,7 @@ impl MemcachedFactory {
 impl ClientFactory<Server, Memcached> for MemcachedFactory {
     async fn make(&self, addr: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
-            let server_name = self.server_name.clone().unwrap_or_else(|| addr.server_name());
+            let server_name = self.server_name.clone().unwrap_or_else(|| addr.server_name().clone());
             let (read, write) = tcp_tls_connect(addr.address(), server_name, cfg.clone()).await?;
             Ok(Memcached::new(read, write))
         } else {
@@ -61,21 +61,28 @@ impl ClientFactory<Server, Memcached> for MemcachedFactory {
     }
 }
 
+/// Logic for picking a server to "own" a particular cache key.
+pub trait Selector {
+    /// Get a copy of all known servers.
+    fn servers(&self) -> impl Future<Output = Vec<Server>> + Send + Sync;
+
+    /// Get the `Server` that owns the given key, or an error if there are no servers.
+    fn server(&self, key: &Key) -> impl Future<Output = Result<Server, MtopError>> + Send + Sync;
+}
+
 /// Logic for picking a server to "own" a particular cache key that uses
 /// rendezvous hashing.
 ///
 /// See https://en.wikipedia.org/wiki/Rendezvous_hashing
 #[derive(Debug)]
 pub struct SelectorRendezvous {
-    servers: RwLock<Vec<Server>>,
+    servers: Vec<Server>,
 }
 
 impl SelectorRendezvous {
-    /// Create a new instance with the provided initial server list
+    /// Create a new instance with the provided initial server list.
     pub fn new(servers: Vec<Server>) -> Self {
-        Self {
-            servers: RwLock::new(servers),
-        }
+        Self { servers }
     }
 
     fn score(server: &Server, key: &Key) -> u64 {
@@ -84,40 +91,32 @@ impl SelectorRendezvous {
         hasher.write(key.as_ref().as_bytes());
         hasher.finish()
     }
+}
 
-    /// Get a copy of all current servers.
-    pub async fn servers(&self) -> Vec<Server> {
-        let servers = self.servers.read().await;
-        servers.clone()
+impl Selector for SelectorRendezvous {
+    async fn servers(&self) -> Vec<Server> {
+        self.servers.clone()
     }
 
-    /// Get the `Server` that owns the given key, or none if there are no servers.
-    pub async fn server(&self, key: &Key) -> Option<Server> {
-        let servers = self.servers.read().await;
-        if servers.is_empty() {
-            None
-        } else if servers.len() == 1 {
-            servers.first().cloned()
+    async fn server(&self, key: &Key) -> Result<Server, MtopError> {
+        if self.servers.is_empty() {
+            Err(MtopError::runtime("no servers available"))
+        } else if self.servers.len() == 1 {
+            Ok(self.servers.first().cloned().unwrap())
         } else {
             let mut max = u64::MIN;
             let mut choice = None;
 
-            for server in servers.iter() {
+            for server in self.servers.iter() {
                 let score = Self::score(server, key);
-                if score > max {
+                if score >= max {
                     choice = Some(server);
                     max = score;
                 }
             }
 
-            choice.cloned()
+            Ok(choice.cloned().unwrap())
         }
-    }
-
-    /// Update the list of potential servers to pick from.
-    pub async fn set_servers(&self, servers: Vec<Server>) {
-        let mut current = self.servers.write().await;
-        *current = servers
     }
 }
 
@@ -150,12 +149,13 @@ impl ValuesResponse {
 }
 
 #[derive(Debug)]
-pub struct MemcachedClient<F>
+pub struct MemcachedClient<S, F>
 where
+    S: Selector + Send + Sync + 'static,
     F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
 {
     handle: Handle,
-    selector: SelectorRendezvous,
+    selector: S,
     pool: Arc<ClientPool<Server, Memcached, F>>,
 }
 
@@ -190,25 +190,23 @@ macro_rules! spawn_for_host {
 macro_rules! operation_for_key {
     ($self:ident, $method:ident, $key:expr $(, $args:expr)* $(,)?) => {{
         let key = Key::one($key)?;
-        if let Some(s) = $self.selector.server(&key).await {
-            let mut conn = $self.pool.get(&s).await?;
-            match conn.$method(&key, $($args,)*).await {
-                Ok(v) => {
-                    $self.pool.put(conn).await;
-                    Ok(v)
-                }
-                Err(e) => {
-                    // Only return the client to the pool if error was due to an expected
-                    // server error. Otherwise, we have no way to know the state of the client
-                    // and associated connection.
-                    if e.kind() == ErrorKind::Protocol {
-                        $self.pool.put(conn).await;
-                    }
-                    Err(e)
-                }
+        let server = $self.selector.server(&key).await?;
+        let mut conn = $self.pool.get(&server).await?;
+
+        match conn.$method(&key, $($args,)*).await {
+            Ok(v) => {
+                $self.pool.put(conn).await;
+                Ok(v)
             }
-        } else {
-            Err(MtopError::runtime("no servers available"))
+            Err(e) => {
+                // Only return the client to the pool if error was due to an expected
+                // server error. Otherwise, we have no way to know the state of the client
+                // and associated connection.
+                if e.kind() == ErrorKind::Protocol {
+                    $self.pool.put(conn).await;
+                }
+                Err(e)
+            }
         }
     }};
 }
@@ -228,13 +226,16 @@ macro_rules! operation_for_all {
         for (server, task) in tasks {
             match task.await {
                 Ok(Ok(results)) => {
-                    values.insert(server.id(), results);
+                    values.insert(server.id().clone(), results);
                 }
                 Ok(Err(e)) => {
-                    errors.insert(server.id(), e);
+                    errors.insert(server.id().clone(), e);
                 }
                 Err(e) => {
-                    errors.insert(server.id(), MtopError::runtime_cause("fetching cluster values", e));
+                    errors.insert(
+                        server.id().clone(),
+                        MtopError::runtime_cause("fetching cluster values", e),
+                    );
                 }
             };
         }
@@ -243,8 +244,9 @@ macro_rules! operation_for_all {
     }};
 }
 
-impl<F> MemcachedClient<F>
+impl<S, F> MemcachedClient<S, F>
 where
+    S: Selector + Send + Sync + 'static,
     F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
 {
     /// Create a new `MemcachedClient` instance.
@@ -253,7 +255,7 @@ where
     /// parallel. `selector` is used to determine which server "owns" a particular key.
     /// `pool` is used for pooling or establishing new connections to each server as
     /// needed.
-    pub fn new(cfg: MemcachedClientConfig, handle: Handle, selector: SelectorRendezvous, factory: F) -> Self {
+    pub fn new(cfg: MemcachedClientConfig, handle: Handle, selector: S, factory: F) -> Self {
         let pool_config = ClientPoolConfig {
             name: "memcached-tcp".to_owned(),
             max_idle: cfg.pool_max_idle,
@@ -351,10 +353,9 @@ where
         let num_keys = keys.len();
         let mut by_server: HashMap<Server, Vec<Key>> = HashMap::new();
         for key in keys {
-            if let Some(s) = self.selector.server(&key).await {
-                let entry = by_server.entry(s).or_default();
-                entry.push(key);
-            }
+            let server = self.selector.server(&key).await?;
+            let entry = by_server.entry(server).or_default();
+            entry.push(key);
         }
 
         let tasks = by_server
@@ -371,10 +372,10 @@ where
                     values.extend(results);
                 }
                 Ok(Err(e)) => {
-                    errors.insert(server.id(), e);
+                    errors.insert(server.id().clone(), e);
                 }
                 Err(e) => {
-                    errors.insert(server.id(), MtopError::runtime_cause("fetching keys", e));
+                    errors.insert(server.id().clone(), MtopError::runtime_cause("fetching keys", e));
                 }
             };
         }
@@ -475,159 +476,232 @@ where
 
 #[cfg(test)]
 mod test {
-    // TODO: Actually figure out how to test this without a bunch of boilerplate.
+    use super::{MemcachedClient, MemcachedClientConfig, Selector};
+    use crate::core::{ErrorKind, Key, Memcached, MtopError, Value};
+    use crate::discovery::{Server, ServerID};
+    use crate::pool::ClientFactory;
+    use rustls_pki_types::ServerName;
+    use std::collections::HashMap;
+    use std::io::Cursor;
+    use tokio::runtime::Handle;
 
-    ///////////
-    // stats //
-    ///////////
+    #[derive(Debug, Default)]
+    struct MockSelector {
+        mapping: HashMap<Key, Server>,
+    }
 
-    #[tokio::test]
-    async fn test_memcached_client_stats_no_servers() {}
+    impl Selector for MockSelector {
+        async fn servers(&self) -> Vec<Server> {
+            self.mapping.values().cloned().collect()
+        }
 
-    #[tokio::test]
-    async fn test_memcached_client_stats_no_errors() {}
+        async fn server(&self, key: &Key) -> Result<Server, MtopError> {
+            self.mapping
+                .get(key)
+                .cloned()
+                .ok_or_else(|| MtopError::runtime("no servers available"))
+        }
+    }
 
-    #[tokio::test]
-    async fn test_memcached_client_stats_some_errors() {}
+    #[derive(Debug, Default)]
+    struct MockClientFactory {
+        contents: HashMap<Server, Vec<u8>>,
+    }
 
-    ///////////
-    // slabs //
-    ///////////
+    impl ClientFactory<Server, Memcached> for MockClientFactory {
+        async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
+            let bytes = self
+                .contents
+                .get(key)
+                .cloned()
+                .ok_or_else(|| MtopError::runtime(format!("no server for {:?}", key)))?;
+            let reads = Cursor::new(bytes);
+            Ok(Memcached::new(reads, Vec::new()))
+        }
+    }
 
-    #[tokio::test]
-    async fn test_memcached_client_slabs_no_servers() {}
+    macro_rules! new_client {
+        () => {{
+            let cfg = MemcachedClientConfig { pool_max_idle: 1 };
+            let handle = Handle::current();
+            let selector = MockSelector::default();
+            let factory = MockClientFactory::default();
+            MemcachedClient::new(cfg, handle, selector, factory)
+        }};
 
-    #[tokio::test]
-    async fn test_memcached_client_slabs_no_errors() {}
+        ($($host_and_port:expr => $key:expr => $contents:expr$(,)?)*) => {{
+            let mut mapping = HashMap::new();
+            let mut contents = HashMap::new();
 
-    #[tokio::test]
-    async fn test_memcached_client_slabs_some_errors() {}
+            $(
+            let server = {
+                let (host, port_str) = $host_and_port.split_once(':').unwrap();
+                let port: u16 = port_str.parse().unwrap();
+                let name = ServerName::try_from(host).unwrap();
+                let id = ServerID::from((host, port));
+                Server::new(id, name)
+            };
+            mapping.insert(Key::one($key).unwrap(), server.clone());
+            contents.insert(server, $contents.to_vec());
+            )*
 
-    ///////////
-    // items //
-    ///////////
+            let cfg = MemcachedClientConfig { pool_max_idle: 1 };
+            let handle = Handle::current();
+            let selector = MockSelector { mapping };
+            let factory = MockClientFactory { contents };
+            MemcachedClient::new(cfg, handle, selector, factory)
+        }};
+    }
 
-    #[tokio::test]
-    async fn test_memcached_client_items_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_items_no_errors() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_items_some_errors() {}
-
-    ///////////
-    // metas //
-    ///////////
-
-    #[tokio::test]
-    async fn test_memcached_client_metas_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_metas_no_errors() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_metas_some_errors() {}
+    //
+    // NOTE: We aren't testing all methods of the client, just a representative
+    //  selection. This is because there are only really three types of methods in
+    //  the client: 1 - methods that operate on every server via a macro 2 - methods
+    //  that operate on a single server based on the key via a macro 3 - the get method
+    //  that has its own custom implementation.
+    //
 
     //////////
     // ping //
     //////////
 
     #[tokio::test]
-    async fn test_memcached_client_ping_no_servers() {}
+    async fn test_memcached_client_ping_no_servers() {
+        let client = new_client!();
+        let response = client.ping().await.unwrap();
+
+        assert!(response.values.is_empty());
+        assert!(response.errors.is_empty());
+    }
 
     #[tokio::test]
-    async fn test_memcached_client_ping_no_errors() {}
+    async fn test_memcached_client_ping_no_errors() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "unused1" => "VERSION 1.6.22\r\n".as_bytes(),
+            "cache02.example.com:11211" => "unused2" => "VERSION 1.6.22\r\n".as_bytes(),
+        );
+        let response = client.ping().await.unwrap();
+
+        assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
+        assert!(response.values.contains_key(&ServerID::from(("cache02.example.com", 11211))));
+        assert!(response.errors.is_empty());
+    }
 
     #[tokio::test]
-    async fn test_memcached_client_ping_some_errors() {}
+    async fn test_memcached_client_ping_some_errors() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "unused1" => "VERSION 1.6.22\r\n".as_bytes(),
+            "cache02.example.com:11211" => "unused2" => "ERROR Too many open connections\r\n".as_bytes(),
+        );
+        let response = client.ping().await.unwrap();
+
+        assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
+        assert!(response.errors.contains_key(&ServerID::from(("cache02.example.com", 11211))));
+    }
 
     /////////
     // get //
     /////////
 
     #[tokio::test]
-    async fn test_memcached_client_get_invalid_keys() {}
+    async fn test_memcached_client_get_invalid_keys() {
+        let client = new_client!();
+        let res = client.get(vec!["invalid key"]).await;
+        let err = res.unwrap_err();
+
+        assert_eq!(ErrorKind::Runtime, err.kind());
+    }
 
     #[tokio::test]
-    async fn test_memcached_client_get_no_keys() {}
+    async fn test_memcached_client_get_no_keys() {
+        let client = new_client!();
+        let keys: Vec<String> = Vec::new();
+        let response = client.get(keys).await.unwrap();
+
+        assert!(response.values.is_empty());
+        assert!(response.errors.is_empty());
+    }
 
     #[tokio::test]
-    async fn test_memcached_client_get_no_servers() {}
+    async fn test_memcached_client_get_no_servers() {
+        let client = new_client!();
+        let res = client.get(vec!["key1", "key2"]).await;
+        let err = res.unwrap_err();
+
+        assert_eq!(ErrorKind::Runtime, err.kind());
+    }
 
     #[tokio::test]
-    async fn test_memcached_client_get_no_errors() {}
+    async fn test_memcached_client_get_no_errors() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "key1" => "VALUE key1 1 6 123\r\nfoobar\r\nEND\r\n".as_bytes(),
+            "cache02.example.com:11211" => "key2" => "VALUE key2 2 7 456\r\nbazbing\r\nEND\r\n".as_bytes(),
+        );
+        let response = client.get(vec!["key1", "key2"]).await.unwrap();
+
+        assert_eq!(
+            response.values.get("key1"),
+            Some(&Value {
+                key: "key1".to_owned(),
+                cas: 123,
+                flags: 1,
+                data: "foobar".as_bytes().to_owned(),
+            })
+        );
+        assert_eq!(
+            response.values.get("key2"),
+            Some(&Value {
+                key: "key2".to_owned(),
+                cas: 456,
+                flags: 2,
+                data: "bazbing".as_bytes().to_owned(),
+            })
+        );
+    }
 
     #[tokio::test]
-    async fn test_memcached_client_get_some_errors() {}
+    async fn test_memcached_client_get_some_errors() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "key1" => "VALUE key1 1 6 123\r\nfoobar\r\nEND\r\n".as_bytes(),
+            "cache02.example.com:11211" => "key2" => "ERROR Too many open connections\r\n".as_bytes(),
+        );
+        let res = client.get(vec!["key1", "key2"]).await;
+        let values = res.unwrap();
 
-    //////////
-    // incr //
-    //////////
+        assert_eq!(
+            values.values.get("key1"),
+            Some(&Value {
+                key: "key1".to_owned(),
+                cas: 123,
+                flags: 1,
+                data: "foobar".as_bytes().to_owned(),
+            })
+        );
+        assert_eq!(values.values.get("key2"), None);
 
-    #[tokio::test]
-    async fn test_memcached_client_incr_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_incr_success() {}
-
-    //////////
-    // decr //
-    //////////
-
-    #[tokio::test]
-    async fn test_memcached_client_decr_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_decr_success() {}
+        let id = ServerID::from(("cache02.example.com", 11211));
+        assert_eq!(values.errors.get(&id).map(|e| e.kind()), Some(ErrorKind::Protocol))
+    }
 
     /////////
     // set //
     /////////
 
     #[tokio::test]
-    async fn test_memcached_client_set_no_servers() {}
+    async fn test_memcached_client_set_no_servers() {
+        let client = new_client!();
+        let res = client.set("key1", 1, 60, "foo".as_bytes()).await;
+        let err = res.unwrap_err();
+
+        assert_eq!(ErrorKind::Runtime, err.kind());
+    }
 
     #[tokio::test]
-    async fn test_memcached_client_set_success() {}
-
-    /////////
-    // add //
-    /////////
-
-    #[tokio::test]
-    async fn test_memcached_client_add_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_add_success() {}
-
-    /////////////
-    // replace //
-    /////////////
-
-    #[tokio::test]
-    async fn test_memcached_client_replace_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_replace_success() {}
-
-    ///////////
-    // touch //
-    ///////////
-
-    #[tokio::test]
-    async fn test_memcached_client_touch_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_touch_success() {}
-
-    ////////////
-    // delete //
-    ////////////
-
-    #[tokio::test]
-    async fn test_memcached_client_delete_no_servers() {}
-
-    #[tokio::test]
-    async fn test_memcached_client_delete_success() {}
+    async fn test_memcached_client_set_success() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "key1" => "STORED\r\n".as_bytes(),
+        );
+        let res = client.set("key1", 1, 60, "foo".as_bytes()).await;
+        let _ = res.unwrap();
+    }
 }

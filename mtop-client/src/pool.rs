@@ -25,7 +25,7 @@ pub(crate) struct ClientPoolConfig {
 pub(crate) struct ClientPool<K, V, F>
 where
     K: Eq + Hash + Clone + fmt::Display,
-    F: ClientFactory<K, V>,
+    F: ClientFactory<K, V> + Send + Sync,
 {
     clients: Mutex<HashMap<K, Vec<PooledClient<K, V>>>>,
     config: ClientPoolConfig,
@@ -35,7 +35,7 @@ where
 impl<K, V, F> ClientPool<K, V, F>
 where
     K: Eq + Hash + Clone + fmt::Display,
-    F: ClientFactory<K, V>,
+    F: ClientFactory<K, V> + Send + Sync,
 {
     pub(crate) fn new(config: ClientPoolConfig, factory: F) -> Self {
         Self {
