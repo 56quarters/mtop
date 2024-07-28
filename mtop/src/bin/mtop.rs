@@ -231,7 +231,7 @@ async fn new_client(
     };
 
     let selector = SelectorRendezvous::new(servers.to_vec());
-    let factory = MemcachedFactory::new(Handle::current(), tls_config).await?;
+    let factory = MemcachedFactory::new(tls_config, Handle::current()).await?;
     Ok(MemcachedClient::new(
         Default::default(),
         Handle::current(),
