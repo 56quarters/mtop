@@ -518,7 +518,7 @@ async fn run_get(
         tracing::error!(message = "error fetching value", server = %id, err = %e);
     }
 
-    if response.has_errors() {
+    if !response.errors.is_empty() {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -561,7 +561,7 @@ async fn run_keys(
         }
     };
 
-    let has_errors = response.has_errors();
+    let has_errors = !response.errors.is_empty();
     let mut metas: Vec<Meta> = response.values.into_values().flatten().collect();
     metas.sort();
 
