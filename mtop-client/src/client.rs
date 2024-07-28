@@ -127,25 +127,11 @@ pub struct ServersResponse<T> {
     pub errors: HashMap<ServerID, MtopError>,
 }
 
-impl<T> ServersResponse<T> {
-    /// Return true if there are any errors, false otherwise.
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-}
-
 /// Response for values indexed by key and errors indexed by server.
 #[derive(Debug, Default)]
 pub struct ValuesResponse {
     pub values: HashMap<String, Value>,
     pub errors: HashMap<ServerID, MtopError>,
-}
-
-impl ValuesResponse {
-    /// Return true if there are any errors, false otherwise.
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
 }
 
 #[derive(Debug)]
