@@ -1,4 +1,4 @@
-use mtop_client::{DiscoveryDefault, Key, MemcachedClient, MemcachedFactory, SelectorRendezvous, Timeout};
+use mtop_client::{DiscoveryDefault, Key, MemcachedClient, Timeout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -10,7 +10,7 @@ const VALUE: &[u8] = "test".as_bytes();
 /// Repeatedly make connections to a Memcached server to verify connectivity.
 #[derive(Debug)]
 pub struct Checker {
-    client: MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+    client: MemcachedClient,
     resolver: DiscoveryDefault,
     delay: Duration,
     timeout: Duration,
@@ -23,7 +23,7 @@ impl Checker {
     /// part of the test may take (DNS resolution, connecting, setting a value, and fetching
     /// a value).
     pub fn new(
-        client: MemcachedClient<SelectorRendezvous, MemcachedFactory>,
+        client: MemcachedClient,
         resolver: DiscoveryDefault,
         delay: Duration,
         timeout: Duration,

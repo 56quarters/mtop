@@ -15,12 +15,12 @@ use tracing::instrument::WithSubscriber;
 /// Implementation of a `ClientFactory` that creates new Memcached clients that
 /// use plaintext or TLS TCP connections.
 #[derive(Debug)]
-pub struct MemcachedFactory {
+pub struct TcpFactory {
     client_config: Option<Arc<ClientConfig>>,
     server_name: Option<ServerName<'static>>,
 }
 
-impl MemcachedFactory {
+impl TcpFactory {
     pub async fn new(tls: TlsConfig, handle: Handle) -> Result<Self, MtopError> {
         let server_name = if tls.enabled { tls.server_name.clone() } else { None };
 
@@ -37,7 +37,7 @@ impl MemcachedFactory {
     }
 }
 
-impl ClientFactory<Server, Memcached> for MemcachedFactory {
+impl ClientFactory<Server, Memcached> for TcpFactory {
     async fn make(&self, addr: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
             let server_name = self.server_name.clone().unwrap_or_else(|| addr.server_name().clone());
@@ -223,7 +223,7 @@ impl Default for MemcachedClientConfig {
 /// Memcached client that operates on multiple servers, pooling connections
 /// to them, and sharding keys via a `Selector` implementation.
 #[derive(Debug)]
-pub struct MemcachedClient<S, F>
+pub struct MemcachedClient<S = SelectorRendezvous, F = TcpFactory>
 where
     S: Selector + Send + Sync + 'static,
     F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
@@ -690,7 +690,6 @@ mod test {
         let client = new_client!(
             "cache01.example.com:11211" => "key1" => "STORED\r\n".as_bytes(),
         );
-        let res = client.set("key1", 1, 60, "foo".as_bytes()).await;
-        let _ = res.unwrap();
+        client.set("key1", 1, 60, "foo".as_bytes()).await.unwrap();
     }
 }

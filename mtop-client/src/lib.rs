@@ -7,8 +7,7 @@ mod pool;
 mod timeout;
 
 pub use crate::client::{
-    MemcachedClient, MemcachedClientConfig, MemcachedFactory, Selector, SelectorRendezvous, ServersResponse,
-    ValuesResponse,
+    MemcachedClient, MemcachedClientConfig, Selector, SelectorRendezvous, ServersResponse, TcpFactory, ValuesResponse,
 };
 pub use crate::core::{
     ErrorKind, Key, Memcached, Meta, MtopError, ProtocolError, ProtocolErrorKind, Slab, SlabItem, SlabItems, Slabs,
