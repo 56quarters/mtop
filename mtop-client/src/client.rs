@@ -12,17 +12,6 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::ClientConfig;
 use tracing::instrument::WithSubscriber;
 
-#[derive(Debug, Clone)]
-pub struct MemcachedClientConfig {
-    pub pool_max_idle: u64,
-}
-
-impl Default for MemcachedClientConfig {
-    fn default() -> Self {
-        Self { pool_max_idle: 4 }
-    }
-}
-
 /// Implementation of a `ClientFactory` that creates new Memcached clients that
 /// use plaintext or TLS TCP connections.
 #[derive(Debug)]
@@ -32,11 +21,11 @@ pub struct MemcachedFactory {
 }
 
 impl MemcachedFactory {
-    pub async fn new(handle: Handle, tls: TlsConfig) -> Result<Self, MtopError> {
+    pub async fn new(tls: TlsConfig, handle: Handle) -> Result<Self, MtopError> {
         let server_name = if tls.enabled { tls.server_name.clone() } else { None };
 
         let client_config = if tls.enabled {
-            Some(Arc::new(tls_client_config(handle, tls).await?))
+            Some(Arc::new(tls_client_config(tls, handle).await?))
         } else {
             None
         };
@@ -134,17 +123,6 @@ pub struct ValuesResponse {
     pub errors: HashMap<ServerID, MtopError>,
 }
 
-#[derive(Debug)]
-pub struct MemcachedClient<S, F>
-where
-    S: Selector + Send + Sync + 'static,
-    F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
-{
-    handle: Handle,
-    selector: S,
-    pool: Arc<ClientPool<Server, Memcached, F>>,
-}
-
 /// Run a method for a particular server in a spawned future.
 macro_rules! spawn_for_host {
     ($self:ident, $method:ident, $host:expr $(, $args:expr)* $(,)?) => {{
@@ -230,6 +208,31 @@ macro_rules! operation_for_all {
     }};
 }
 
+/// Configuration for constructing a new client instance.
+#[derive(Debug, Clone)]
+pub struct MemcachedClientConfig {
+    pub pool_max_idle: u64,
+}
+
+impl Default for MemcachedClientConfig {
+    fn default() -> Self {
+        Self { pool_max_idle: 4 }
+    }
+}
+
+/// Memcached client that operates on multiple servers, pooling connections
+/// to them, and sharding keys via a `Selector` implementation.
+#[derive(Debug)]
+pub struct MemcachedClient<S, F>
+where
+    S: Selector + Send + Sync + 'static,
+    F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
+{
+    handle: Handle,
+    selector: S,
+    pool: Arc<ClientPool<Server, Memcached, F>>,
+}
+
 impl<S, F> MemcachedClient<S, F>
 where
     S: Selector + Send + Sync + 'static,
@@ -239,12 +242,12 @@ where
     ///
     /// `handle` is used to spawn multiple async tasks to fetch data from servers in
     /// parallel. `selector` is used to determine which server "owns" a particular key.
-    /// `pool` is used for pooling or establishing new connections to each server as
-    /// needed.
-    pub fn new(cfg: MemcachedClientConfig, handle: Handle, selector: S, factory: F) -> Self {
+    /// `factory` is used for establishing new connections, which are pooled, to each
+    /// server as needed.
+    pub fn new(config: MemcachedClientConfig, handle: Handle, selector: S, factory: F) -> Self {
         let pool_config = ClientPoolConfig {
             name: "memcached-tcp".to_owned(),
-            max_idle: cfg.pool_max_idle,
+            max_idle: config.pool_max_idle,
         };
 
         Self {
@@ -539,13 +542,13 @@ mod test {
         }};
     }
 
-    //
     // NOTE: We aren't testing all methods of the client, just a representative
-    //  selection. This is because there are only really three types of methods in
-    //  the client: 1 - methods that operate on every server via a macro 2 - methods
-    //  that operate on a single server based on the key via a macro 3 - the get method
-    //  that has its own custom implementation.
-    //
+    //  selection. This is because there are only really three types of methods
+    //  in the client:
+    //  1 - methods that operate on every server via operation_for_all!
+    //  2 - methods that operate on a single server based on the key via
+    //      operation_for_key!
+    //  3 - the get method that has its own non-macro implementation.
 
     //////////
     // ping //

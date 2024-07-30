@@ -35,7 +35,7 @@ pub struct TlsConfig {
     pub server_name: Option<ServerName<'static>>,
 }
 
-pub(crate) async fn tls_client_config(handle: Handle, config: TlsConfig) -> Result<ClientConfig, MtopError> {
+pub(crate) async fn tls_client_config(config: TlsConfig, handle: Handle) -> Result<ClientConfig, MtopError> {
     handle.spawn_blocking(move || client_config(config)).await.unwrap()
 }
 
