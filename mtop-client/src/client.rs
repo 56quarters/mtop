@@ -64,11 +64,11 @@ pub trait Selector {
 ///
 /// See https://en.wikipedia.org/wiki/Rendezvous_hashing
 #[derive(Debug)]
-pub struct SelectorRendezvous {
+pub struct RendezvousSelector {
     servers: Vec<Server>,
 }
 
-impl SelectorRendezvous {
+impl RendezvousSelector {
     /// Create a new instance with the provided initial server list.
     pub fn new(servers: Vec<Server>) -> Self {
         Self { servers }
@@ -82,7 +82,7 @@ impl SelectorRendezvous {
     }
 }
 
-impl Selector for SelectorRendezvous {
+impl Selector for RendezvousSelector {
     async fn servers(&self) -> Vec<Server> {
         self.servers.clone()
     }
@@ -223,7 +223,7 @@ impl Default for MemcachedClientConfig {
 /// Memcached client that operates on multiple servers, pooling connections
 /// to them, and sharding keys via a `Selector` implementation.
 #[derive(Debug)]
-pub struct MemcachedClient<S = SelectorRendezvous, F = TcpFactory>
+pub struct MemcachedClient<S = RendezvousSelector, F = TcpFactory>
 where
     S: Selector + Send + Sync + 'static,
     F: ClientFactory<Server, Memcached> + Send + Sync + 'static,

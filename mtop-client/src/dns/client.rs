@@ -6,6 +6,7 @@ use crate::net::tcp_connect;
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig};
 use crate::timeout::Timeout;
 use std::fmt::{self, Formatter};
+use std::future::Future;
 use std::io::{self, Cursor, Error};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
@@ -56,15 +57,38 @@ impl Default for DnsClientConfig {
     }
 }
 
+/// Client for performing DNS queries and returning the results.
+///
+/// There is currently only a single non-test implementation because this
+/// trait exists to make testing consumers easier.
+pub trait DnsClient {
+    fn resolve(
+        &self,
+        name: Name,
+        rtype: RecordType,
+        rclass: RecordClass,
+    ) -> impl Future<Output = Result<Message, MtopError>>;
+}
+
+/// Implementation of a `DnsClient` that uses UDP with TCP fallback.
+///
+/// Supports nameserver rotation, retries, timeouts, and pooling of client
+/// connections. Names are assumed to already be fully qualified, meaning
+/// that they are not combined with a search domain.
+///
+/// Timeouts are handled by the client itself and so callers should _not_
+/// add a timeout on the `resolve` method. Note that timeouts are per-network
+/// operation. This means that a single call to `resolve` make take longer
+/// than the timeout since failed network operations are retried.
 #[derive(Debug)]
-pub struct DnsClient {
+pub struct DefaultDnsClient {
     config: DnsClientConfig,
     server_idx: AtomicUsize,
     udp_pool: ClientPool<SocketAddr, UdpClient, UdpFactory>,
     tcp_pool: ClientPool<SocketAddr, TcpClient, TcpFactory>,
 }
 
-impl DnsClient {
+impl DefaultDnsClient {
     /// Create a new DnsClient that will resolve names using UDP or TCP connections
     /// and behavior based on a resolv.conf configuration file.
     pub fn new(config: DnsClientConfig) -> Self {
@@ -85,34 +109,6 @@ impl DnsClient {
             tcp_pool: ClientPool::new(tcp_config, TcpFactory),
         }
     }
-
-    /// Perform a DNS lookup with the configured nameservers.
-    ///
-    /// Timeouts and network errors will result in up to one additional attempt
-    /// to perform a DNS lookup when using the default configuration.
-    pub async fn resolve(&self, name: Name, rtype: RecordType, rclass: RecordClass) -> Result<Message, MtopError> {
-        let full = name.to_fqdn();
-        let id = MessageId::random();
-        let flags = Flags::default().set_recursion_desired();
-        let question = Question::new(full, rtype).set_qclass(rclass);
-        let message = Message::new(id, flags).add_question(question);
-
-        let mut attempt = 0;
-        loop {
-            match self.exchange(&message, usize::from(attempt)).await {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    if attempt + 1 >= self.config.attempts {
-                        return Err(e);
-                    }
-
-                    tracing::debug!(message = "retrying failed query", attempt = attempt + 1, max_attempts = self.config.attempts, err = %e);
-                    attempt += 1;
-                }
-            }
-        }
-    }
-
     async fn exchange(&self, msg: &Message, attempt: usize) -> Result<Message, MtopError> {
         let server = self.nameserver(attempt);
 
@@ -156,6 +152,31 @@ impl DnsClient {
         };
 
         self.config.nameservers[idx % self.config.nameservers.len()]
+    }
+}
+
+impl DnsClient for DefaultDnsClient {
+    async fn resolve(&self, name: Name, rtype: RecordType, rclass: RecordClass) -> Result<Message, MtopError> {
+        let full = name.to_fqdn();
+        let id = MessageId::random();
+        let flags = Flags::default().set_recursion_desired();
+        let question = Question::new(full, rtype).set_qclass(rclass);
+        let message = Message::new(id, flags).add_question(question);
+
+        let mut attempt = 0;
+        loop {
+            match self.exchange(&message, usize::from(attempt)).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    if attempt + 1 >= self.config.attempts {
+                        return Err(e);
+                    }
+
+                    tracing::debug!(message = "retrying failed query", attempt = attempt + 1, max_attempts = self.config.attempts, err = %e);
+                    attempt += 1;
+                }
+            }
+        }
     }
 }
 

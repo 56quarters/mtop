@@ -1,9 +1,7 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{Theme, TAILWIND};
-use mtop_client::{
-    DiscoveryDefault, MemcachedClient, MtopError, SelectorRendezvous, Server, TcpFactory, Timeout, TlsConfig,
-};
+use mtop_client::{Discovery, MemcachedClient, MtopError, RendezvousSelector, Server, TcpFactory, Timeout, TlsConfig};
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::env;
 use std::path::PathBuf;
@@ -116,9 +114,9 @@ async fn main() -> ExitCode {
     let timeout = Duration::from_secs(opts.timeout_secs);
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
-    let resolver = DiscoveryDefault::new(dns_client);
+    let discovery = Discovery::new(dns_client);
 
-    let servers = match expand_hosts(&opts.hosts, &resolver, timeout).await {
+    let servers = match expand_hosts(&opts.hosts, &discovery, timeout).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(message = "unable to resolve host names", hosts = ?opts.hosts, error = %e);
@@ -197,19 +195,15 @@ fn fmt_servers(servers: &[Server]) -> String {
 
 /// Perform DNS resolution on provided hostnames, expanding any "dns+" or "dnssrv+" prefixed
 /// hosts that have multiple A, AAAA, or SRV records.
-async fn expand_hosts(
-    hosts: &[String],
-    resolver: &DiscoveryDefault,
-    timeout: Duration,
-) -> Result<Vec<Server>, MtopError> {
+async fn expand_hosts(hosts: &[String], discovery: &Discovery, timeout: Duration) -> Result<Vec<Server>, MtopError> {
     let mut out = Vec::with_capacity(hosts.len());
 
     for host in hosts {
         out.extend(
-            resolver
-                .resolve(host)
-                .timeout(timeout, "resolver.resolve")
-                .instrument(tracing::span!(Level::INFO, "resolver.resolve"))
+            discovery
+                .resolve_by_proto(host)
+                .timeout(timeout, "discovery.resolve_by_proto")
+                .instrument(tracing::span!(Level::INFO, "discovery.resolve_by_proto"))
                 .await?,
         );
     }
@@ -227,7 +221,7 @@ async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedCl
         server_name: opts.tls_server_name.clone(),
     };
 
-    let selector = SelectorRendezvous::new(servers.to_vec());
+    let selector = RendezvousSelector::new(servers.to_vec());
     let factory = TcpFactory::new(tls_config, Handle::current()).await?;
     Ok(MemcachedClient::new(
         Default::default(),

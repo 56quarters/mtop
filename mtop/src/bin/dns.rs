@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::ping::{Bundle, DnsPinger};
 use mtop::{profile, sig};
-use mtop_client::dns::{Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
+use mtop_client::dns::{DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use std::fmt::Write;
 use std::io::Cursor;
 use std::net::SocketAddr;

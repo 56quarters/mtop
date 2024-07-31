@@ -3,7 +3,7 @@ use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Bundle, Checker};
 use mtop::profile;
 use mtop_client::{
-    DiscoveryDefault, MemcachedClient, MemcachedClientConfig, Meta, MtopError, SelectorRendezvous, Server, TcpFactory,
+    Discovery, MemcachedClient, MemcachedClientConfig, Meta, MtopError, RendezvousSelector, Server, TcpFactory,
     Timeout, TlsConfig, Value,
 };
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
@@ -289,12 +289,12 @@ async fn main() -> ExitCode {
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
-    let resolver = DiscoveryDefault::new(dns_client);
+    let discovery = Discovery::new(dns_client);
     let timeout = Duration::from_secs(opts.timeout_secs);
-    let servers = match resolver
-        .resolve(&opts.host)
-        .timeout(timeout, "resolver.resolve")
-        .instrument(tracing::span!(Level::INFO, "resolver.resolve"))
+    let servers = match discovery
+        .resolve_by_proto(&opts.host)
+        .timeout(timeout, "discovery.resolve_by_proto")
+        .instrument(tracing::span!(Level::INFO, "discovery.resolve_by_proto"))
         .await
     {
         Ok(v) => v,
@@ -321,7 +321,7 @@ async fn main() -> ExitCode {
     let code = match &opts.mode {
         Action::Add(cmd) => run_add(&opts, cmd, &client).await,
         Action::Bench(cmd) => run_bench(&opts, cmd, client).await,
-        Action::Check(cmd) => run_check(&opts, cmd, client, resolver).await,
+        Action::Check(cmd) => run_check(&opts, cmd, client, discovery).await,
         Action::Decr(cmd) => run_decr(&opts, cmd, &client).await,
         Action::Delete(cmd) => run_delete(&opts, cmd, &client).await,
         Action::Get(cmd) => run_get(&opts, cmd, &client).await,
@@ -352,7 +352,7 @@ async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClie
         pool_max_idle: opts.connections,
     };
 
-    let selector = SelectorRendezvous::new(servers.to_vec());
+    let selector = RendezvousSelector::new(servers.to_vec());
     let factory = TcpFactory::new(tls_config, Handle::current()).await?;
     Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
 }
@@ -414,12 +414,7 @@ async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient)
     ExitCode::SUCCESS
 }
 
-async fn run_check(
-    opts: &McConfig,
-    cmd: &CheckCommand,
-    client: MemcachedClient,
-    resolver: DiscoveryDefault,
-) -> ExitCode {
+async fn run_check(opts: &McConfig, cmd: &CheckCommand, client: MemcachedClient, resolver: Discovery) -> ExitCode {
     let stop = Arc::new(AtomicBool::new(false));
     mtop::sig::wait_for_interrupt(Handle::current(), stop.clone()).await;
 

@@ -1,4 +1,4 @@
-use mtop_client::dns::{DnsClient, DnsClientConfig, ResolvConf};
+use mtop_client::dns::{DefaultDnsClient, DnsClientConfig, ResolvConf};
 use mtop_client::MtopError;
 use std::fmt;
 use std::net::SocketAddr;
@@ -9,7 +9,7 @@ use tokio::fs::File;
 /// Load configuration from the provided resolv.conf file and create a new DnsClient
 /// based on it. If the resolv.conf file cannot be opened or is malformed, default
 /// configuration values will be used. See `man 5 resolv.conf` for more information.
-pub async fn new_client<P>(resolv: P, nameserver: Option<SocketAddr>, timeout: Option<Duration>) -> DnsClient
+pub async fn new_client<P>(resolv: P, nameserver: Option<SocketAddr>, timeout: Option<Duration>) -> DefaultDnsClient
 where
     P: AsRef<Path> + fmt::Debug,
 {
@@ -44,7 +44,7 @@ where
         client_config.timeout = t;
     }
 
-    DnsClient::new(client_config)
+    DefaultDnsClient::new(client_config)
 }
 
 async fn load_config<P>(resolv: P) -> Result<ResolvConf, MtopError>

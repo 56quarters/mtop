@@ -1,5 +1,5 @@
 use crate::core::MtopError;
-use crate::dns::{DnsClient, Message, Name, Record, RecordClass, RecordData, RecordType};
+use crate::dns::{DefaultDnsClient, DnsClient, Name, Record, RecordClass, RecordData, RecordType};
 use rustls_pki_types::ServerName;
 use std::cmp::Ordering;
 use std::fmt;
@@ -100,28 +100,23 @@ impl fmt::Display for Server {
     }
 }
 
-/// Trait to represent our DNS client for easier testing
-trait AsyncDnsClient {
-    async fn resolve(&self, name: Name, rtype: RecordType, rclass: RecordClass) -> Result<Message, MtopError>;
-}
-
-impl AsyncDnsClient for &DnsClient {
-    async fn resolve(&self, name: Name, rtype: RecordType, rclass: RecordClass) -> Result<Message, MtopError> {
-        DnsClient::resolve(self, name, rtype, rclass).await
-    }
-}
-
 /// Service discovery implementation for finding Memcached servers using DNS.
 ///
 /// Different types of DNS records and different behaviors are used based on the
 /// presence of specific prefixes for hostnames. See `resolve_by_proto` for details.
 #[derive(Debug)]
-pub struct DiscoveryDefault {
-    client: DnsClient,
+pub struct Discovery<C = DefaultDnsClient>
+where
+    C: DnsClient + Send + Sync + 'static,
+{
+    client: C,
 }
 
-impl DiscoveryDefault {
-    pub fn new(client: DnsClient) -> Self {
+impl<C> Discovery<C>
+where
+    C: DnsClient + Send + Sync + 'static,
+{
+    pub fn new(client: C) -> Self {
         Self { client }
     }
 
@@ -139,18 +134,11 @@ impl DiscoveryDefault {
     /// * No prefix with a non-IP address will use the host as a Memcached server.
     ///   Resolution of the host to an IP address will happen at connection time using the
     ///   system resolver.
-    pub async fn resolve(&self, name: &str) -> Result<Vec<Server>, MtopError> {
-        Self::resolve_by_proto(&self.client, name).await
-    }
-
-    async fn resolve_by_proto<C>(client: C, name: &str) -> Result<Vec<Server>, MtopError>
-    where
-        C: AsyncDnsClient,
-    {
+    pub async fn resolve_by_proto(&self, name: &str) -> Result<Vec<Server>, MtopError> {
         if name.starts_with(DNS_A_PREFIX) {
-            Ok(Self::resolve_a_aaaa(client, name.trim_start_matches(DNS_A_PREFIX)).await?)
+            Ok(self.resolve_a_aaaa(name.trim_start_matches(DNS_A_PREFIX)).await?)
         } else if name.starts_with(DNS_SRV_PREFIX) {
-            Ok(Self::resolve_srv(client, name.trim_start_matches(DNS_SRV_PREFIX)).await?)
+            Ok(self.resolve_srv(name.trim_start_matches(DNS_SRV_PREFIX)).await?)
         } else if let Ok(addr) = name.parse::<SocketAddr>() {
             Ok(Self::resolv_socket_addr(name, addr)?)
         } else {
@@ -158,30 +146,24 @@ impl DiscoveryDefault {
         }
     }
 
-    async fn resolve_srv<C>(client: C, name: &str) -> Result<Vec<Server>, MtopError>
-    where
-        C: AsyncDnsClient,
-    {
+    async fn resolve_srv(&self, name: &str) -> Result<Vec<Server>, MtopError> {
         let (host, port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
         let name = host.parse()?;
 
-        let res = client.resolve(name, RecordType::SRV, RecordClass::INET).await?;
+        let res = self.client.resolve(name, RecordType::SRV, RecordClass::INET).await?;
         Ok(Self::servers_from_answers(port, &server_name, res.answers()))
     }
 
-    async fn resolve_a_aaaa<C>(client: C, name: &str) -> Result<Vec<Server>, MtopError>
-    where
-        C: AsyncDnsClient,
-    {
+    async fn resolve_a_aaaa(&self, name: &str) -> Result<Vec<Server>, MtopError> {
         let (host, port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
         let name: Name = host.parse()?;
 
-        let res = client.resolve(name.clone(), RecordType::A, RecordClass::INET).await?;
+        let res = self.client.resolve(name.clone(), RecordType::A, RecordClass::INET).await?;
         let mut out = Self::servers_from_answers(port, &server_name, res.answers());
 
-        let res = client.resolve(name, RecordType::AAAA, RecordClass::INET).await?;
+        let res = self.client.resolve(name, RecordType::AAAA, RecordClass::INET).await?;
         out.extend(Self::servers_from_answers(port, &server_name, res.answers()));
 
         Ok(out)
@@ -248,11 +230,11 @@ impl DiscoveryDefault {
 
 #[cfg(test)]
 mod test {
-    use super::{AsyncDnsClient, DiscoveryDefault, Server, ServerID};
+    use super::{Discovery, Server, ServerID};
     use crate::core::MtopError;
     use crate::dns::{
-        Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordData, RecordDataA, RecordDataAAAA,
-        RecordDataSRV, RecordType,
+        DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordData, RecordDataA,
+        RecordDataAAAA, RecordDataSRV, RecordType,
     };
     use rustls_pki_types::ServerName;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -340,7 +322,7 @@ mod test {
         }
     }
 
-    impl AsyncDnsClient for &MockDnsClient {
+    impl DnsClient for MockDnsClient {
         async fn resolve(&self, _name: Name, _rtype: RecordType, _rclass: RecordClass) -> Result<Message, MtopError> {
             let mut responses = self.responses.lock().await;
             let res = responses.pop().unwrap();
@@ -385,9 +367,8 @@ mod test {
         );
 
         let client = MockDnsClient::new(vec![response_a, response_aaaa]);
-        let servers = DiscoveryDefault::resolve_by_proto(&client, "dns+example.com:11211")
-            .await
-            .unwrap();
+        let discovery = Discovery::new(client);
+        let servers = discovery.resolve_by_proto("dns+example.com:11211").await.unwrap();
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id_a = ServerID::from(("10.1.1.1", 11211));
@@ -430,9 +411,8 @@ mod test {
         );
 
         let client = MockDnsClient::new(vec![response]);
-        let servers = DiscoveryDefault::resolve_by_proto(&client, "dnssrv+_cache.example.com:11211")
-            .await
-            .unwrap();
+        let discovery = Discovery::new(client);
+        let servers = discovery.resolve_by_proto("dnssrv+_cache.example.com:11211").await.unwrap();
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id1 = ServerID::from(("cache01.example.com.", 11211));
@@ -448,7 +428,8 @@ mod test {
         let addr: SocketAddr = "127.0.0.2:11211".parse().unwrap();
 
         let client = MockDnsClient::new(vec![]);
-        let servers = DiscoveryDefault::resolve_by_proto(&client, name).await.unwrap();
+        let discovery = Discovery::new(client);
+        let servers = discovery.resolve_by_proto(name).await.unwrap();
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id = ServerID::from(addr);
@@ -460,7 +441,8 @@ mod test {
         let name = "localhost:11211";
 
         let client = MockDnsClient::new(vec![]);
-        let servers = DiscoveryDefault::resolve_by_proto(&client, name).await.unwrap();
+        let discovery = Discovery::new(client);
+        let servers = discovery.resolve_by_proto(name).await.unwrap();
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
         let id = ServerID::from(("localhost", 11211));
