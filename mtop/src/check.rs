@@ -1,4 +1,4 @@
-use mtop_client::{DiscoveryDefault, Key, MemcachedClient, Timeout};
+use mtop_client::{Discovery, Key, MemcachedClient, Timeout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,7 +11,7 @@ const VALUE: &[u8] = "test".as_bytes();
 #[derive(Debug)]
 pub struct Checker {
     client: MemcachedClient,
-    resolver: DiscoveryDefault,
+    resolver: Discovery,
     delay: Duration,
     timeout: Duration,
     stop: Arc<AtomicBool>,
@@ -24,7 +24,7 @@ impl Checker {
     /// a value).
     pub fn new(
         client: MemcachedClient,
-        resolver: DiscoveryDefault,
+        resolver: Discovery,
         delay: Duration,
         timeout: Duration,
         stop: Arc<AtomicBool>,
@@ -64,7 +64,7 @@ impl Checker {
             let dns_start = Instant::now();
             let server = match self
                 .resolver
-                .resolve(host)
+                .resolve_by_proto(host)
                 .timeout(self.timeout, "resolver.resolve_by_proto")
                 .await
                 .map(|mut v| v.pop())

@@ -1,5 +1,5 @@
 use crate::check::{Timing, TimingBuilder};
-use mtop_client::dns::{DnsClient, Name, RecordClass, RecordType, ResponseCode};
+use mtop_client::dns::{DefaultDnsClient, DnsClient, Name, RecordClass, RecordType, ResponseCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,7 +9,7 @@ use tracing::{Instrument, Level};
 /// Repeatedly make DNS requests to resolve a domain name.
 #[derive(Debug)]
 pub struct DnsPinger {
-    client: DnsClient,
+    client: DefaultDnsClient,
     interval: Duration,
     stop: Arc<AtomicBool>,
 }
@@ -17,7 +17,7 @@ pub struct DnsPinger {
 impl DnsPinger {
     /// Create a new `DnsPinger` that uses the provided client to repeatedly resolve a domain
     /// name. `interval` is the amount of time to wait between each DNS query.
-    pub fn new(client: DnsClient, interval: Duration, stop: Arc<AtomicBool>) -> Self {
+    pub fn new(client: DefaultDnsClient, interval: Duration, stop: Arc<AtomicBool>) -> Self {
         Self { client, interval, stop }
     }
 
