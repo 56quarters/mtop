@@ -160,6 +160,7 @@ impl Ord for Slab {
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[repr(transparent)]
 pub struct Slabs {
     slabs: Vec<Slab>,
 }
@@ -285,6 +286,7 @@ impl Ord for SlabItem {
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
+#[repr(transparent)]
 pub struct SlabItems {
     items: Vec<SlabItem>,
 }
@@ -917,11 +919,7 @@ impl Memcached {
         V: AsRef<[u8]>,
     {
         self.send(Command::Set(key, flags, ttl, data.as_ref())).await?;
-        if let Some(v) = self.read.next_line().await? {
-            Self::parse_simple_response(&v, "STORED")
-        } else {
-            Err(MtopError::runtime("unexpected empty response"))
-        }
+        self.read_simple_response("STORED").await
     }
 
     /// Store the provided item in the cache only if it does not already exist.
@@ -930,11 +928,7 @@ impl Memcached {
         V: AsRef<[u8]>,
     {
         self.send(Command::Add(key, flags, ttl, data.as_ref())).await?;
-        if let Some(v) = self.read.next_line().await? {
-            Self::parse_simple_response(&v, "STORED")
-        } else {
-            Err(MtopError::runtime("unexpected empty response"))
-        }
+        self.read_simple_response("STORED").await
     }
 
     /// Store the provided item in the cache only if it already exists.
@@ -943,40 +937,32 @@ impl Memcached {
         V: AsRef<[u8]>,
     {
         self.send(Command::Replace(key, flags, ttl, data.as_ref())).await?;
-        if let Some(v) = self.read.next_line().await? {
-            Self::parse_simple_response(&v, "STORED")
-        } else {
-            Err(MtopError::runtime("unexpected empty response"))
-        }
+        self.read_simple_response("STORED").await
     }
 
     /// Update the TTL of an item in the cache if it exists, return an error otherwise.
     pub async fn touch(&mut self, key: &Key, ttl: u32) -> Result<(), MtopError> {
         self.send(Command::Touch(key, ttl)).await?;
-        if let Some(v) = self.read.next_line().await? {
-            Self::parse_simple_response(&v, "TOUCHED")
-        } else {
-            Err(MtopError::runtime("unexpected empty response"))
-        }
+        self.read_simple_response("TOUCHED").await
     }
 
     /// Delete an item in the cache if it exists, return an error otherwise.
     pub async fn delete(&mut self, key: &Key) -> Result<(), MtopError> {
         self.send(Command::Delete(key)).await?;
-        if let Some(v) = self.read.next_line().await? {
-            Self::parse_simple_response(&v, "DELETED")
-        } else {
-            Err(MtopError::runtime("unexpected empty response"))
-        }
+        self.read_simple_response("DELETED").await
     }
 
-    fn parse_simple_response(line: &str, expected: &str) -> Result<(), MtopError> {
-        if line == expected {
-            Ok(())
-        } else if let Some(err) = Self::parse_error(line) {
-            Err(MtopError::from(err))
-        } else {
-            Err(MtopError::runtime(format!("unable to parse '{}'", line)))
+    async fn read_simple_response(&mut self, expected: &str) -> Result<(), MtopError> {
+        match self.read.next_line().await? {
+            Some(line) if line == expected => Ok(()),
+            Some(line) => {
+                if let Some(err) = Self::parse_error(&line) {
+                    Err(MtopError::from(err))
+                } else {
+                    Err(MtopError::runtime(format!("unable to parse '{}'", line)))
+                }
+            }
+            None => Err(MtopError::runtime("unexpected empty response")),
         }
     }
 
