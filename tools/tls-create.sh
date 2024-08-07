@@ -15,7 +15,7 @@ openssl req \
 
 # server private key and cert
 openssl req \
-        -newkey rsa:4096 -x509 -nodes -days 1000 -sha256 \
+        -newkey rsa:4096 -x509 -nodes -days 10000 -sha256 \
         -subj "/C=US/ST=MA/L=Boston/O=mtop/OU=test/CN=memcached-server" \
         -addext "basicConstraints=critical, CA:false" \
         -addext "subjectAltName = DNS:localhost, DNS:memcached-server, IP:127.0.0.1"  \
