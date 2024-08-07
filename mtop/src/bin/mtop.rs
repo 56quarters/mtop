@@ -1,7 +1,9 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{Theme, TAILWIND};
-use mtop_client::{Discovery, MemcachedClient, MtopError, RendezvousSelector, Server, TcpFactory, Timeout, TlsConfig};
+use mtop_client::{
+    Discovery, MemcachedClient, MtopError, RendezvousSelector, Server, TcpClientFactory, Timeout, TlsConfig,
+};
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::env;
 use std::path::PathBuf;
@@ -222,7 +224,7 @@ async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedCl
     };
 
     let selector = RendezvousSelector::new(servers.to_vec());
-    let factory = TcpFactory::new(tls_config, Handle::current()).await?;
+    let factory = TcpClientFactory::new(tls_config, Handle::current()).await?;
     Ok(MemcachedClient::new(
         Default::default(),
         Handle::current(),
