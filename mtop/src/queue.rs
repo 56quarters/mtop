@@ -114,6 +114,11 @@ impl StatsQueue {
             _ => None,
         })
     }
+
+    pub async fn read_last(&self, host: &Host) -> Option<ServerStats> {
+        let map = self.queues.lock().await;
+        map.get(host).and_then(|q| q.back().cloned())
+    }
 }
 
 #[derive(Debug)]
@@ -133,5 +138,108 @@ impl BlockingStatsQueue {
 
     pub fn read_delta(&self, host: &Host) -> Option<StatsDelta> {
         self.handle.block_on(self.queue.read_delta(host))
+    }
+
+    pub fn read_last(&self, host: &Host) -> Option<ServerStats> {
+        self.handle.block_on(self.queue.read_last(host))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{Host, StatsQueue};
+    use mtop_client::{ServerID, SlabItems, Slabs, Stats};
+
+    fn fixture(uptime: u64, server_time: i64) -> (Host, Stats, Slabs, SlabItems) {
+        let host = Host::from(&ServerID::from(("localhost", 11211)));
+        let stats = Stats {
+            uptime,
+            server_time,
+            ..Default::default()
+        };
+        let slabs = Slabs::default();
+        let items = SlabItems::default();
+
+        (host, stats, slabs, items)
+    }
+
+    #[tokio::test]
+    async fn test_stats_queue_insert_same_uptime() {
+        let queue = StatsQueue::new(10);
+
+        let (host, stats, slabs, items) = fixture(1, 1);
+        queue.insert(host, stats, slabs, items).await;
+
+        let (host, stats, slabs, items) = fixture(1, 2);
+        queue.insert(host.clone(), stats, slabs, items).await;
+
+        // Uptime didn't advance so the second entry should be discarded.
+        let last = queue.read_last(&host).await.unwrap();
+        assert_eq!(1, last.stats.uptime);
+        assert_eq!(1, last.stats.server_time);
+    }
+
+    #[tokio::test]
+    async fn test_stats_queue_insert_lower_uptime() {
+        let queue = StatsQueue::new(10);
+
+        let (host, stats, slabs, items) = fixture(10, 1);
+        queue.insert(host, stats, slabs, items).await;
+
+        let (host, stats, slabs, items) = fixture(1, 2);
+        queue.insert(host.clone(), stats, slabs, items).await;
+
+        // Uptime reset so the queue should be cleared before the second entry is inserted.
+        let last = queue.read_last(&host).await.unwrap();
+        assert_eq!(1, last.stats.uptime);
+        assert_eq!(2, last.stats.server_time);
+    }
+
+    #[tokio::test]
+    async fn test_stats_queue_insert_same_server_time() {
+        let queue = StatsQueue::new(10);
+
+        let (host, stats, slabs, items) = fixture(1, 1);
+        queue.insert(host, stats, slabs, items).await;
+
+        let (host, stats, slabs, items) = fixture(2, 1);
+        queue.insert(host.clone(), stats, slabs, items).await;
+
+        // Server time didn't advance so the second entry should be discarded.
+        let last = queue.read_last(&host).await.unwrap();
+        assert_eq!(1, last.stats.uptime);
+        assert_eq!(1, last.stats.server_time);
+    }
+
+    #[tokio::test]
+    async fn test_stats_queue_insert_lower_server_time() {
+        let queue = StatsQueue::new(10);
+
+        let (host, stats, slabs, items) = fixture(1, 10);
+        queue.insert(host, stats, slabs, items).await;
+
+        let (host, stats, slabs, items) = fixture(2, 1);
+        queue.insert(host.clone(), stats, slabs, items).await;
+
+        // Server time went backwards so the second entry should be discarded.
+        let last = queue.read_last(&host).await.unwrap();
+        assert_eq!(1, last.stats.uptime);
+        assert_eq!(10, last.stats.server_time);
+    }
+
+    #[tokio::test]
+    async fn test_stats_queue_insert_success() {
+        let queue = StatsQueue::new(10);
+
+        let (host, stats, slabs, items) = fixture(1, 1);
+        queue.insert(host, stats, slabs, items).await;
+
+        let (host, stats, slabs, items) = fixture(2, 2);
+        queue.insert(host.clone(), stats, slabs, items).await;
+
+        // Uptime and server time advanced so the second entry should be stored.
+        let last = queue.read_last(&host).await.unwrap();
+        assert_eq!(2, last.stats.uptime);
+        assert_eq!(2, last.stats.server_time);
     }
 }
