@@ -651,47 +651,47 @@ fn print_bench_results(results: &[Summary]) {
 
 fn print_check_results(results: &Bundle) {
     println!(
-        "type=min overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
+        "type=overall min={:.6}s max={:.6}s avg={:.6}s stddev={:.6}s failures={}",
         results.overall.min.as_secs_f64(),
-        results.dns.min.as_secs_f64(),
-        results.connections.min.as_secs_f64(),
-        results.sets.min.as_secs_f64(),
-        results.gets.min.as_secs_f64()
-    );
-
-    println!(
-        "type=max overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
         results.overall.max.as_secs_f64(),
-        results.dns.max.as_secs_f64(),
-        results.connections.max.as_secs_f64(),
-        results.sets.max.as_secs_f64(),
-        results.gets.max.as_secs_f64(),
-    );
-
-    println!(
-        "type=avg overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
         results.overall.avg.as_secs_f64(),
-        results.dns.avg.as_secs_f64(),
-        results.connections.avg.as_secs_f64(),
-        results.sets.avg.as_secs_f64(),
-        results.gets.avg.as_secs_f64()
-    );
-
-    println!(
-        "type=stddev overall={:.6}s dns={:.6}s connection={:.6}s set={:.6}s get={:.6}s",
         results.overall.std_dev.as_secs_f64(),
-        results.dns.std_dev.as_secs_f64(),
-        results.connections.std_dev.as_secs_f64(),
-        results.sets.std_dev.as_secs_f64(),
-        results.gets.std_dev.as_secs_f64()
+        results.failures.total,
     );
 
     println!(
-        "type=failures total={} dns={} connection={} set={} get={}",
-        results.failures.total,
+        "type=dns min={:.6}s max={:.6}s avg={:.6}s stddev={:.6}s failures={}",
+        results.dns.min.as_secs_f64(),
+        results.dns.max.as_secs_f64(),
+        results.dns.avg.as_secs_f64(),
+        results.dns.std_dev.as_secs_f64(),
         results.failures.dns,
+    );
+
+    println!(
+        "type=connection min={:.6}s max={:.6}s avg={:.6}s stddev={:.6}s failures={}",
+        results.connections.min.as_secs_f64(),
+        results.connections.max.as_secs_f64(),
+        results.connections.avg.as_secs_f64(),
+        results.connections.std_dev.as_secs_f64(),
         results.failures.connections,
+    );
+
+    println!(
+        "type=set min={:.6}s max={:.6}s avg={:.6}s stddev={:.6}s failures={}",
+        results.sets.min.as_secs_f64(),
+        results.sets.max.as_secs_f64(),
+        results.sets.avg.as_secs_f64(),
+        results.sets.std_dev.as_secs_f64(),
         results.failures.sets,
+    );
+
+    println!(
+        "type=get min={:.6}s max={:.6}s avg={:.6}s stddev={:.6}s failures={}",
+        results.gets.min.as_secs_f64(),
+        results.gets.max.as_secs_f64(),
+        results.gets.avg.as_secs_f64(),
+        results.gets.std_dev.as_secs_f64(),
         results.failures.gets,
     );
 }
