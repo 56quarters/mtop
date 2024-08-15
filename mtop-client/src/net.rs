@@ -36,46 +36,46 @@ pub struct TlsConfig {
 }
 
 pub(crate) async fn tls_client_config(config: TlsConfig, handle: Handle) -> Result<ClientConfig, MtopError> {
+    fn client_config(tls: TlsConfig) -> Result<ClientConfig, MtopError> {
+        let client_cert = if let Some(p) = &tls.cert_path {
+            Some(load_cert(p)?)
+        } else {
+            None
+        };
+
+        let client_key = if let Some(p) = &tls.key_path {
+            Some(load_key(p)?)
+        } else {
+            None
+        };
+
+        let root = if let Some(p) = &tls.ca_path {
+            custom_root_store(load_cert(p)?)?
+        } else {
+            default_root_store()
+        };
+
+        let builder = ClientConfig::builder().with_root_certificates(root);
+        let client_config = match (client_cert, client_key, tls.cert_path, tls.key_path) {
+            (Some(cert), Some(key), Some(cert_path), Some(key_path)) => {
+                tracing::debug!(message = "using key and cert for client authentication", key = ?key_path, cert = ?cert_path);
+                builder
+                    .with_client_auth_cert(cert, key)
+                    .map_err(|e| MtopError::configuration_cause("unable to use client cert or key", e))?
+            }
+            _ => {
+                tracing::debug!(message = "not using any client authentication");
+                builder.with_no_client_auth()
+            }
+        };
+
+        Ok(client_config)
+    }
+
     handle.spawn_blocking(move || client_config(config)).await.unwrap()
 }
 
-fn client_config(tls: TlsConfig) -> Result<ClientConfig, MtopError> {
-    let client_cert = if let Some(p) = &tls.cert_path {
-        Some(load_cert(p)?)
-    } else {
-        None
-    };
-
-    let client_key = if let Some(p) = &tls.key_path {
-        Some(load_key(p)?)
-    } else {
-        None
-    };
-
-    let root = if let Some(p) = &tls.ca_path {
-        custom_root_store(load_cert(p)?)?
-    } else {
-        default_root_store()
-    };
-
-    let builder = ClientConfig::builder().with_root_certificates(root);
-    let config = match (client_cert, client_key, tls.cert_path, tls.key_path) {
-        (Some(cert), Some(key), Some(cert_path), Some(key_path)) => {
-            tracing::debug!(message = "using key and cert for client authentication", key = ?key_path, cert = ?cert_path);
-            builder
-                .with_client_auth_cert(cert, key)
-                .map_err(|e| MtopError::configuration_cause("unable to use client cert or key", e))?
-        }
-        _ => {
-            tracing::debug!(message = "not using any client authentication");
-            builder.with_no_client_auth()
-        }
-    };
-
-    Ok(config)
-}
-
-fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopError> {
+pub(crate) fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopError> {
     File::open(path)
         .map(BufReader::new)
         .map(|mut r| rustls_pemfile::certs(&mut r).collect::<Vec<_>>())
@@ -83,7 +83,7 @@ fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopError> 
         .map_err(|e| MtopError::configuration_cause(format!("unable to load or parse cert {:?}", path), e))
 }
 
-fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
+pub(crate) fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
     File::open(path)
         .map(BufReader::new)
         .and_then(|mut r| rustls_pemfile::private_key(&mut r))
@@ -91,7 +91,7 @@ fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
         .ok_or_else(|| MtopError::configuration(format!("no keys available in {:?}", path)))
 }
 
-fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, MtopError> {
+pub(crate) fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, MtopError> {
     let mut store = RootCertStore::empty();
     for cert in ca {
         store
@@ -102,7 +102,7 @@ fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, 
     Ok(store)
 }
 
-fn default_root_store() -> RootCertStore {
+pub(crate) fn default_root_store() -> RootCertStore {
     let mut store = RootCertStore::empty();
     store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(|c| c.to_owned()));
     store

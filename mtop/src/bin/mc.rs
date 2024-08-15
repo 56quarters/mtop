@@ -3,7 +3,7 @@ use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Bundle, Checker};
 use mtop::profile;
 use mtop_client::{
-    Discovery, MemcachedClient, MemcachedClientConfig, Meta, MtopError, RendezvousSelector, Server, TcpFactory,
+    Discovery, MemcachedClient, MemcachedClientConfig, Meta, MtopError, RendezvousSelector, Server, TcpClientFactory,
     Timeout, TlsConfig, Value,
 };
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
@@ -353,7 +353,7 @@ async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClie
     };
 
     let selector = RendezvousSelector::new(servers.to_vec());
-    let factory = TcpFactory::new(tls_config, Handle::current()).await?;
+    let factory = TcpClientFactory::new(tls_config, Handle::current()).await?;
     Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
 }
 

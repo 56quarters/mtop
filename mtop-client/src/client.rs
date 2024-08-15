@@ -15,12 +15,12 @@ use tracing::instrument::WithSubscriber;
 /// Implementation of a `ClientFactory` that creates new Memcached clients that
 /// use plaintext or TLS TCP connections.
 #[derive(Debug)]
-pub struct TcpFactory {
+pub struct TcpClientFactory {
     client_config: Option<Arc<ClientConfig>>,
     server_name: Option<ServerName<'static>>,
 }
 
-impl TcpFactory {
+impl TcpClientFactory {
     pub async fn new(tls: TlsConfig, handle: Handle) -> Result<Self, MtopError> {
         let server_name = if tls.enabled { tls.server_name.clone() } else { None };
 
@@ -37,7 +37,7 @@ impl TcpFactory {
     }
 }
 
-impl ClientFactory<Server, Memcached> for TcpFactory {
+impl ClientFactory<Server, Memcached> for TcpClientFactory {
     async fn make(&self, addr: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
             let server_name = self.server_name.clone().unwrap_or_else(|| addr.server_name().clone());
@@ -223,7 +223,7 @@ impl Default for MemcachedClientConfig {
 /// Memcached client that operates on multiple servers, pooling connections
 /// to them, and sharding keys via a `Selector` implementation.
 #[derive(Debug)]
-pub struct MemcachedClient<S = RendezvousSelector, F = TcpFactory>
+pub struct MemcachedClient<S = RendezvousSelector, F = TcpClientFactory>
 where
     S: Selector + Send + Sync + 'static,
     F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
