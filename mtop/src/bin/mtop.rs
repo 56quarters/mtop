@@ -32,7 +32,7 @@ struct MtopConfig {
 
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
-    #[arg(long, env = "MTOP_RESOLV_CONF", default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MTOP_RESOLV_CONF", default_value = "/etc/resolv.conf", value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
     /// Timeout for connecting to Memcached and fetching statistics, in seconds.
@@ -82,10 +82,6 @@ struct MtopConfig {
     /// that the port from the SRV record is ignored.
     #[arg(required = true, value_hint = ValueHint::Hostname)]
     hosts: Vec<String>,
-}
-
-fn default_resolv_conf() -> PathBuf {
-    PathBuf::from("/etc/resolv.conf")
 }
 
 fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {

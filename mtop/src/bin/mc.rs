@@ -29,7 +29,7 @@ struct McConfig {
 
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
-    #[arg(long, env = "MC_RESOLV_CONF", default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, env = "MC_RESOLV_CONF", default_value = "/etc/resolv.conf", value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
     /// Memcached host to connect to in the form 'hostname:port'.
@@ -75,10 +75,6 @@ struct McConfig {
 
     #[command(subcommand)]
     mode: Action,
-}
-
-fn default_resolv_conf() -> PathBuf {
-    PathBuf::from("/etc/resolv.conf")
 }
 
 fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {
