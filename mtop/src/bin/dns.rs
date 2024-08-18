@@ -17,6 +17,7 @@ use tracing::{Instrument, Level};
 
 const DEFAULT_RECORD_TYPE: RecordType = RecordType::A;
 const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
+const DEFAULT_RESOLV_CONF: &str = "/etc/resolv.conf";
 const MIN_PING_INTERVAL_SECS: f64 = 0.1;
 
 /// dns: Make DNS queries or read/write binary format DNS messages
@@ -58,7 +59,7 @@ struct PingCommand {
 
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
-    #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, default_value = DEFAULT_RESOLV_CONF, value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
     /// Nameserver to use for DNS queries, overriding whatever nameserver is configured in
@@ -97,7 +98,7 @@ fn parse_interval(s: &str) -> Result<f64, String> {
 struct QueryCommand {
     /// Path to resolv.conf file for loading DNS configuration information. If this file
     /// can't be loaded, default values for DNS configuration are used instead.
-    #[arg(long, default_value = default_resolv_conf().into_os_string(), value_hint = ValueHint::FilePath)]
+    #[arg(long, default_value = DEFAULT_RESOLV_CONF, value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
     /// Nameserver to use for DNS queries, overriding whatever nameserver is configured in
@@ -127,10 +128,6 @@ struct QueryCommand {
     /// Domain name to lookup.
     #[arg(required = true)]
     name: Name,
-}
-
-fn default_resolv_conf() -> PathBuf {
-    PathBuf::from("/etc/resolv.conf")
 }
 
 /// Read a binary format DNS message from standard input and display it as dig-like text output.
