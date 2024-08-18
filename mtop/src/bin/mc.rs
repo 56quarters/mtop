@@ -7,6 +7,7 @@ use mtop_client::{
     Timeout, TlsConfig, Value,
 };
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
@@ -36,12 +37,12 @@ struct McConfig {
     host: String,
 
     /// Timeout for Memcached network operations, in seconds.
-    #[arg(long, env = "MC_TIMEOUT_SECS", default_value_t = 30)]
-    timeout_secs: u64,
+    #[arg(long, env = "MC_TIMEOUT_SECS", default_value_t = NonZeroU64::new(30).unwrap())]
+    timeout_secs: NonZeroU64,
 
     /// Maximum number of idle connections to maintain per host.
-    #[arg(long, env = "MC_CONNECTIONS", default_value_t = 4)]
-    connections: u64,
+    #[arg(long, env = "MC_CONNECTIONS", default_value_t = NonZeroU64::new(4).unwrap())]
+    connections: NonZeroU64,
 
     /// Output pprof protobuf profile data to this file if profiling support was enabled
     /// at build time.
@@ -129,8 +130,8 @@ struct AddCommand {
 #[derive(Debug, Args)]
 struct BenchCommand {
     /// How long to run the benchmark for in seconds.
-    #[arg(long, env = "MC_BENCH_TIME_SECS", default_value_t = 60)]
-    time_secs: u64,
+    #[arg(long, env = "MC_BENCH_TIME_SECS", default_value_t = NonZeroU64::new(60).unwrap())]
+    time_secs: NonZeroU64,
 
     /// How many writes to the cache as a percentage of reads from the cache, 0 to 1.
     ///
@@ -143,8 +144,8 @@ struct BenchCommand {
     /// How many workers to run at once, performing gets and sets against the cache.
     ///
     /// Each worker does 10,000 gets and 500 sets per second in the default configuration.
-    #[arg(long, env = "MC_BENCH_CONCURRENCY", default_value_t = 1)]
-    concurrency: usize,
+    #[arg(long, env = "MC_BENCH_CONCURRENCY", default_value_t = NonZeroUsize::new(1).unwrap())]
+    concurrency: NonZeroUsize,
 
     /// How long to wait between each batch of gets and sets performed against the cache.
     ///
@@ -152,8 +153,8 @@ struct BenchCommand {
     /// there will be 10,000 gets and 500 sets per second. To increase the number of gets
     /// and sets performed by a worker, reduce this number. To decrease the number of gets
     /// and sets performed by a worker, increase this number.
-    #[arg(long, env = "MC_BENCH_DELAY_MILLIS", default_value_t = 100)]
-    delay_millis: u64,
+    #[arg(long, env = "MC_BENCH_DELAY_MILLIS", default_value_t = NonZeroU64::new(100).unwrap())]
+    delay_millis: NonZeroU64,
 
     /// TTL to use for test values stored in the cache in seconds.
     #[arg(long, env = "MC_BENCH_TTL_SECS", default_value_t = 300)]
@@ -169,12 +170,12 @@ struct BenchCommand {
 #[derive(Debug, Args)]
 struct CheckCommand {
     /// How long to run the checks for in seconds.
-    #[arg(long, env = "MC_CHECK_TIME_SECS", default_value_t = 60)]
-    time_secs: u64,
+    #[arg(long, env = "MC_CHECK_TIME_SECS", default_value_t = NonZeroU64::new(60).unwrap())]
+    time_secs: NonZeroU64,
 
     /// How long to wait between each health check in milliseconds.
-    #[arg(long, env = "MC_CHECK_DELAY_MILLIS", default_value_t = 100)]
-    delay_millis: u64,
+    #[arg(long, env = "MC_CHECK_DELAY_MILLIS", default_value_t = NonZeroU64::new(100).unwrap())]
+    delay_millis: NonZeroU64,
 }
 
 /// Decrement the value of an item in the cache.
@@ -290,7 +291,7 @@ async fn main() -> ExitCode {
 
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let discovery = Discovery::new(dns_client);
-    let timeout = Duration::from_secs(opts.timeout_secs);
+    let timeout = Duration::from_secs(opts.timeout_secs.get());
     let servers = match discovery
         .resolve_by_proto(&opts.host)
         .timeout(timeout, "discovery.resolve_by_proto")
@@ -349,7 +350,7 @@ async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClie
     };
 
     let cfg = MemcachedClientConfig {
-        pool_max_idle: opts.connections,
+        pool_max_idle: opts.connections.get(),
     };
 
     let selector = RendezvousSelector::new(servers.to_vec());
@@ -382,7 +383,7 @@ async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) ->
 
     if let Err(e) = client
         .add(&cmd.key, 0, cmd.ttl, &buf)
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.add")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.add")
         .instrument(tracing::span!(Level::INFO, "client.add"))
         .await
     {
@@ -400,15 +401,15 @@ async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient)
     let bencher = Bencher::new(
         client,
         Handle::current(),
-        Duration::from_millis(cmd.delay_millis),
-        Duration::from_secs(opts.timeout_secs),
+        Duration::from_millis(cmd.delay_millis.get()),
+        Duration::from_secs(opts.timeout_secs.get()),
         Duration::from_secs(cmd.ttl_secs as u64),
         cmd.write_percent,
-        cmd.concurrency,
+        cmd.concurrency.get(),
         stop.clone(),
     );
 
-    let measurements = bencher.run(Duration::from_secs(cmd.time_secs)).await;
+    let measurements = bencher.run(Duration::from_secs(cmd.time_secs.into())).await;
     print_bench_results(&measurements);
 
     ExitCode::SUCCESS
@@ -421,11 +422,11 @@ async fn run_check(opts: &McConfig, cmd: &CheckCommand, client: MemcachedClient,
     let checker = Checker::new(
         client,
         resolver,
-        Duration::from_millis(cmd.delay_millis),
-        Duration::from_secs(opts.timeout_secs),
+        Duration::from_millis(cmd.delay_millis.get()),
+        Duration::from_secs(opts.timeout_secs.get()),
         stop.clone(),
     );
-    let results = checker.run(&opts.host, Duration::from_secs(cmd.time_secs)).await;
+    let results = checker.run(&opts.host, Duration::from_secs(cmd.time_secs.get())).await;
     print_check_results(&results);
 
     if results.failures.total > 0 {
@@ -438,7 +439,7 @@ async fn run_check(opts: &McConfig, cmd: &CheckCommand, client: MemcachedClient,
 async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .decr(&cmd.key, cmd.delta)
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.decr")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.decr")
         .instrument(tracing::span!(Level::INFO, "client.decr"))
         .await
     {
@@ -452,7 +453,7 @@ async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient) 
 async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .delete(&cmd.key)
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.delete")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.delete")
         .instrument(tracing::span!(Level::INFO, "client.delete"))
         .await
     {
@@ -466,7 +467,7 @@ async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClie
 async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) -> ExitCode {
     let response = match client
         .get(&[cmd.key.clone()])
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.get")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.get")
         .instrument(tracing::span!(Level::INFO, "client.get"))
         .await
     {
@@ -497,7 +498,7 @@ async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) ->
 async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .incr(&cmd.key, cmd.delta)
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.incr")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.incr")
         .instrument(tracing::span!(Level::INFO, "client.incr"))
         .await
     {
@@ -511,7 +512,7 @@ async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) 
 async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient) -> ExitCode {
     let response = match client
         .metas()
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.metas")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.metas")
         .instrument(tracing::span!(Level::INFO, "client.metas"))
         .await
     {
@@ -552,7 +553,7 @@ async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedCl
 
     if let Err(e) = client
         .replace(&cmd.key, 0, cmd.ttl, &buf)
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.replace")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.replace")
         .instrument(tracing::span!(Level::INFO, "client.replace"))
         .await
     {
@@ -574,7 +575,7 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) ->
 
     if let Err(e) = client
         .set(&cmd.key, 0, cmd.ttl, &buf)
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.set")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.set")
         .instrument(tracing::span!(Level::INFO, "client.set"))
         .await
     {
@@ -588,7 +589,7 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) ->
 async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .touch(&cmd.key, cmd.ttl)
-        .timeout(Duration::from_secs(opts.timeout_secs), "client.touch")
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.touch")
         .instrument(tracing::span!(Level::INFO, "client.touch"))
         .await
     {

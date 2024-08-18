@@ -5,6 +5,7 @@ use mtop_client::dns::{DnsClient, Flags, Message, MessageId, Name, Question, Rec
 use std::fmt::Write;
 use std::io::Cursor;
 use std::net::SocketAddr;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
@@ -16,7 +17,7 @@ use tracing::{Instrument, Level};
 
 const DEFAULT_RECORD_TYPE: RecordType = RecordType::A;
 const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
-const MIN_PING_INTERVAL_SECS: f64 = 0.01;
+const MIN_PING_INTERVAL_SECS: f64 = 0.1;
 
 /// dns: Make DNS queries or read/write binary format DNS messages
 #[derive(Debug, Parser)]
@@ -68,7 +69,7 @@ struct PingCommand {
     /// Timeout for DNS network operations in seconds, overriding whatever timeout is
     /// configured in resolv.conf.
     #[arg(long)]
-    nameserver_timeout_secs: Option<u64>,
+    nameserver_timeout_secs: Option<NonZeroU64>,
 
     /// Type of record to request. Supported: A, AAAA, CNAME, NS, SOA, SRV, TXT.
     #[arg(long, default_value_t = DEFAULT_RECORD_TYPE)]
@@ -107,7 +108,7 @@ struct QueryCommand {
     /// Timeout for DNS network operations in seconds, overriding whatever timeout is
     /// configured in resolv.conf.
     #[arg(long)]
-    nameserver_timeout_secs: Option<u64>,
+    nameserver_timeout_secs: Option<NonZeroU64>,
 
     /// Output query results in raw binary format instead of human-readable
     /// text. NOTE, this may break your terminal and so should probably be piped
@@ -179,7 +180,7 @@ async fn run_ping(cmd: &PingCommand) -> ExitCode {
     let client = mtop::dns::new_client(
         &cmd.resolv_conf,
         cmd.nameserver,
-        cmd.nameserver_timeout_secs.map(Duration::from_secs),
+        cmd.nameserver_timeout_secs.map(|v| Duration::from_secs(v.get())),
     )
     .instrument(tracing::span!(Level::INFO, "dns.new_client"))
     .await;
@@ -198,7 +199,7 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
     let client = mtop::dns::new_client(
         &cmd.resolv_conf,
         cmd.nameserver,
-        cmd.nameserver_timeout_secs.map(Duration::from_secs),
+        cmd.nameserver_timeout_secs.map(|v| Duration::from_secs(v.get())),
     )
     .instrument(tracing::span!(Level::INFO, "dns.new_client"))
     .await;

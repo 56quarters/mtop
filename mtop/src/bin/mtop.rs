@@ -6,6 +6,7 @@ use mtop_client::{
 };
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::env;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -35,8 +36,8 @@ struct MtopConfig {
     resolv_conf: PathBuf,
 
     /// Timeout for connecting to Memcached and fetching statistics, in seconds.
-    #[arg(long, env = "MTOP_TIMEOUT_SECS", default_value_t = 5)]
-    timeout_secs: u64,
+    #[arg(long, env = "MTOP_TIMEOUT_SECS", default_value_t = NonZeroU64::new(5).unwrap())]
+    timeout_secs: NonZeroU64,
 
     /// File to log errors to since they cannot be logged to the console. If the path is not
     /// writable, mtop will not start.
@@ -113,7 +114,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    let timeout = Duration::from_secs(opts.timeout_secs);
+    let timeout = Duration::from_secs(opts.timeout_secs.get());
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let discovery = Discovery::new(dns_client);
