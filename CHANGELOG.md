@@ -1,9 +1,14 @@
 # Changelog
 
-## v0.13.0 - unreleased
+## v0.13.0 - 2024-08-23
 
 - Add support for using environment variables to set all optional arguments
   of the `mtop`, `mc`, and `dns` binaries. #169
+- Fix an issue where hosts could be duplicated when resolved via `SRV` records.
+  #185
+- Fix an issue where `0` could be passed to various CLI flags where it did not
+  make sense, sometimes causing panics. #181
+- Change output format of `mc check` to group operation timings by type. #178
 
 ## v0.12.1 - 2024-07-24
 
