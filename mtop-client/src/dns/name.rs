@@ -24,7 +24,7 @@ impl Name {
     }
 
     pub fn size(&self) -> usize {
-        (self.labels.iter().map(|l| l.len()).sum::<usize>() + self.labels.len()) + 1
+        self.labels.iter().map(|l| l.len()).sum::<usize>() + self.labels.len() + 1
     }
 
     pub fn is_root(&self) -> bool {
@@ -98,10 +98,7 @@ impl Name {
             } else {
                 // Binary labels are deprecated (RFC 6891) and there are (currently) no other
                 // types of labels that we should expect. Return an error to make this obvious.
-                return Err(MtopError::runtime(format!(
-                    "unsupported Name label type found: {}",
-                    len
-                )));
+                return Err(MtopError::runtime(format!("unsupported Name label type: {}", len)));
             }
         }
 
@@ -451,6 +448,21 @@ mod test {
     #[test]
     fn test_name_size_non_root() {
         let name = Name::from_str("example.com.").unwrap();
+        assert_eq!(13, name.size());
+    }
+
+    #[test]
+    fn test_name_size_non_root_fqdn() {
+        let name = Name::from_str("example.com").unwrap();
+        assert!(!name.is_fqdn());
+        assert_eq!(13, name.size());
+
+        // The purpose of the .size() method is to figure out how many bytes this
+        // name would be when serialized to binary message format. Only FQDN can be
+        // serialized so we expect the size to be the same between the non-FQDN and
+        // FQDN version of this name.
+        let name = name.to_fqdn();
+        assert!(name.is_fqdn());
         assert_eq!(13, name.size());
     }
 
