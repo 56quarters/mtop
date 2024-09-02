@@ -3,12 +3,11 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::runtime::Handle;
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::ServerConfig;
-use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
 const RESPONSE_VERSION: &str = "VERSION 1.6.22\r\n";
@@ -68,7 +67,10 @@ where
     })
 }
 
-async fn handle_client_connection(stream: TlsStream<TcpStream>) {
+async fn handle_client_connection<S>(stream: S)
+where
+    S: AsyncRead + AsyncWrite,
+{
     let (read, write) = tokio::io::split(stream);
     let mut read = BufReader::new(read).lines();
     let mut write = BufWriter::new(write);

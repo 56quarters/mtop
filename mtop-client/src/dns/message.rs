@@ -102,10 +102,10 @@ impl Message {
     }
 
     fn header(&self) -> Header {
-        assert!(self.questions.len() < u16::MAX as usize);
-        assert!(self.answers.len() < u16::MAX as usize);
-        assert!(self.authority.len() < u16::MAX as usize);
-        assert!(self.extra.len() < u16::MAX as usize);
+        assert!(self.questions.len() < usize::from(u16::MAX));
+        assert!(self.answers.len() < usize::from(u16::MAX));
+        assert!(self.authority.len() < usize::from(u16::MAX));
+        assert!(self.extra.len() < usize::from(u16::MAX));
 
         Header {
             id: self.id,
