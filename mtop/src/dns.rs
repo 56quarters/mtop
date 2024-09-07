@@ -44,7 +44,9 @@ where
         client_config.timeout = t;
     }
 
-    DefaultDnsClient::new(client_config)
+    // Use default instances of the UDP and TCP connection factories, alternate
+    // implementations are only useful for unit testing.
+    DefaultDnsClient::new(client_config, Default::default(), Default::default())
 }
 
 async fn load_config<P>(resolv: P) -> Result<ResolvConf, MtopError>

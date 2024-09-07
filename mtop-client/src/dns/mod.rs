@@ -5,7 +5,10 @@ mod name;
 mod rdata;
 mod resolv;
 
-pub use crate::dns::client::{DefaultDnsClient, DnsClient, DnsClientConfig};
+pub use crate::dns::client::{
+    DefaultDnsClient, DnsClient, DnsClientConfig, TcpConnection, TcpConnectionFactory, UdpConnection,
+    UdpConnectionFactory,
+};
 pub use crate::dns::core::{RecordClass, RecordType};
 pub use crate::dns::message::{Flags, Message, MessageId, Operation, Question, Record, ResponseCode};
 pub use crate::dns::name::Name;
