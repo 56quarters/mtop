@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.13.1 - 2024-10-26
+
+- Fix an issue where a DNS TCP buffer was incorrectly reused resulting in corrupt messages. #189
+
 ## v0.13.0 - 2024-08-23
 
 - Add support for using environment variables to set all optional arguments
