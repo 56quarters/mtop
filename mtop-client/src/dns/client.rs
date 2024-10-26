@@ -201,6 +201,8 @@ pub struct TcpConnection {
     read: BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>>,
     write: BufWriter<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
     buffer: Vec<u8>,
+    bytes_read: AtomicUsize,
+    bytes_written: AtomicUsize,
 }
 
 impl TcpConnection {
@@ -213,16 +215,22 @@ impl TcpConnection {
             read: BufReader::new(Box::new(read)),
             write: BufWriter::new(Box::new(write)),
             buffer: Vec::with_capacity(size),
+            bytes_read: AtomicUsize::new(0),
+            bytes_written: AtomicUsize::new(0),
         }
     }
 
     pub async fn exchange(&mut self, msg: &Message) -> Result<Message, MtopError> {
         // Write the message to a local buffer and then send it, prefixed
         // with the size of the message.
+        self.buffer.clear();
         msg.write_network_bytes(&mut self.buffer)?;
         self.write.write_u16(self.buffer.len() as u16).await?;
         self.write.write_all(&self.buffer).await?;
         self.write.flush().await?;
+
+        // Increment total bytes written including the request size prefix.
+        self.bytes_written.fetch_add(self.buffer.len() + 2, Ordering::Relaxed);
 
         // Read the prefixed size of the response in big-endian (network)
         // order and then read exactly that many bytes into our buffer.
@@ -230,6 +238,9 @@ impl TcpConnection {
         self.buffer.clear();
         self.buffer.resize(usize::from(sz), 0);
         self.read.read_exact(&mut self.buffer).await?;
+
+        // Increment total bytes read including the response size prefix.
+        self.bytes_read.fetch_add(self.buffer.len() + 2, Ordering::Relaxed);
 
         let mut cur = Cursor::new(&self.buffer);
         let res = Message::read_network_bytes(&mut cur)?;
@@ -242,6 +253,14 @@ impl TcpConnection {
         } else {
             Ok(res)
         }
+    }
+
+    pub fn bytes_written(&self) -> usize {
+        self.bytes_written.load(Ordering::Relaxed)
+    }
+
+    pub fn bytes_read(&self) -> usize {
+        self.bytes_read.load(Ordering::Relaxed)
     }
 }
 
@@ -484,6 +503,58 @@ mod test {
         let err = res.unwrap_err();
 
         assert_eq!(ErrorKind::Runtime, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_client_multiple_messages() {
+        let write = Vec::new();
+        let read = {
+            let response1 = new_message_bytes(123, true);
+            let response2 = new_message_bytes(456, true);
+            let mut bytes = Vec::new();
+            bytes.extend(response1);
+            bytes.extend(response2);
+            Cursor::new(bytes)
+        };
+
+        let mut client = TcpConnection::new(read, write, 512);
+
+        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
+        let message1 =
+            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question.clone());
+        let message2 =
+            Message::new(MessageId::from(456), Flags::default().set_recursion_desired()).add_question(question.clone());
+
+        let res1 = client.exchange(&message1).await.unwrap();
+        assert_eq!(message1.id(), res1.id());
+        assert_eq!(message1.questions()[0], res1.questions()[0]);
+        assert_eq!(
+            Record::new(
+                Name::from_str("example.com.").unwrap(),
+                RecordType::A,
+                RecordClass::INET,
+                60,
+                RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
+            ),
+            res1.answers()[0]
+        );
+
+        let res2 = client.exchange(&message2).await.unwrap();
+        assert_eq!(message2.id(), res2.id());
+        assert_eq!(message2.questions()[0], res2.questions()[0]);
+        assert_eq!(
+            Record::new(
+                Name::from_str("example.com.").unwrap(),
+                RecordType::A,
+                RecordClass::INET,
+                60,
+                RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
+            ),
+            res2.answers()[0]
+        );
+
+        let expected_bytes = message1.size() + message2.size() + 2 + 2;
+        assert_eq!(expected_bytes, client.bytes_written());
     }
 
     #[tokio::test]

@@ -15,6 +15,10 @@ impl MessageId {
     pub fn random() -> Self {
         Self(rand::random())
     }
+
+    pub fn size(&self) -> usize {
+        2
+    }
 }
 
 impl From<u16> for MessageId {
@@ -55,6 +59,16 @@ impl Message {
             authority: Vec::new(),
             extra: Vec::new(),
         }
+    }
+
+    pub fn size(&self) -> usize {
+        self.id.size()
+            + self.flags.size()
+            + (2 * 4) // lengths of questions, answers, authority, extra
+            + self.questions.iter().map(|q| q.size()).sum::<usize>()
+            + self.answers.iter().map(|r| r.size()).sum::<usize>()
+            + self.authority.iter().map(|r| r.size()).sum::<usize>()
+            + self.extra.iter().map(|r| r.size()).sum::<usize>()
     }
 
     pub fn id(&self) -> MessageId {
@@ -245,6 +259,10 @@ impl Flags {
     const OFFSET_RD: usize = 8;
     const OFFSET_RA: usize = 7;
     const OFFSET_RC: usize = 0;
+
+    pub fn size(&self) -> usize {
+        2
+    }
 
     pub fn is_query(&self) -> bool {
         !(self.0 & Self::MASK_QR) > 0
@@ -445,6 +463,10 @@ impl Question {
         }
     }
 
+    pub fn size(&self) -> usize {
+        self.name.size() + self.qtype.size() + self.qclass.size()
+    }
+
     pub fn set_qclass(mut self, qclass: RecordClass) -> Self {
         self.qclass = qclass;
         self
@@ -500,6 +522,15 @@ impl Record {
             ttl,
             rdata,
         }
+    }
+
+    pub fn size(&self) -> usize {
+        self.name.size()
+            + self.rtype.size()
+            + self.rclass.size()
+            + 4 // ttl
+            + 2 // rdata length
+            + self.rdata.size()
     }
 
     pub fn name(&self) -> &Name {
@@ -875,6 +906,7 @@ mod test {
     #[test]
     fn test_question_write_network_bytes() {
         let q = Question::new(Name::from_str("example.com.").unwrap(), RecordType::AAAA);
+        let size = q.size();
         let mut cur = Cursor::new(Vec::new());
         q.write_network_bytes(&mut cur).unwrap();
         let buf = cur.into_inner();
@@ -891,6 +923,7 @@ mod test {
             ],
             buf,
         );
+        assert_eq!(size, buf.len());
     }
 
     #[rustfmt::skip]
@@ -906,10 +939,12 @@ mod test {
             0, 1,                             // INET class
         ]);
 
+        let size = cur.get_ref().len();
         let q = Question::read_network_bytes(cur).unwrap();
         assert_eq!("example.com.", q.name().to_string());
         assert_eq!(RecordType::AAAA, q.qtype());
         assert_eq!(RecordClass::INET, q.qclass());
+        assert_eq!(size, q.size());
     }
 
     #[rustfmt::skip]
@@ -922,6 +957,7 @@ mod test {
             300,
             RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
         );
+        let size = rr.size();
         let mut cur = Cursor::new(Vec::new());
         rr.write_network_bytes(&mut cur).unwrap();
         let buf = cur.into_inner();
@@ -942,7 +978,8 @@ mod test {
                 127, 0, 0, 100,                   // rdata, A address
             ],
             buf,
-        )
+        );
+        assert_eq!(size, buf.len());
     }
 
     #[rustfmt::skip]
@@ -963,16 +1000,17 @@ mod test {
             127, 0, 0, 100,                   // rdata, A address
         ]);
 
+        let size = cur.get_ref().len();
         let rr = Record::read_network_bytes(cur).unwrap();
         assert_eq!("www.example.com.", rr.name().to_string());
         assert_eq!(RecordType::A, rr.rtype());
         assert_eq!(RecordClass::INET, rr.rclass());
         assert_eq!(300, rr.ttl());
-
         if let RecordData::A(rd) = rr.rdata() {
             assert_eq!(Ipv4Addr::new(127, 0, 0, 100), rd.addr());
         } else {
             panic!("unexpected rdata type: {:?}", rr.rdata());
         }
+        assert_eq!(size, rr.size());
     }
 }

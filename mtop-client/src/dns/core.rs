@@ -17,6 +17,12 @@ pub enum RecordType {
     Unknown(u16),
 }
 
+impl RecordType {
+    pub fn size(&self) -> usize {
+        2
+    }
+}
+
 impl From<u16> for RecordType {
     fn from(value: u16) -> Self {
         match value {
@@ -93,6 +99,12 @@ pub enum RecordClass {
     NONE,
     ANY,
     Unknown(u16),
+}
+
+impl RecordClass {
+    pub fn size(&self) -> usize {
+        2
+    }
 }
 
 impl From<u16> for RecordClass {
