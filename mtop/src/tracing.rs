@@ -1,5 +1,4 @@
-use std::fs;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Stderr};
 use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;

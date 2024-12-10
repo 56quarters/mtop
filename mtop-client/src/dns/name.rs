@@ -1,7 +1,6 @@
 use crate::core::MtopError;
 use byteorder::{ReadBytesExt, WriteBytesExt};
-use std::fmt;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::io::{Read, Seek, SeekFrom};
 use std::str::FromStr;
 
