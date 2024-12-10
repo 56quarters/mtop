@@ -1,6 +1,5 @@
 use crate::core::MtopError;
-use std::fmt;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::str::FromStr;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

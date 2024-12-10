@@ -5,7 +5,7 @@ use crate::dns::name::Name;
 use crate::net::tcp_connect;
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig};
 use crate::timeout::Timeout;
-use std::fmt::{self, Formatter};
+use std::fmt;
 use std::future::Future;
 use std::io::{self, Cursor, Error};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -122,10 +122,10 @@ where
         let server = self.nameserver(attempt);
 
         let res = async {
-            let mut client = self.udp_pool.get(&server).await?;
-            let res = client.exchange(msg).await;
+            let mut conn = self.udp_pool.get(&server).await?;
+            let res = conn.exchange(msg).await;
             if res.is_ok() {
-                self.udp_pool.put(client).await;
+                self.udp_pool.put(conn).await;
             }
 
             res
@@ -138,10 +138,10 @@ where
         if res.flags().is_truncated() {
             tracing::debug!(message = "UDP response truncated, retrying with TCP", flags = ?res.flags(), server = %server);
             async {
-                let mut client = self.tcp_pool.get(&server).await?;
-                let res = client.exchange(msg).await;
+                let mut conn = self.tcp_pool.get(&server).await?;
+                let res = conn.exchange(msg).await;
                 if res.is_ok() {
-                    self.tcp_pool.put(client).await;
+                    self.tcp_pool.put(conn).await;
                 }
 
                 res
@@ -265,7 +265,7 @@ impl TcpConnection {
 }
 
 impl fmt::Debug for TcpConnection {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TcpConnection {{ ... }}")
     }
 }
@@ -326,7 +326,7 @@ impl UdpConnection {
 }
 
 impl fmt::Debug for UdpConnection {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "UdpConnection {{ ... }}")
     }
 }

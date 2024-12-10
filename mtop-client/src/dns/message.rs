@@ -3,8 +3,7 @@ use crate::dns::core::{RecordClass, RecordType};
 use crate::dns::name::Name;
 use crate::dns::rdata::RecordData;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use std::fmt;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{self, Debug};
 use std::io::Seek;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -34,7 +33,7 @@ impl From<MessageId> for u16 {
 }
 
 impl fmt::Display for MessageId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }

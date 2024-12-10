@@ -2,7 +2,7 @@ use crate::core::MtopError;
 use crate::dns::core::RecordType;
 use crate::dns::name::Name;
 use byteorder::{BigEndian, NetworkEndian, ReadBytesExt, WriteBytesExt};
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Display};
 use std::io::{Read, Seek};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -571,7 +571,7 @@ impl RecordDataOptPair {
 }
 
 impl Display for RecordDataOptPair {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.code, String::from_utf8_lossy(&self.data))
     }
 }
