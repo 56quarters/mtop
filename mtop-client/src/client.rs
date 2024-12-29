@@ -181,25 +181,22 @@ macro_rules! operation_for_all {
         let servers = $self.selector.servers().await;
         let tasks = servers
             .into_iter()
-            .map(|server| (server.clone(), spawn_for_host!($self, $method, &server)))
+            .map(|server| (server.id().clone(), spawn_for_host!($self, $method, &server)))
             .collect::<Vec<_>>();
 
         let mut values = HashMap::with_capacity(tasks.len());
         let mut errors = HashMap::new();
 
-        for (server, task) in tasks {
+        for (id, task) in tasks {
             match task.await {
                 Ok(Ok(results)) => {
-                    values.insert(server.id().clone(), results);
+                    values.insert(id, results);
                 }
                 Ok(Err(e)) => {
-                    errors.insert(server.id().clone(), e);
+                    errors.insert(id, e);
                 }
                 Err(e) => {
-                    errors.insert(
-                        server.id().clone(),
-                        MtopError::runtime_cause("fetching cluster values", e),
-                    );
+                    errors.insert(id, MtopError::runtime_cause("fetching cluster values", e));
                 }
             };
         }
@@ -349,22 +346,22 @@ where
 
         let tasks = by_server
             .into_iter()
-            .map(|(server, keys)| (server.clone(), spawn_for_host!(self, get, &server, &keys)))
+            .map(|(server, keys)| (server.id().clone(), spawn_for_host!(self, get, &server, &keys)))
             .collect::<Vec<_>>();
 
         let mut values = HashMap::with_capacity(num_keys);
         let mut errors = HashMap::new();
 
-        for (server, task) in tasks {
+        for (id, task) in tasks {
             match task.await {
                 Ok(Ok(results)) => {
                     values.extend(results);
                 }
                 Ok(Err(e)) => {
-                    errors.insert(server.id().clone(), e);
+                    errors.insert(id, e);
                 }
                 Err(e) => {
-                    errors.insert(server.id().clone(), MtopError::runtime_cause("fetching keys", e));
+                    errors.insert(id, MtopError::runtime_cause("fetching keys", e));
                 }
             };
         }
