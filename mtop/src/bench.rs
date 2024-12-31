@@ -117,7 +117,8 @@ impl Bencher {
                 let mut stats = Summary {  worker, ..Default::default() };
 
                 while !stop.load(Ordering::Acquire) && start.elapsed() < time {
-                    let set_start = interval.tick().await;
+                    let _ = interval.tick().await;
+                    let set_start = Instant::now();
 
                     for kv in fixture.kvs.iter() {
                         // Write a small percentage of fixture data because cache workloads skew read heavy.

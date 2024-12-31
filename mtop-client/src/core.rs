@@ -1021,8 +1021,11 @@ impl Key {
         I: IntoIterator<Item = T>,
         T: Into<String>,
     {
-        let mut out = Vec::new();
-        for val in vals {
+        let iter = vals.into_iter();
+        let (sz, _) = iter.size_hint();
+        let mut out = Vec::with_capacity(sz);
+
+        for val in iter {
             out.push(Self::one(val)?);
         }
 
