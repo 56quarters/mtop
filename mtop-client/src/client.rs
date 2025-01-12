@@ -1,6 +1,6 @@
 use crate::core::{ErrorKind, Key, Memcached, Meta, MtopError, SlabItems, Slabs, Stats, Value};
-use crate::discovery::{Server, ServerID};
-use crate::net::{tcp_connect, tcp_tls_connect, tls_client_config, TlsConfig};
+use crate::discovery::{Server, ServerAddress, ServerID};
+use crate::net::{self, TlsConfig};
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig, PooledClient};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ impl TcpClientFactory {
         let server_name = if tls.enabled { tls.server_name.clone() } else { None };
 
         let client_config = if tls.enabled {
-            Some(Arc::new(tls_client_config(tls, handle).await?))
+            Some(Arc::new(net::tls_client_config(tls, handle).await?))
         } else {
             None
         };
@@ -37,17 +37,40 @@ impl TcpClientFactory {
             server_name,
         })
     }
+
+    fn get_server_name(&self, server: &Server) -> ServerName<'static> {
+        self.server_name.clone().unwrap_or_else(|| server.server_name().clone())
+    }
+
+    async fn connect(addr: &ServerAddress) -> Result<Memcached, MtopError> {
+        let (read, write) = match addr {
+            ServerAddress::Socket(sock) => net::tcp_connect(sock).await?,
+            ServerAddress::Name(name) => net::tcp_connect(name).await?,
+        };
+
+        Ok(Memcached::new(read, write))
+    }
+
+    async fn connect_tls(
+        addr: &ServerAddress,
+        server_name: ServerName<'static>,
+        cfg: Arc<ClientConfig>,
+    ) -> Result<Memcached, MtopError> {
+        let (read, write) = match addr {
+            ServerAddress::Socket(sock) => net::tcp_tls_connect(sock, server_name, cfg.clone()).await?,
+            ServerAddress::Name(name) => net::tcp_tls_connect(name, server_name, cfg.clone()).await?,
+        };
+
+        Ok(Memcached::new(read, write))
+    }
 }
 
 impl ClientFactory<Server, Memcached> for TcpClientFactory {
-    async fn make(&self, addr: &Server) -> Result<Memcached, MtopError> {
+    async fn make(&self, server: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
-            let server_name = self.server_name.clone().unwrap_or_else(|| addr.server_name().clone());
-            let (read, write) = tcp_tls_connect(addr.address(), server_name, cfg.clone()).await?;
-            Ok(Memcached::new(read, write))
+            Self::connect_tls(server.address(), self.get_server_name(server), cfg.clone()).await
         } else {
-            let (read, write) = tcp_connect(addr.address()).await?;
-            Ok(Memcached::new(read, write))
+            Self::connect(server.address()).await
         }
     }
 }
@@ -496,7 +519,7 @@ where
 mod test {
     use super::{MemcachedClient, MemcachedClientConfig, Selector};
     use crate::core::{ErrorKind, Key, Memcached, MtopError, Value};
-    use crate::discovery::{Server, ServerID};
+    use crate::discovery::{Server, ServerAddress, ServerID};
     use crate::pool::ClientFactory;
     use rustls_pki_types::ServerName;
     use std::collections::HashMap;
@@ -556,9 +579,11 @@ mod test {
             let server = {
                 let (host, port_str) = $host_and_port.split_once(':').unwrap();
                 let port: u16 = port_str.parse().unwrap();
-                let name = ServerName::try_from(host).unwrap();
                 let id = ServerID::from((host, port));
-                Server::new(id, name)
+                let addr = ServerAddress::from($host_and_port);
+                let name = ServerName::try_from(host).unwrap();
+
+                Server::new(id, addr, name)
             };
             mapping.insert(Key::one($key).unwrap(), server.clone());
             contents.insert(server, $contents.to_vec());

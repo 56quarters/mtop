@@ -1,7 +1,7 @@
 use mtop_client::test::{tls_server, TlsServerConfig};
 use mtop_client::{
-    MemcachedClient, MemcachedClientConfig, RendezvousSelector, Server, ServerID, ServersResponse, TcpClientFactory,
-    TlsConfig,
+    MemcachedClient, MemcachedClientConfig, RendezvousSelector, Server, ServerAddress, ServerID, ServersResponse,
+    TcpClientFactory, TlsConfig,
 };
 use rustls_pki_types::ServerName;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ async fn run_server(server_config: TlsServerConfig, client_config: TlsConfig) ->
     let factory = TcpClientFactory::new(client_config, Handle::current()).await.unwrap();
     let selector = RendezvousSelector::new(vec![Server::new(
         server_id.clone(),
+        ServerAddress::from(addr),
         ServerName::try_from("localhost").unwrap(),
     )]);
 

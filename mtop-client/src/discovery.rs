@@ -9,7 +9,7 @@ use std::net::{IpAddr, SocketAddr};
 const DNS_A_PREFIX: &str = "dns+";
 const DNS_SRV_PREFIX: &str = "dnssrv+";
 
-/// Unique ID for a server in a Memcached cluster.
+/// Unique ID for a server in a Memcached cluster for indexing responses or errors.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[repr(transparent)]
 pub struct ServerID(String);
@@ -58,28 +58,63 @@ impl AsRef<str> for ServerID {
     }
 }
 
+/// Address for a server in a Memcached cluster for establishing connections.
+#[derive(Debug, Clone, Eq, PartialOrd, PartialEq, Hash)]
+pub enum ServerAddress {
+    Name(String),
+    Socket(SocketAddr),
+}
+
+impl From<SocketAddr> for ServerAddress {
+    fn from(value: SocketAddr) -> Self {
+        Self::Socket(value)
+    }
+}
+
+impl From<String> for ServerAddress {
+    fn from(value: String) -> Self {
+        Self::Name(value)
+    }
+}
+
+impl From<&str> for ServerAddress {
+    fn from(value: &str) -> Self {
+        Self::Name(value.to_owned())
+    }
+}
+
+impl fmt::Display for ServerAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ServerAddress::Name(n) => write!(f, "{}", n),
+            ServerAddress::Socket(s) => write!(f, "{}", s),
+        }
+    }
+}
+
 /// An individual server that is part of a Memcached cluster.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Server {
     id: ServerID,
+    addr: ServerAddress,
     name: ServerName<'static>,
 }
 
 impl Server {
-    pub fn new(id: ServerID, name: ServerName<'static>) -> Self {
-        Self { id, name }
+    pub fn new(id: ServerID, addr: ServerAddress, name: ServerName<'static>) -> Self {
+        Self { id, addr, name }
     }
 
     pub fn id(&self) -> &ServerID {
         &self.id
     }
 
-    pub fn server_name(&self) -> &ServerName<'static> {
-        &self.name
+    pub fn address(&self) -> &ServerAddress {
+        &self.addr
     }
 
-    pub fn address(&self) -> &str {
-        self.id.as_ref()
+    pub fn server_name(&self) -> &ServerName<'static> {
+        &self.name
     }
 }
 
@@ -173,37 +208,57 @@ where
     fn resolv_socket_addr(name: &str, addr: SocketAddr) -> Result<Vec<Server>, MtopError> {
         let (host, _port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
-        Ok(vec![Server::new(ServerID::from(addr), server_name)])
+        Ok(vec![Server::new(
+            ServerID::from(addr),
+            ServerAddress::from(addr),
+            server_name,
+        )])
     }
 
     fn resolv_bare_host(name: &str) -> Result<Vec<Server>, MtopError> {
         let (host, port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
-        Ok(vec![Server::new(ServerID::from((host, port)), server_name)])
+        Ok(vec![Server::new(
+            ServerID::from((host, port)),
+            ServerAddress::from(name),
+            server_name,
+        )])
     }
 
     fn servers_from_answers(port: u16, server_name: &ServerName, message: &Message) -> Vec<Server> {
-        let mut ids = HashSet::new();
+        let mut servers = HashSet::new();
 
         for answer in message.answers() {
-            let server_id = match answer.rdata() {
-                RecordData::A(data) => ServerID::from(SocketAddr::new(IpAddr::V4(data.addr()), port)),
-                RecordData::AAAA(data) => ServerID::from(SocketAddr::new(IpAddr::V6(data.addr()), port)),
-                RecordData::SRV(data) => ServerID::from((data.target().to_string(), port)),
+            let (id, address) = match answer.rdata() {
+                RecordData::A(data) => {
+                    let addr = SocketAddr::new(IpAddr::V4(data.addr()), port);
+                    (ServerID::from(addr), ServerAddress::from(addr))
+                }
+                RecordData::AAAA(data) => {
+                    let addr = SocketAddr::new(IpAddr::V6(data.addr()), port);
+                    (ServerID::from(addr), ServerAddress::from(addr))
+                }
+                RecordData::SRV(data) => {
+                    let target = data.target().to_string();
+                    (
+                        ServerID::from((&target as &str, port)),
+                        ServerAddress::from(&target as &str),
+                    )
+                }
                 _ => {
                     tracing::warn!(message = "unexpected record data for answer", answer = ?answer);
                     continue;
                 }
             };
 
-            // Insert IDs into a HashSet to deduplicate them. We can potentially end up with duplicates
-            // when a SRV query returns multiple answers per hostname (such as when each host has more
-            // than a single port). Because we ignore the port number from the SRV answer we need to
-            // deduplicate here.
-            ids.insert(server_id);
+            // Insert server into a HashSet to deduplicate them. We can potentially end up with
+            // duplicates when a SRV query returns multiple answers per hostname (such as when
+            // each host has more than a single port). Because we ignore the port number from the
+            // SRV answer we need to deduplicate here.
+            servers.insert(Server::new(id, address, server_name.to_owned()));
         }
 
-        ids.into_iter().map(|id| Server::new(id, server_name.to_owned())).collect()
+        servers.into_iter().collect()
     }
 
     fn host_and_port(name: &str) -> Result<(&str, u16), MtopError> {
@@ -234,13 +289,12 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Discovery, Server, ServerID};
+    use super::{Discovery, ServerID};
     use crate::core::MtopError;
     use crate::dns::{
         DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordData, RecordDataA,
         RecordDataAAAA, RecordDataSRV, RecordType,
     };
-    use rustls_pki_types::ServerName;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::str::FromStr;
     use tokio::sync::Mutex;
@@ -278,40 +332,6 @@ mod test {
         let pair = ("cache.example.com", 11211);
         let id = ServerID::from(pair);
         assert_eq!("cache.example.com:11211", id.to_string());
-    }
-
-    #[test]
-    fn test_server_resolved_id() {
-        let addr = SocketAddr::from(([127, 0, 0, 1], 11211));
-        let id = ServerID::from(addr);
-        let name = ServerName::try_from("cache.example.com").unwrap();
-        let server = Server::new(id, name);
-        assert_eq!("127.0.0.1:11211", server.id().to_string());
-    }
-
-    #[test]
-    fn test_server_resolved_address() {
-        let addr = SocketAddr::from(([127, 0, 0, 1], 11211));
-        let id = ServerID::from(addr);
-        let name = ServerName::try_from("cache.example.com").unwrap();
-        let server = Server::new(id, name);
-        assert_eq!("127.0.0.1:11211", server.address());
-    }
-
-    #[test]
-    fn test_server_unresolved_id() {
-        let id = ServerID::from(("cache01.example.com", 11211));
-        let name = ServerName::try_from("cache.example.com").unwrap();
-        let server = Server::new(id, name);
-        assert_eq!("cache01.example.com:11211", server.id().to_string());
-    }
-
-    #[test]
-    fn test_server_unresolved_address() {
-        let id = ServerID::from(("cache01.example.com", 11211));
-        let name = ServerName::try_from("cache.example.com").unwrap();
-        let server = Server::new(id, name);
-        assert_eq!("cache01.example.com:11211", server.address());
     }
 
     struct MockDnsClient {
