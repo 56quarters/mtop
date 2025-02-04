@@ -1,8 +1,6 @@
 use crate::core::MtopError;
+use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use std::fs::File;
-use std::io;
-use std::io::BufReader;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
@@ -71,19 +69,20 @@ pub(crate) async fn tls_client_config(config: TlsConfig, handle: Handle) -> Resu
 }
 
 pub(crate) fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopError> {
-    File::open(path)
-        .map(BufReader::new)
-        .map(|mut r| rustls_pemfile::certs(&mut r).collect::<Vec<_>>())
-        .and_then(|v| v.into_iter().collect::<Result<Vec<CertificateDer<'static>>, io::Error>>())
-        .map_err(|e| MtopError::configuration_cause(format!("unable to load or parse cert {:?}", path), e))
+    let iter = CertificateDer::pem_file_iter(path)
+        .map_err(|e| MtopError::configuration_cause(format!("unable to load cert {:?}", path), e))?;
+
+    let mut out = Vec::new();
+    for res in iter {
+        out.push(res.map_err(|e| MtopError::configuration_cause(format!("unable to parse cert {:?}", path), e))?);
+    }
+
+    Ok(out)
 }
 
 pub(crate) fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
-    File::open(path)
-        .map(BufReader::new)
-        .and_then(|mut r| rustls_pemfile::private_key(&mut r))
-        .map_err(|e| MtopError::configuration_cause(format!("unable to load key {:?}", path), e))?
-        .ok_or_else(|| MtopError::configuration(format!("no keys available in {:?}", path)))
+    PrivateKeyDer::from_pem_file(path)
+        .map_err(|e| MtopError::configuration_cause(format!("unable to load key {:?}", path), e))
 }
 
 pub(crate) fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, MtopError> {
