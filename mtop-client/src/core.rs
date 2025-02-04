@@ -647,6 +647,8 @@ enum Command<'a> {
     CrawlerMetadump,
     Decr(&'a Key, u64),
     Delete(&'a Key),
+    FlushAll,
+    FlushAllWait(u64),
     Gets(&'a [Key]),
     Incr(&'a Key, u64),
     Replace(&'a Key, u64, u32, &'a [u8]),
@@ -665,6 +667,8 @@ impl<'a> From<Command<'a>> for Vec<u8> {
             Command::CrawlerMetadump => "lru_crawler metadump hash\r\n".to_owned().into_bytes(),
             Command::Decr(key, delta) => format!("decr {} {}\r\n", key, delta).into_bytes(),
             Command::Delete(key) => format!("delete {}\r\n", key).into_bytes(),
+            Command::FlushAll => "flush_all\r\n".to_owned().into_bytes(),
+            Command::FlushAllWait(wait) => format!("flush_all {}\r\n", wait).into_bytes(),
             Command::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
             Command::Incr(key, delta) => format!("incr {} {}\r\n", key, delta).into_bytes(),
             Command::Replace(key, flags, ttl, data) => storage_command("replace", key, flags, ttl, data),
@@ -814,6 +818,34 @@ impl Memcached {
         Meta::try_from(raw.deref())
     }
 
+    /// Send a simple command to verify our connection to the server is working.
+    pub async fn ping(&mut self) -> Result<(), MtopError> {
+        self.send(Command::Version).await?;
+        if let Some(v) = self.read.next_line().await? {
+            if let Some(e) = Self::parse_error(&v) {
+                return Err(MtopError::from(e));
+            }
+            if !v.starts_with("VERSION") {
+                return Err(MtopError::runtime(format!("unable to parse '{}'", v)));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Flush all entries in the cache, optionally after a delay. When a delay is used, the
+    /// server will flush entries after a delay but the call will still return immediately.
+    pub async fn flush_all(&mut self, wait: Option<Duration>) -> Result<(), MtopError> {
+        let cmd = if let Some(d) = wait {
+            Command::FlushAllWait(d.as_secs())
+        } else {
+            Command::FlushAll
+        };
+
+        self.send(cmd).await?;
+        self.read_simple_response("OK").await
+    }
+
     /// Get a map of the requested keys and their corresponding `Value` in the cache
     /// including the key, flags, and data.
     pub async fn get(&mut self, keys: &[Key]) -> Result<HashMap<String, Value>, MtopError> {
@@ -896,21 +928,6 @@ impl Memcached {
             line.parse()
                 .map_err(|_e| MtopError::runtime(format!("unable to parse '{}'", line)))
         }
-    }
-
-    /// Send a simple command to verify our connection to the server is working.
-    pub async fn ping(&mut self) -> Result<(), MtopError> {
-        self.send(Command::Version).await?;
-        if let Some(v) = self.read.next_line().await? {
-            if let Some(e) = Self::parse_error(&v) {
-                return Err(MtopError::from(e));
-            }
-            if !v.starts_with("VERSION") {
-                return Err(MtopError::runtime(format!("unable to parse '{}'", v)));
-            }
-        }
-
-        Ok(())
     }
 
     /// Store the provided item in the cache, regardless of whether it already exists.
@@ -1079,6 +1096,7 @@ mod test {
     use std::io::{Cursor, Error};
     use std::pin::Pin;
     use std::task::{Context, Poll};
+    use std::time::Duration;
     use tokio::io::AsyncWrite;
     use tokio::sync::mpsc::{self, UnboundedSender};
 
@@ -1436,6 +1454,62 @@ mod test {
         let bytes = rx.recv().await.unwrap();
         let command = String::from_utf8(bytes).unwrap();
         assert_eq!("delete test\r\n", command);
+    }
+
+    ///////////////
+    // flush_all //
+    ///////////////
+
+    #[tokio::test]
+    async fn test_memcached_flush_all_with_wait_success() {
+        let (mut rx, mut client) = client!("OK\r\n");
+        let wait = Some(Duration::from_secs(25));
+        let res = client.flush_all(wait).await;
+
+        assert!(res.is_ok());
+        let bytes = rx.recv().await.unwrap();
+        let command = String::from_utf8(bytes).unwrap();
+        assert_eq!("flush_all 25\r\n", command);
+    }
+
+    #[tokio::test]
+    async fn test_memcached_flush_all_with_wait_error() {
+        let (mut rx, mut client) = client!("ERROR\r\n");
+        let wait = Some(Duration::from_secs(25));
+        let res = client.flush_all(wait).await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+
+        let bytes = rx.recv().await.unwrap();
+        let command = String::from_utf8(bytes).unwrap();
+        assert_eq!("flush_all 25\r\n", command);
+    }
+
+    #[tokio::test]
+    async fn test_memcached_flush_all_no_wait_success() {
+        let (mut rx, mut client) = client!("OK\r\n");
+        let res = client.flush_all(None).await;
+
+        assert!(res.is_ok());
+        let bytes = rx.recv().await.unwrap();
+        let command = String::from_utf8(bytes).unwrap();
+        assert_eq!("flush_all\r\n", command);
+    }
+
+    #[tokio::test]
+    async fn test_memcached_flush_all_no_wait_error() {
+        let (mut rx, mut client) = client!("ERROR\r\n");
+        let res = client.flush_all(None).await;
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
+
+        let bytes = rx.recv().await.unwrap();
+        let command = String::from_utf8(bytes).unwrap();
+        assert_eq!("flush_all\r\n", command);
     }
 
     ///////////
