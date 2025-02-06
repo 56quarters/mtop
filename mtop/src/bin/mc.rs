@@ -88,6 +88,7 @@ enum Action {
     Check(CheckCommand),
     Decr(DecrCommand),
     Delete(DeleteCommand),
+    FlushAll(FlushAllCommand),
     Get(GetCommand),
     Incr(IncrCommand),
     Keys(KeysCommand),
@@ -194,6 +195,17 @@ struct DeleteCommand {
     /// error status.
     #[arg(required = true)]
     key: String,
+}
+
+/// Flush all entries from the cache, optionally after a delay.
+#[derive(Debug, Args)]
+struct FlushAllCommand {
+    /// How long to wait between flushing each server if there are multiple servers, in seconds.
+    /// If specified, each consecutive server will be scheduled to flush all entries this amount
+    /// of time after the previous server. For example, server S1 will flush at T = 0, S2 will flush
+    /// at T = wait_secs, S3 will flush at T = wait_secs * 2, S4 will flush at T = wait_secs * 3, etc.
+    #[arg(long, env = "MC_FLUSH_ALL_WAIT_SECS")]
+    wait_secs: Option<NonZeroU64>,
 }
 
 /// Get the value of an item in the cache.
@@ -321,6 +333,7 @@ async fn main() -> ExitCode {
         Action::Check(cmd) => run_check(&opts, cmd, client, discovery).await,
         Action::Decr(cmd) => run_decr(&opts, cmd, &client).await,
         Action::Delete(cmd) => run_delete(&opts, cmd, &client).await,
+        Action::FlushAll(cmd) => run_flush_all(&opts, cmd, &client).await,
         Action::Get(cmd) => run_get(&opts, cmd, &client).await,
         Action::Incr(cmd) => run_incr(&opts, cmd, &client).await,
         Action::Keys(cmd) => run_keys(&opts, cmd, &client).await,
@@ -454,6 +467,44 @@ async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClie
         .await
     {
         tracing::error!(message = "unable to delete item", key = cmd.key, host = opts.host, err = %e);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn run_flush_all(opts: &McConfig, cmd: &FlushAllCommand, client: &MemcachedClient) -> ExitCode {
+    let wait = cmd.wait_secs.map(|d| Duration::from_secs(d.get()));
+    let response = match client
+        .flush_all(wait)
+        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.flush_all")
+        .instrument(tracing::span!(Level::INFO, "client.flush_all"))
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(message = "unable to flush caches", host = opts.host, err = %e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Sort success and error results by server for a nicer UX
+    let mut success = response.values.into_iter().collect::<Vec<_>>();
+    success.sort_by(|v1, v2| v1.0.cmp(&v2.0));
+    let mut errors = response.errors.into_iter().collect::<Vec<_>>();
+    errors.sort_by(|v1, v2| v1.0.cmp(&v2.0));
+
+    let has_errors = !errors.is_empty();
+
+    for (id, _) in success {
+        tracing::info!(message = "scheduled cache flush", host = %id);
+    }
+
+    for (id, e) in errors {
+        tracing::error!(message = "unable to flush cache for server", host = %id, err = %e);
+    }
+
+    if has_errors {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS

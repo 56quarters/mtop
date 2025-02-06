@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hasher;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::ClientConfig;
 use tracing::instrument::WithSubscriber;
@@ -125,10 +127,10 @@ pub struct ValuesResponse {
 
 /// Run a method for a particular server in a spawned future.
 macro_rules! spawn_for_host {
-    ($self:ident, $method:ident, $host:expr $(, $args:expr)* $(,)?) => {{
+    ($self:ident, $method:ident, $server:expr $(, $args:expr)* $(,)?) => {{
         let pool = $self.pool.clone();
         $self.handle.spawn(async move {
-            let mut conn = pool.get($host).await?;
+            let mut conn = pool.get($server).await?;
             match conn.$method($($args,)*).await {
                 Ok(v) => {
                     pool.put(conn).await;
@@ -184,25 +186,30 @@ macro_rules! operation_for_all {
             .map(|server| (server.id().clone(), spawn_for_host!($self, $method, &server)))
             .collect::<Vec<_>>();
 
-        let mut values = HashMap::with_capacity(tasks.len());
-        let mut errors = HashMap::new();
-
-        for (id, task) in tasks {
-            match task.await {
-                Ok(Ok(results)) => {
-                    values.insert(id, results);
-                }
-                Ok(Err(e)) => {
-                    errors.insert(id, e);
-                }
-                Err(e) => {
-                    errors.insert(id, MtopError::runtime_cause("fetching cluster values", e));
-                }
-            };
-        }
-
-        Ok(ServersResponse { values, errors })
+        Ok(collect_results(tasks).await)
     }};
+}
+
+/// Await the results of a list of tasks and assemble a ServersResponse from them.
+async fn collect_results<T>(tasks: Vec<(ServerID, JoinHandle<Result<T, MtopError>>)>) -> ServersResponse<T> {
+    let mut values = HashMap::with_capacity(tasks.len());
+    let mut errors = HashMap::new();
+
+    for (id, task) in tasks {
+        match task.await {
+            Ok(Ok(result)) => {
+                values.insert(id, result);
+            }
+            Ok(Err(e)) => {
+                errors.insert(id, e);
+            }
+            Err(e) => {
+                errors.insert(id, MtopError::runtime_cause("fetching cluster values", e));
+            }
+        };
+    }
+
+    ServersResponse { values, errors }
 }
 
 /// Configuration for constructing a new client instance.
@@ -317,6 +324,31 @@ where
     /// established.
     pub async fn ping(&self) -> Result<ServersResponse<()>, MtopError> {
         operation_for_all!(self, ping)
+    }
+
+    /// Flush all entries in the cache for each server, optionally after a delay. When a
+    /// delay is used, each server will flush entries after a delay but the calls will still
+    /// return immediately.
+    ///
+    /// A future is spawned for each server with results and any errors indexed by server. A
+    /// pooled connection to each server is used if available, otherwise new connections are
+    /// established.
+    pub async fn flush_all(&self, wait: Option<Duration>) -> Result<ServersResponse<()>, MtopError> {
+        // Note that we aren't using operation_for_all! here because we want to pass a
+        // different delay argument to each server. This allows callers to flush the cache
+        // in one server after another, with a delay between each for safety.
+        let servers = self.selector.servers().await;
+
+        let tasks = servers
+            .into_iter()
+            .enumerate()
+            .map(|(i, server)| {
+                let delay = wait.map(|d| d * i as u32);
+                (server.id().clone(), spawn_for_host!(self, flush_all, &server, delay))
+            })
+            .collect::<Vec<_>>();
+
+        Ok(collect_results(tasks).await)
     }
 
     /// Get a map of the requested keys and their corresponding `Value` in the cache
@@ -469,6 +501,7 @@ mod test {
     use rustls_pki_types::ServerName;
     use std::collections::HashMap;
     use std::io::Cursor;
+    use std::time::Duration;
     use tokio::runtime::Handle;
 
     #[derive(Debug, Default)]
@@ -540,12 +573,13 @@ mod test {
     }
 
     // NOTE: We aren't testing all methods of the client, just a representative
-    //  selection. This is because there are only really three types of methods
+    //  selection. This is because there are only really four types of methods
     //  in the client:
     //  1 - methods that operate on every server via operation_for_all!
     //  2 - methods that operate on a single server based on the key via
     //      operation_for_key!
     //  3 - the get method that has its own non-macro implementation.
+    //  4 - the flush_all method that has its own non-macro implementation.
 
     //////////
     // ping //
@@ -583,6 +617,27 @@ mod test {
 
         assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
         assert!(response.errors.contains_key(&ServerID::from(("cache02.example.com", 11211))));
+    }
+
+    /////////
+    // set //
+    /////////
+
+    #[tokio::test]
+    async fn test_memcached_client_set_no_servers() {
+        let client = new_client!();
+        let res = client.set("key1", 1, 60, "foo".as_bytes()).await;
+        let err = res.unwrap_err();
+
+        assert_eq!(ErrorKind::Runtime, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_memcached_client_set_success() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "key1" => "STORED\r\n".as_bytes(),
+        );
+        client.set("key1", 1, 60, "foo".as_bytes()).await.unwrap();
     }
 
     /////////
@@ -669,24 +724,63 @@ mod test {
         assert_eq!(values.errors.get(&id).map(|e| e.kind()), Some(ErrorKind::Protocol))
     }
 
-    /////////
-    // set //
-    /////////
+    ///////////////
+    // flush_all //
+    ///////////////
 
     #[tokio::test]
-    async fn test_memcached_client_set_no_servers() {
-        let client = new_client!();
-        let res = client.set("key1", 1, 60, "foo".as_bytes()).await;
-        let err = res.unwrap_err();
+    async fn test_memcached_client_flush_all_no_wait_success() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "unused1" => "OK\r\n".as_bytes(),
+            "cache02.example.com:11211" => "unused2" => "OK\r\n".as_bytes(),
+        );
 
-        assert_eq!(ErrorKind::Runtime, err.kind());
+        let res = client.flush_all(None).await;
+        let response = res.unwrap();
+
+        assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
+        assert!(response.values.contains_key(&ServerID::from(("cache02.example.com", 11211))));
     }
 
     #[tokio::test]
-    async fn test_memcached_client_set_success() {
+    async fn test_memcached_client_flush_all_no_wait_some_errors() {
         let client = new_client!(
-            "cache01.example.com:11211" => "key1" => "STORED\r\n".as_bytes(),
+            "cache01.example.com:11211" => "unused1" => "OK\r\n".as_bytes(),
+            "cache02.example.com:11211" => "unused2" => "ERROR\r\n".as_bytes(),
         );
-        client.set("key1", 1, 60, "foo".as_bytes()).await.unwrap();
+
+        let res = client.flush_all(None).await;
+        let response = res.unwrap();
+
+        assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
+        assert!(response.errors.contains_key(&ServerID::from(("cache02.example.com", 11211))));
+    }
+
+    #[tokio::test]
+    async fn test_memcached_client_flush_all_wait_success() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "unused1" => "OK\r\n".as_bytes(),
+            "cache02.example.com:11211" => "unused2" => "OK\r\n".as_bytes(),
+        );
+
+        let res = client.flush_all(Some(Duration::from_secs(5))).await;
+        let response = res.unwrap();
+
+        assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
+        assert!(response.values.contains_key(&ServerID::from(("cache02.example.com", 11211))));
+    }
+
+    #[tokio::test]
+    async fn test_memcached_client_flush_all_wait_some_errors() {
+        let client = new_client!(
+            "cache01.example.com:11211" => "unused1" => "OK\r\n".as_bytes(),
+            "cache02.example.com:11211" => "unused2" => "ERROR\r\n".as_bytes(),
+        );
+
+        let res = client.flush_all(Some(Duration::from_secs(5))).await;
+        let response = res.unwrap();
+
+        assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
+        assert!(response.errors.contains_key(&ServerID::from(("cache02.example.com", 11211))));
     }
 }
