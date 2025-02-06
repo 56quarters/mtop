@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.14.0 - 2025-02-05
+
+- Add `flush-all` subcommand to `mc` to flush all entries from a cache. #196
+
 ## v0.13.1 - 2024-10-26
 
 - Fix an issue where a DNS TCP buffer was incorrectly reused resulting in corrupt messages. #189
