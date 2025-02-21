@@ -1,7 +1,7 @@
 use crate::core::MtopError;
 use crate::dns::core::RecordType;
 use crate::dns::name::Name;
-use byteorder::{BigEndian, NetworkEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use std::fmt::{self, Display};
 use std::io::{Read, Seek};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -553,8 +553,8 @@ impl RecordDataOptPair {
     where
         T: WriteBytesExt,
     {
-        buf.write_u16::<BigEndian>(self.code)?;
-        buf.write_u16::<BigEndian>(self.data.len() as u16)?;
+        buf.write_u16::<NetworkEndian>(self.code)?;
+        buf.write_u16::<NetworkEndian>(self.data.len() as u16)?;
         Ok(buf.write_all(&self.data)?)
     }
 
@@ -562,8 +562,8 @@ impl RecordDataOptPair {
     where
         T: ReadBytesExt + Seek,
     {
-        let code = buf.read_u16::<BigEndian>()?;
-        let data_len = buf.read_u16::<BigEndian>()?;
+        let code = buf.read_u16::<NetworkEndian>()?;
+        let data_len = buf.read_u16::<NetworkEndian>()?;
         let mut data = Vec::with_capacity(usize::from(data_len));
         buf.take(u64::from(data_len)).read_to_end(&mut data)?;
         Ok(Self { code, data })
