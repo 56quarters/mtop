@@ -4,6 +4,7 @@ mod message;
 mod name;
 mod rdata;
 mod resolv;
+mod test;
 
 pub use crate::dns::client::{
     DefaultDnsClient, DnsClient, DnsClientConfig, TcpConnection, TcpConnectionFactory, UdpConnection,
