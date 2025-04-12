@@ -580,7 +580,7 @@ mod test {
                 let (host, port_str) = $host_and_port.split_once(':').unwrap();
                 let port: u16 = port_str.parse().unwrap();
                 let id = ServerID::from((host, port));
-                let addr = ServerAddress::from($host_and_port);
+                let addr = ServerAddress::from((host, port));
                 let name = ServerName::try_from(host).unwrap();
 
                 Server::new(id, addr, name)
