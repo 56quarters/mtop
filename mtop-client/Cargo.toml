@@ -14,8 +14,7 @@ edition = "2021"
 byteorder = "1.5.0"
 pin-project-lite = "0.2.13"
 rand = "0.8.5"
-rustls-pemfile = "2.1.0"
-rustls-pki-types = "1.7.0"
+rustls-pki-types = {  version = "1.11.0", features = ["std"]}
 tokio = { version = "1.36.0", features = ["full"] }
 tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring", "tls12"] }
 tracing = "0.1.40"
