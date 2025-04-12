@@ -65,21 +65,35 @@ pub enum ServerAddress {
     Socket(SocketAddr),
 }
 
+impl ServerAddress {
+    fn from_host_port<S>(host: S, port: u16) -> Self
+    where
+        S: AsRef<str>,
+    {
+        let host = host.as_ref();
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            Self::Socket(SocketAddr::from((ip, port)))
+        } else {
+            Self::Name(format!("{}:{}", host, port))
+        }
+    }
+}
+
 impl From<SocketAddr> for ServerAddress {
     fn from(value: SocketAddr) -> Self {
         Self::Socket(value)
     }
 }
 
-impl From<String> for ServerAddress {
-    fn from(value: String) -> Self {
-        Self::Name(value)
+impl From<(&str, u16)> for ServerAddress {
+    fn from(value: (&str, u16)) -> Self {
+        Self::from_host_port(value.0, value.1)
     }
 }
 
-impl From<&str> for ServerAddress {
-    fn from(value: &str) -> Self {
-        Self::Name(value.to_owned())
+impl From<(String, u16)> for ServerAddress {
+    fn from(value: (String, u16)) -> Self {
+        Self::from_host_port(value.0, value.1)
     }
 }
 
@@ -220,7 +234,7 @@ where
         let server_name = Self::server_name(host)?;
         Ok(vec![Server::new(
             ServerID::from((host, port)),
-            ServerAddress::from(name),
+            ServerAddress::from((host, port)),
             server_name,
         )])
     }
@@ -242,7 +256,7 @@ where
                     let target = data.target().to_string();
                     (
                         ServerID::from((&target as &str, port)),
-                        ServerAddress::from(&target as &str),
+                        ServerAddress::from((&target as &str, port)),
                     )
                 }
                 _ => {
@@ -289,7 +303,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Discovery, ServerID};
+    use super::{Discovery, ServerAddress, ServerID};
     use crate::core::MtopError;
     use crate::dns::{
         DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordData, RecordDataA,
@@ -393,13 +407,24 @@ mod test {
         let client = MockDnsClient::new(vec![response_a, response_aaaa]);
         let discovery = Discovery::new(client);
         let servers = discovery.resolve_by_proto("dns+example.com:11211").await.unwrap();
+
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
+        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
 
         let id_a = ServerID::from(("10.1.1.1", 11211));
         let id_aaaa = ServerID::from(("[::1]", 11211));
+        let addr_a = ServerAddress::from("10.1.1.1:11211".parse::<SocketAddr>().unwrap());
+        let addr_aaaa = ServerAddress::from("[::1]:11211".parse::<SocketAddr>().unwrap());
 
         assert!(ids.contains(&id_a), "expected {:?} to contain {:?}", ids, id_a);
         assert!(ids.contains(&id_aaaa), "expected {:?} to contain {:?}", ids, id_aaaa);
+        assert!(addrs.contains(&addr_a), "expected {:?} to contain {:?}", addrs, id_a);
+        assert!(
+            addrs.contains(&addr_aaaa),
+            "expected {:?} to contain {:?}",
+            addrs,
+            id_aaaa
+        );
     }
 
     #[tokio::test]
@@ -437,13 +462,19 @@ mod test {
         let client = MockDnsClient::new(vec![response]);
         let discovery = Discovery::new(client);
         let servers = discovery.resolve_by_proto("dnssrv+_cache.example.com:11211").await.unwrap();
+
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
+        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
 
         let id1 = ServerID::from(("cache01.example.com.", 11211));
         let id2 = ServerID::from(("cache02.example.com.", 11211));
+        let addr1 = ServerAddress::from(("cache01.example.com.", 11211));
+        let addr2 = ServerAddress::from(("cache02.example.com.", 11211));
 
         assert!(ids.contains(&id1), "expected {:?} to contain {:?}", ids, id1);
         assert!(ids.contains(&id2), "expected {:?} to contain {:?}", ids, id2);
+        assert!(addrs.contains(&addr1), "expected {:?} to contain {:?}", addrs, addr1);
+        assert!(addrs.contains(&addr2), "expected {:?} to contain {:?}", addrs, addr2);
     }
 
     #[tokio::test]
@@ -481,26 +512,34 @@ mod test {
         let client = MockDnsClient::new(vec![response]);
         let discovery = Discovery::new(client);
         let servers = discovery.resolve_by_proto("dnssrv+_cache.example.com:11211").await.unwrap();
+
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
+        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
 
         let id = ServerID::from(("cache01.example.com.", 11211));
+        let addr = ServerAddress::from(("cache01.example.com.", 11211));
 
         assert_eq!(ids, vec![id]);
+        assert_eq!(addrs, vec![addr]);
     }
 
     #[tokio::test]
     async fn test_dns_client_resolve_socket_addr() {
         let name = "127.0.0.2:11211";
-        let addr: SocketAddr = "127.0.0.2:11211".parse().unwrap();
+        let sock: SocketAddr = "127.0.0.2:11211".parse().unwrap();
 
         let client = MockDnsClient::new(vec![]);
         let discovery = Discovery::new(client);
         let servers = discovery.resolve_by_proto(name).await.unwrap();
-        let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
 
-        let id = ServerID::from(addr);
+        let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
+        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
+
+        let id = ServerID::from(sock);
+        let addr = ServerAddress::from(sock);
 
         assert!(ids.contains(&id), "expected {:?} to contain {:?}", ids, id);
+        assert!(addrs.contains(&addr), "expected {:?} to contain {:?}", addrs, addr);
     }
 
     #[tokio::test]
@@ -510,10 +549,14 @@ mod test {
         let client = MockDnsClient::new(vec![]);
         let discovery = Discovery::new(client);
         let servers = discovery.resolve_by_proto(name).await.unwrap();
+
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
+        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
 
         let id = ServerID::from(("localhost", 11211));
+        let addr = ServerAddress::from(("localhost", 11211));
 
         assert!(ids.contains(&id), "expected {:?} to contain {:?}", ids, id);
+        assert!(addrs.contains(&addr), "expected {:?} to contain {:?}", addrs, addr);
     }
 }
