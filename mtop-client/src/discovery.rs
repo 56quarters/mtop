@@ -9,10 +9,13 @@ use std::net::{IpAddr, SocketAddr};
 const DNS_A_PREFIX: &str = "dns+";
 const DNS_SRV_PREFIX: &str = "dnssrv+";
 
-/// Unique ID for a server in a Memcached cluster for indexing responses or errors.
+/// Unique ID and address for a server in a Memcached cluster for indexing responses
+/// or errors and establishing connections.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-#[repr(transparent)]
-pub struct ServerID(String);
+pub enum ServerID {
+    Name(String),
+    Socket(SocketAddr),
+}
 
 impl ServerID {
     fn from_host_port<S>(host: S, port: u16) -> Self
@@ -21,10 +24,16 @@ impl ServerID {
     {
         let host = host.as_ref();
         if let Ok(ip) = host.parse::<IpAddr>() {
-            Self(SocketAddr::from((ip, port)).to_string())
+            Self::Socket(SocketAddr::new(ip, port))
         } else {
-            Self(format!("{}:{}", host, port))
+            Self::Name(format!("{}:{}", host, port))
         }
+    }
+}
+
+impl From<SocketAddr> for ServerID {
+    fn from(value: SocketAddr) -> Self {
+        Self::Socket(value)
     }
 }
 
@@ -40,68 +49,11 @@ impl From<(String, u16)> for ServerID {
     }
 }
 
-impl From<SocketAddr> for ServerID {
-    fn from(value: SocketAddr) -> Self {
-        Self(value.to_string())
-    }
-}
-
 impl fmt::Display for ServerID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl AsRef<str> for ServerID {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Address for a server in a Memcached cluster for establishing connections.
-#[derive(Debug, Clone, Eq, PartialOrd, PartialEq, Hash)]
-pub enum ServerAddress {
-    Name(String),
-    Socket(SocketAddr),
-}
-
-impl ServerAddress {
-    fn from_host_port<S>(host: S, port: u16) -> Self
-    where
-        S: AsRef<str>,
-    {
-        let host = host.as_ref();
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            Self::Socket(SocketAddr::from((ip, port)))
-        } else {
-            Self::Name(format!("{}:{}", host, port))
-        }
-    }
-}
-
-impl From<SocketAddr> for ServerAddress {
-    fn from(value: SocketAddr) -> Self {
-        Self::Socket(value)
-    }
-}
-
-impl From<(&str, u16)> for ServerAddress {
-    fn from(value: (&str, u16)) -> Self {
-        Self::from_host_port(value.0, value.1)
-    }
-}
-
-impl From<(String, u16)> for ServerAddress {
-    fn from(value: (String, u16)) -> Self {
-        Self::from_host_port(value.0, value.1)
-    }
-}
-
-impl fmt::Display for ServerAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ServerAddress::Name(n) => write!(f, "{}", n),
-            ServerAddress::Socket(s) => write!(f, "{}", s),
+            ServerID::Name(n) => n.fmt(f),
+            ServerID::Socket(s) => s.fmt(f),
         }
     }
 }
@@ -110,21 +62,16 @@ impl fmt::Display for ServerAddress {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Server {
     id: ServerID,
-    addr: ServerAddress,
     name: ServerName<'static>,
 }
 
 impl Server {
-    pub fn new(id: ServerID, addr: ServerAddress, name: ServerName<'static>) -> Self {
-        Self { id, addr, name }
+    pub fn new(id: ServerID, name: ServerName<'static>) -> Self {
+        Self { id, name }
     }
 
     pub fn id(&self) -> &ServerID {
         &self.id
-    }
-
-    pub fn address(&self) -> &ServerAddress {
-        &self.addr
     }
 
     pub fn server_name(&self) -> &ServerName<'static> {
@@ -146,7 +93,7 @@ impl Ord for Server {
 
 impl fmt::Display for Server {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.id)
+        self.id.fmt(f)
     }
 }
 
@@ -222,42 +169,32 @@ where
     fn resolv_socket_addr(name: &str, addr: SocketAddr) -> Result<Vec<Server>, MtopError> {
         let (host, _port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
-        Ok(vec![Server::new(
-            ServerID::from(addr),
-            ServerAddress::from(addr),
-            server_name,
-        )])
+        Ok(vec![Server::new(ServerID::from(addr), server_name)])
     }
 
     fn resolv_bare_host(name: &str) -> Result<Vec<Server>, MtopError> {
         let (host, port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
-        Ok(vec![Server::new(
-            ServerID::from((host, port)),
-            ServerAddress::from((host, port)),
-            server_name,
-        )])
+        Ok(vec![Server::new(ServerID::from((host, port)), server_name)])
     }
 
     fn servers_from_answers(port: u16, server_name: &ServerName, message: &Message) -> Vec<Server> {
         let mut servers = HashSet::new();
 
         for answer in message.answers() {
-            let (id, address) = match answer.rdata() {
+            let id = match answer.rdata() {
                 RecordData::A(data) => {
                     let addr = SocketAddr::new(IpAddr::V4(data.addr()), port);
-                    (ServerID::from(addr), ServerAddress::from(addr))
+                    ServerID::from(addr)
                 }
                 RecordData::AAAA(data) => {
                     let addr = SocketAddr::new(IpAddr::V6(data.addr()), port);
-                    (ServerID::from(addr), ServerAddress::from(addr))
+                    ServerID::from(addr)
                 }
                 RecordData::SRV(data) => {
                     let target = data.target().to_string();
-                    (
-                        ServerID::from((&target as &str, port)),
-                        ServerAddress::from((&target as &str, port)),
-                    )
+
+                    ServerID::from((&target as &str, port))
                 }
                 _ => {
                     tracing::warn!(message = "unexpected record data for answer", answer = ?answer);
@@ -269,7 +206,7 @@ where
             // duplicates when a SRV query returns multiple answers per hostname (such as when
             // each host has more than a single port). Because we ignore the port number from the
             // SRV answer we need to deduplicate here.
-            servers.insert(Server::new(id, address, server_name.to_owned()));
+            servers.insert(Server::new(id, server_name.to_owned()));
         }
 
         servers.into_iter().collect()
@@ -303,7 +240,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{Discovery, ServerAddress, ServerID};
+    use super::{Discovery, ServerID};
     use crate::core::MtopError;
     use crate::dns::{
         DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordData, RecordDataA,
@@ -409,22 +346,11 @@ mod test {
         let servers = discovery.resolve_by_proto("dns+example.com:11211").await.unwrap();
 
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
-        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
-
-        let id_a = ServerID::from(("10.1.1.1", 11211));
-        let id_aaaa = ServerID::from(("[::1]", 11211));
-        let addr_a = ServerAddress::from("10.1.1.1:11211".parse::<SocketAddr>().unwrap());
-        let addr_aaaa = ServerAddress::from("[::1]:11211".parse::<SocketAddr>().unwrap());
+        let id_a = ServerID::from("10.1.1.1:11211".parse::<SocketAddr>().unwrap());
+        let id_aaaa = ServerID::from("[::1]:11211".parse::<SocketAddr>().unwrap());
 
         assert!(ids.contains(&id_a), "expected {:?} to contain {:?}", ids, id_a);
         assert!(ids.contains(&id_aaaa), "expected {:?} to contain {:?}", ids, id_aaaa);
-        assert!(addrs.contains(&addr_a), "expected {:?} to contain {:?}", addrs, id_a);
-        assert!(
-            addrs.contains(&addr_aaaa),
-            "expected {:?} to contain {:?}",
-            addrs,
-            id_aaaa
-        );
     }
 
     #[tokio::test]
@@ -464,17 +390,11 @@ mod test {
         let servers = discovery.resolve_by_proto("dnssrv+_cache.example.com:11211").await.unwrap();
 
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
-        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
-
         let id1 = ServerID::from(("cache01.example.com.", 11211));
         let id2 = ServerID::from(("cache02.example.com.", 11211));
-        let addr1 = ServerAddress::from(("cache01.example.com.", 11211));
-        let addr2 = ServerAddress::from(("cache02.example.com.", 11211));
 
         assert!(ids.contains(&id1), "expected {:?} to contain {:?}", ids, id1);
         assert!(ids.contains(&id2), "expected {:?} to contain {:?}", ids, id2);
-        assert!(addrs.contains(&addr1), "expected {:?} to contain {:?}", addrs, addr1);
-        assert!(addrs.contains(&addr2), "expected {:?} to contain {:?}", addrs, addr2);
     }
 
     #[tokio::test]
@@ -514,13 +434,9 @@ mod test {
         let servers = discovery.resolve_by_proto("dnssrv+_cache.example.com:11211").await.unwrap();
 
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
-        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
-
         let id = ServerID::from(("cache01.example.com.", 11211));
-        let addr = ServerAddress::from(("cache01.example.com.", 11211));
 
         assert_eq!(ids, vec![id]);
-        assert_eq!(addrs, vec![addr]);
     }
 
     #[tokio::test]
@@ -533,13 +449,9 @@ mod test {
         let servers = discovery.resolve_by_proto(name).await.unwrap();
 
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
-        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
-
         let id = ServerID::from(sock);
-        let addr = ServerAddress::from(sock);
 
         assert!(ids.contains(&id), "expected {:?} to contain {:?}", ids, id);
-        assert!(addrs.contains(&addr), "expected {:?} to contain {:?}", addrs, addr);
     }
 
     #[tokio::test]
@@ -551,12 +463,8 @@ mod test {
         let servers = discovery.resolve_by_proto(name).await.unwrap();
 
         let ids = servers.iter().map(|s| s.id().clone()).collect::<Vec<_>>();
-        let addrs = servers.iter().map(|s| s.address().clone()).collect::<Vec<_>>();
-
         let id = ServerID::from(("localhost", 11211));
-        let addr = ServerAddress::from(("localhost", 11211));
 
         assert!(ids.contains(&id), "expected {:?} to contain {:?}", ids, id);
-        assert!(addrs.contains(&addr), "expected {:?} to contain {:?}", addrs, addr);
     }
 }

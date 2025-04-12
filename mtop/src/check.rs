@@ -89,7 +89,7 @@ impl Checker {
             let mut conn = match self.client.raw_open(&server).timeout(self.timeout, "client.raw_open").await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(message = "failed to connect to host", host = host, addr = %server.address(), err = %e);
+                    tracing::warn!(message = "failed to connect to host", host = host, addr = %server.id(), err = %e);
                     failures.total += 1;
                     failures.connections += 1;
                     continue;
@@ -101,7 +101,7 @@ impl Checker {
             match conn.set(&key, 0, 60, &val).timeout(self.timeout, "connection.set").await {
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(message = "failed to set key", host = host, addr = %server.address(), err = %e);
+                    tracing::warn!(message = "failed to set key", host = host, addr = %server.id(), err = %e);
                     failures.total += 1;
                     failures.sets += 1;
                     continue;
@@ -113,7 +113,7 @@ impl Checker {
             match conn.get(&[key]).timeout(self.timeout, "connection.get").await {
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(message = "failed to get key", host = host, addr = %server.address(), err = %e);
+                    tracing::warn!(message = "failed to get key", host = host, addr = %server.id(), err = %e);
                     failures.total += 1;
                     failures.gets += 1;
                     continue;

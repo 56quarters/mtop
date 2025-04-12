@@ -1,11 +1,11 @@
 use crate::core::{ErrorKind, Key, Memcached, Meta, MtopError, SlabItems, Slabs, Stats, Value};
-use crate::discovery::{Server, ServerAddress, ServerID};
+use crate::discovery::{Server, ServerID};
 use crate::net::{self, TlsConfig};
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig, PooledClient};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::future::Future;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
@@ -42,23 +42,23 @@ impl TcpClientFactory {
         self.server_name.clone().unwrap_or_else(|| server.server_name().clone())
     }
 
-    async fn connect(addr: &ServerAddress) -> Result<Memcached, MtopError> {
-        let (read, write) = match addr {
-            ServerAddress::Socket(sock) => net::tcp_connect(sock).await?,
-            ServerAddress::Name(name) => net::tcp_connect(name).await?,
+    async fn connect(id: &ServerID) -> Result<Memcached, MtopError> {
+        let (read, write) = match id {
+            ServerID::Socket(sock) => net::tcp_connect(sock).await?,
+            ServerID::Name(name) => net::tcp_connect(name).await?,
         };
 
         Ok(Memcached::new(read, write))
     }
 
     async fn connect_tls(
-        addr: &ServerAddress,
+        id: &ServerID,
         server_name: ServerName<'static>,
         cfg: Arc<ClientConfig>,
     ) -> Result<Memcached, MtopError> {
-        let (read, write) = match addr {
-            ServerAddress::Socket(sock) => net::tcp_tls_connect(sock, server_name, cfg.clone()).await?,
-            ServerAddress::Name(name) => net::tcp_tls_connect(name, server_name, cfg.clone()).await?,
+        let (read, write) = match id {
+            ServerID::Socket(sock) => net::tcp_tls_connect(sock, server_name, cfg.clone()).await?,
+            ServerID::Name(name) => net::tcp_tls_connect(name, server_name, cfg.clone()).await?,
         };
 
         Ok(Memcached::new(read, write))
@@ -68,9 +68,9 @@ impl TcpClientFactory {
 impl ClientFactory<Server, Memcached> for TcpClientFactory {
     async fn make(&self, server: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
-            Self::connect_tls(server.address(), self.get_server_name(server), cfg.clone()).await
+            Self::connect_tls(server.id(), self.get_server_name(server), cfg.clone()).await
         } else {
-            Self::connect(server.address()).await
+            Self::connect(server.id()).await
         }
     }
 }
@@ -101,7 +101,13 @@ impl RendezvousSelector {
 
     fn score(server: &Server, key: &Key) -> u64 {
         let mut hasher = DefaultHasher::new();
-        hasher.write(server.id().as_ref().as_bytes());
+
+        // Match based on the type of ServerID to avoid calling .to_string()
+        match server.id() {
+            ServerID::Name(name) => name.hash(&mut hasher),
+            ServerID::Socket(addr) => addr.hash(&mut hasher),
+        }
+
         hasher.write(key.as_ref().as_bytes());
         hasher.finish()
     }
@@ -519,7 +525,7 @@ where
 mod test {
     use super::{MemcachedClient, MemcachedClientConfig, Selector};
     use crate::core::{ErrorKind, Key, Memcached, MtopError, Value};
-    use crate::discovery::{Server, ServerAddress, ServerID};
+    use crate::discovery::{Server, ServerID};
     use crate::pool::ClientFactory;
     use rustls_pki_types::ServerName;
     use std::collections::HashMap;
@@ -580,10 +586,9 @@ mod test {
                 let (host, port_str) = $host_and_port.split_once(':').unwrap();
                 let port: u16 = port_str.parse().unwrap();
                 let id = ServerID::from((host, port));
-                let addr = ServerAddress::from((host, port));
                 let name = ServerName::try_from(host).unwrap();
 
-                Server::new(id, addr, name)
+                Server::new(id, name)
             };
             mapping.insert(Key::one($key).unwrap(), server.clone());
             contents.insert(server, $contents.to_vec());
