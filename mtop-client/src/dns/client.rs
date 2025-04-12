@@ -1,6 +1,6 @@
 use crate::core::MtopError;
 use crate::dns::core::{RecordClass, RecordType};
-use crate::dns::message::{Flags, Message, MessageId, Question};
+use crate::dns::message::{Flags, Message, MessageId, Question, ResponseCode};
 use crate::dns::name::Name;
 use crate::net::tcp_connect;
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig};
@@ -118,11 +118,9 @@ where
         }
     }
 
-    async fn exchange(&self, msg: &Message, attempt: usize) -> Result<Message, MtopError> {
-        let server = self.nameserver(attempt);
-
+    async fn exchange(&self, msg: &Message, server: &SocketAddr) -> Result<Message, MtopError> {
         let res = async {
-            let mut conn = self.udp_pool.get(&server).await?;
+            let mut conn = self.udp_pool.get(server).await?;
             let res = conn.exchange(msg).await;
             if res.is_ok() {
                 self.udp_pool.put(conn).await;
@@ -138,7 +136,7 @@ where
         if res.flags().is_truncated() {
             tracing::debug!(message = "UDP response truncated, retrying with TCP", flags = ?res.flags(), server = %server);
             async {
-                let mut conn = self.tcp_pool.get(&server).await?;
+                let mut conn = self.tcp_pool.get(server).await?;
                 let res = conn.exchange(msg).await;
                 if res.is_ok() {
                     self.tcp_pool.put(conn).await;
@@ -153,14 +151,24 @@ where
         }
     }
 
-    fn nameserver(&self, attempt: usize) -> SocketAddr {
-        let idx = if self.config.rotate {
+    // Get the index of nameserver that should be used for a query based on if the client has
+    // been configured to roundrobin between nameservers or not.
+    fn starting_idx(&self) -> usize {
+        if self.config.rotate {
             self.server_idx.fetch_add(1, Ordering::Relaxed)
         } else {
-            attempt
-        };
+            0
+        }
+    }
 
-        self.config.nameservers[idx % self.config.nameservers.len()]
+    // Get an iterator that will visit every nameserver once starting from the provided index.
+    fn nameserver_iterator(&self, idx: usize) -> impl Iterator<Item = &SocketAddr> {
+        self.config
+            .nameservers
+            .iter()
+            .cycle()
+            .skip(idx)
+            .take(self.config.nameservers.len())
     }
 }
 
@@ -173,23 +181,48 @@ where
         let full = name.to_fqdn();
         let id = MessageId::random();
         let flags = Flags::default().set_recursion_desired();
-        let question = Question::new(full, rtype).set_qclass(rclass);
+        let question = Question::new(full.clone(), rtype).set_qclass(rclass);
         let message = Message::new(id, flags).add_question(question);
+        let start = self.starting_idx();
 
-        let mut attempt = 0;
-        loop {
-            match self.exchange(&message, usize::from(attempt)).await {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    if attempt + 1 >= self.config.attempts {
-                        return Err(e);
+        let mut errors = Vec::new();
+        for attempt in 0..self.config.attempts {
+            for server in self.nameserver_iterator(start) {
+                match self.exchange(&message, server).await {
+                    Ok(v) => {
+                        // NoError or a NameError is a conclusive answer. We either have results
+                        // or this is a bad domain. Any other type of response means we have to try
+                        // another server.
+                        let rc = v.flags().get_response_code();
+                        if rc == ResponseCode::NoError || rc == ResponseCode::NameError {
+                            return Ok(v);
+                        }
+
+                        tracing::debug!(message = "unsuitable response from nameserver, trying next one", server = %server, response_code = ?rc);
                     }
-
-                    tracing::debug!(message = "retrying failed query", attempt = attempt + 1, max_attempts = self.config.attempts, err = %e);
-                    attempt += 1;
+                    Err(e) => {
+                        tracing::debug!(message = "nameserver failed, trying next one", server = %server, attempt = attempt + 1, max_attempts = self.config.attempts, err = %e);
+                        errors.push(e.to_string());
+                    }
                 }
             }
+
+            if attempt + 1 < self.config.attempts {
+                tracing::debug!(
+                    message = "all nameservers failed, retrying",
+                    attempt = attempt + 1,
+                    max_attempts = self.config.attempts
+                );
+            }
         }
+
+        Err(MtopError::runtime(format!(
+            "no nameservers returned suitable responses for name {} type {} class {}: {}",
+            full,
+            rtype,
+            rclass,
+            errors.join("; ")
+        )))
     }
 }
 
@@ -201,12 +234,10 @@ pub struct TcpConnection {
     read: BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>>,
     write: BufWriter<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
     buffer: Vec<u8>,
-    bytes_read: AtomicUsize,
-    bytes_written: AtomicUsize,
 }
 
 impl TcpConnection {
-    pub fn new<R, W>(read: R, write: W, size: usize) -> Self
+    pub fn new<R, W>(read: R, write: W) -> Self
     where
         R: AsyncRead + Unpin + Sync + Send + 'static,
         W: AsyncWrite + Unpin + Sync + Send + 'static,
@@ -214,9 +245,7 @@ impl TcpConnection {
         Self {
             read: BufReader::new(Box::new(read)),
             write: BufWriter::new(Box::new(write)),
-            buffer: Vec::with_capacity(size),
-            bytes_read: AtomicUsize::new(0),
-            bytes_written: AtomicUsize::new(0),
+            buffer: Vec::with_capacity(DEFAULT_MESSAGE_BUFFER),
         }
     }
 
@@ -229,18 +258,12 @@ impl TcpConnection {
         self.write.write_all(&self.buffer).await?;
         self.write.flush().await?;
 
-        // Increment total bytes written including the request size prefix.
-        self.bytes_written.fetch_add(self.buffer.len() + 2, Ordering::Relaxed);
-
         // Read the prefixed size of the response in big-endian (network)
         // order and then read exactly that many bytes into our buffer.
         let sz = self.read.read_u16().await?;
         self.buffer.clear();
         self.buffer.resize(usize::from(sz), 0);
         self.read.read_exact(&mut self.buffer).await?;
-
-        // Increment total bytes read including the response size prefix.
-        self.bytes_read.fetch_add(self.buffer.len() + 2, Ordering::Relaxed);
 
         let mut cur = Cursor::new(&self.buffer);
         let res = Message::read_network_bytes(&mut cur)?;
@@ -253,14 +276,6 @@ impl TcpConnection {
         } else {
             Ok(res)
         }
-    }
-
-    pub fn bytes_written(&self) -> usize {
-        self.bytes_written.load(Ordering::Relaxed)
-    }
-
-    pub fn bytes_read(&self) -> usize {
-        self.bytes_read.load(Ordering::Relaxed)
     }
 }
 
@@ -278,11 +293,11 @@ pub struct UdpConnection {
     read: Box<dyn AsyncRead + Send + Sync + Unpin>,
     write: Box<dyn AsyncWrite + Send + Sync + Unpin>,
     buffer: Vec<u8>,
-    packet: usize,
+    packet_size: usize,
 }
 
 impl UdpConnection {
-    pub fn new<R, W>(read: R, write: W, size: usize) -> Self
+    pub fn new<R, W>(read: R, write: W) -> Self
     where
         R: AsyncRead + Unpin + Sync + Send + 'static,
         W: AsyncWrite + Unpin + Sync + Send + 'static,
@@ -290,8 +305,8 @@ impl UdpConnection {
         Self {
             read: Box::new(read),
             write: Box::new(write),
-            buffer: Vec::with_capacity(size),
-            packet: size,
+            buffer: Vec::with_capacity(DEFAULT_MESSAGE_BUFFER),
+            packet_size: DEFAULT_MESSAGE_BUFFER,
         }
     }
 
@@ -312,7 +327,7 @@ impl UdpConnection {
         // Resize to our packet size since the .read() call will only read up to
         // the size of the buffer at most.
         self.buffer.clear();
-        self.buffer.resize(self.packet, 0);
+        self.buffer.resize(self.packet_size, 0);
 
         loop {
             let n = self.read.read(&mut self.buffer).await?;
@@ -375,7 +390,7 @@ impl ClientFactory<SocketAddr, UdpConnection> for UdpConnectionFactory {
 
         let adapter = SocketAdapter::new(sock);
         let (read, write) = tokio::io::split(adapter);
-        Ok(UdpConnection::new(read, write, DEFAULT_MESSAGE_BUFFER))
+        Ok(UdpConnection::new(read, write))
     }
 }
 
@@ -387,7 +402,7 @@ pub struct TcpConnectionFactory;
 impl ClientFactory<SocketAddr, TcpConnection> for TcpConnectionFactory {
     async fn make(&self, address: &SocketAddr) -> Result<TcpConnection, MtopError> {
         let (read, write) = tcp_connect(address).await?;
-        Ok(TcpConnection::new(read, write, DEFAULT_MESSAGE_BUFFER))
+        Ok(TcpConnection::new(read, write))
     }
 }
 
@@ -399,60 +414,34 @@ mod test {
     use crate::dns::message::{Flags, Message, MessageId, Question, Record};
     use crate::dns::name::Name;
     use crate::dns::rdata::{RecordData, RecordDataA};
-    use std::collections::VecDeque;
+    use crate::dns::test::{TcpTestSocket, UdpTestSocket};
     use std::io::Cursor;
     use std::net::Ipv4Addr;
-    use std::pin::Pin;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Arc;
-    use std::task::{Context, Poll};
-    use tokio::io::{AsyncRead, ReadBuf};
 
-    #[rustfmt::skip]
-    fn new_message_bytes(id: u16, size_prefix: bool) -> Vec<u8> {
-        let body = &[
-            // Header, NOT including the two byte ID
-            128, 0, // Flags: response, query op, no error
-            0, 1,   // questions
-            0, 1,   // answers
-            0, 0,   // authority
-            0, 0,   // extra
+    fn new_request(id: MessageId) -> Message {
+        let flags = Flags::default().set_query().set_recursion_desired();
+        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
 
-            // Question
-            7,                                // length
-            101, 120, 97, 109, 112, 108, 101, // "example"
-            3,                                // length
-            99, 111, 109,                     // "com"
-            0,                                // root
-            0, 1,                             // record type, A
-            0, 1,                             // record class, INET
+        Message::new(id, flags).add_question(question)
+    }
 
-            // Answer
-            7,                                // length
-            101, 120, 97, 109, 112, 108, 101, // "example"
-            3,                                // length
-            99, 111, 109,                     // "com"
-            0,                                // root
-            0, 1,                             // record type, A
-            0, 1,                             // record class, INET
-            0, 0, 0, 60,                      // TTL
-            0, 4,                             // rdata size
-            127, 0, 0, 100,                   // rdata, A address
-        ];
+    fn new_response(id: MessageId) -> Message {
+        let flags = Flags::default()
+            .set_response()
+            .set_recursion_desired()
+            .set_recursion_available();
+        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
 
-        let mut out = Vec::new();
-        if size_prefix {
-            let size = 2 /* ID */ + body.len();
-            let size_bytes = (size as u16).to_be_bytes();
-            out.extend_from_slice(&size_bytes);
-        }
+        let answer = Record::new(
+            Name::from_str("example.com.").unwrap(),
+            RecordType::A,
+            RecordClass::INET,
+            300,
+            RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 1))),
+        );
 
-        let id_bytes = id.to_be_bytes();
-        out.extend_from_slice(&id_bytes);
-        out.extend_from_slice(body);
-
-        out
+        Message::new(id, flags).add_question(question).add_answer(answer)
     }
 
     #[tokio::test]
@@ -460,14 +449,13 @@ mod test {
         let write = Vec::new();
         let read = Cursor::new(Vec::new());
 
-        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-        let message =
-            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
+        let id = MessageId::from(123);
+        let request = new_request(id);
 
-        let mut client = TcpConnection::new(read, write, 512);
-        let res = client.exchange(&message).await;
+        let mut client = TcpConnection::new(read, write);
+
+        let res = client.exchange(&request).await;
         let err = res.unwrap_err();
-
         assert_eq!(ErrorKind::IO, err.kind());
     }
 
@@ -478,197 +466,98 @@ mod test {
             0, 200, // message length
         ]);
 
-        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-        let message =
-            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
+        let id = MessageId::from(123);
+        let request = new_request(id);
 
-        let mut client = TcpConnection::new(read, write, 512);
-        let res = client.exchange(&message).await;
+        let mut client = TcpConnection::new(read, write);
+
+        let res = client.exchange(&request).await;
         let err = res.unwrap_err();
-
         assert_eq!(ErrorKind::IO, err.kind());
     }
 
     #[tokio::test]
     async fn test_tcp_client_id_mismatch() {
-        let write: Vec<u8> = Vec::new();
-        let read = Cursor::new(new_message_bytes(111 /* purposefully wrong */, true));
+        let response_id = MessageId::from(456);
+        let response = new_response(response_id);
 
-        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-        let message =
-            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
+        let request_id = MessageId::from(123);
+        let request = new_request(request_id);
 
-        let mut client = TcpConnection::new(read, write, 512);
-        let res = client.exchange(&message).await;
-        let err = res.unwrap_err();
+        let (sock, _written) = TcpTestSocket::new(vec![response]);
+        let (read, write) = tokio::io::split(sock);
+        let mut client = TcpConnection::new(read, write);
 
+        let result = client.exchange(&request).await;
+        let err = result.unwrap_err();
         assert_eq!(ErrorKind::Runtime, err.kind());
     }
 
     #[tokio::test]
-    async fn test_tcp_client_multiple_messages() {
-        let write = Vec::new();
-        let read = {
-            let response1 = new_message_bytes(123, true);
-            let response2 = new_message_bytes(456, true);
-            let mut bytes = Vec::new();
-            bytes.extend(response1);
-            bytes.extend(response2);
-            Cursor::new(bytes)
-        };
+    async fn test_tcp_client_single_message() {
+        let id = MessageId::from(123);
+        let response = new_response(id);
+        let request = new_request(id);
 
-        let mut client = TcpConnection::new(read, write, 512);
+        let (sock, _written) = TcpTestSocket::new(vec![response.clone()]);
+        let (read, write) = tokio::io::split(sock);
+        let mut client = TcpConnection::new(read, write);
 
-        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-        let message1 =
-            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question.clone());
-        let message2 =
-            Message::new(MessageId::from(456), Flags::default().set_recursion_desired()).add_question(question.clone());
-
-        let res1 = client.exchange(&message1).await.unwrap();
-        assert_eq!(message1.id(), res1.id());
-        assert_eq!(message1.questions()[0], res1.questions()[0]);
-        assert_eq!(
-            Record::new(
-                Name::from_str("example.com.").unwrap(),
-                RecordType::A,
-                RecordClass::INET,
-                60,
-                RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
-            ),
-            res1.answers()[0]
-        );
-
-        let res2 = client.exchange(&message2).await.unwrap();
-        assert_eq!(message2.id(), res2.id());
-        assert_eq!(message2.questions()[0], res2.questions()[0]);
-        assert_eq!(
-            Record::new(
-                Name::from_str("example.com.").unwrap(),
-                RecordType::A,
-                RecordClass::INET,
-                60,
-                RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
-            ),
-            res2.answers()[0]
-        );
-
-        let expected_bytes = message1.size() + message2.size() + 2 + 2;
-        assert_eq!(expected_bytes, client.bytes_written());
+        let result = client.exchange(&request).await.unwrap();
+        assert_eq!(response, result);
     }
 
     #[tokio::test]
-    async fn test_tcp_client_success() {
-        let write = Vec::new();
-        let read = Cursor::new(new_message_bytes(123, true));
+    async fn test_tcp_client_multiple_message() {
+        let id1 = MessageId::from(123);
+        let response1 = new_response(id1);
+        let request1 = new_request(id1);
+        let id2 = MessageId::from(456);
+        let response2 = new_response(id2);
+        let request2 = new_request(id2);
 
-        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-        let message =
-            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
+        let (sock, _written) = TcpTestSocket::new(vec![response2.clone(), response1.clone()]);
+        let (read, write) = tokio::io::split(sock);
+        let mut client = TcpConnection::new(read, write);
 
-        let mut client = TcpConnection::new(read, write, 512);
-        let res = client.exchange(&message).await.unwrap();
+        let result1 = client.exchange(&request1).await.unwrap();
+        assert_eq!(response1, result1);
 
-        assert_eq!(message.id(), res.id());
-        assert_eq!(message.questions()[0], res.questions()[0]);
-        assert_eq!(
-            Record::new(
-                Name::from_str("example.com.").unwrap(),
-                RecordType::A,
-                RecordClass::INET,
-                60,
-                RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
-            ),
-            res.answers()[0]
-        );
-    }
-
-    struct MockReadSocket {
-        values: VecDeque<Vec<u8>>,
-        reads: Arc<AtomicU64>,
-    }
-
-    impl MockReadSocket {
-        fn new(values: Vec<Vec<u8>>, reads: Arc<AtomicU64>) -> Self {
-            Self {
-                values: VecDeque::from(values),
-                reads,
-            }
-        }
-    }
-
-    impl AsyncRead for MockReadSocket {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
-            self.reads.fetch_add(1, Ordering::AcqRel);
-            let b = self.values.pop_front().unwrap();
-            buf.put_slice(&b);
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    #[tokio::test]
-    async fn test_udp_client_one_id_mismatch() {
-        let write = Vec::new();
-        let read_count = Arc::new(AtomicU64::new(0));
-        let read = MockReadSocket::new(
-            vec![
-                new_message_bytes(111 /* purposefully wrong */, false),
-                new_message_bytes(123, false),
-            ],
-            read_count.clone(),
-        );
-
-        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-        let message =
-            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
-
-        let mut client = UdpConnection::new(read, write, 512);
-        let res = client.exchange(&message).await.unwrap();
-
-        assert_eq!(message.id(), res.id());
-        assert_eq!(message.questions()[0], res.questions()[0]);
-        assert_eq!(
-            Record::new(
-                Name::from_str("example.com.").unwrap(),
-                RecordType::A,
-                RecordClass::INET,
-                60,
-                RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
-            ),
-            res.answers()[0]
-        );
-        assert_eq!(2, read_count.load(Ordering::Acquire));
+        let result2 = client.exchange(&request2).await.unwrap();
+        assert_eq!(response2, result2);
     }
 
     #[tokio::test]
     async fn test_udp_client_success() {
-        let write = Vec::new();
-        let read_count = Arc::new(AtomicU64::new(0));
-        let read = MockReadSocket::new(vec![new_message_bytes(123, false)], read_count.clone());
+        let id = MessageId::from(123);
+        let response = new_response(id);
+        let request = new_request(id);
 
-        let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-        let message =
-            Message::new(MessageId::from(123), Flags::default().set_recursion_desired()).add_question(question);
+        let (sock, _written) = UdpTestSocket::new(vec![response.clone()]);
+        let (read, write) = tokio::io::split(sock);
+        let mut client = UdpConnection::new(read, write);
 
-        let mut client = UdpConnection::new(read, write, 512);
-        let res = client.exchange(&message).await.unwrap();
+        let result = client.exchange(&request).await.unwrap();
+        assert_eq!(response, result);
+    }
 
-        assert_eq!(message.id(), res.id());
-        assert_eq!(message.questions()[0], res.questions()[0]);
-        assert_eq!(
-            Record::new(
-                Name::from_str("example.com.").unwrap(),
-                RecordType::A,
-                RecordClass::INET,
-                60,
-                RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 100))),
-            ),
-            res.answers()[0]
-        );
-        assert_eq!(1, read_count.load(Ordering::Acquire));
+    #[tokio::test]
+    async fn test_udp_client_one_id_mismatch() {
+        let id1 = MessageId::from(456);
+        let response1 = new_response(id1);
+        let id2 = MessageId::from(123);
+        let response2 = new_response(id2);
+
+        // Note that the request has the ID of the second response because
+        // we are testing the that first response is discarded due to the ID
+        // not matching.
+        let request = new_request(id2);
+
+        let (sock, _written) = UdpTestSocket::new(vec![response2.clone(), response1.clone()]);
+        let (read, write) = tokio::io::split(sock);
+        let mut client = UdpConnection::new(read, write);
+
+        let result = client.exchange(&request).await.unwrap();
+        assert_eq!(response2, result);
     }
 }
