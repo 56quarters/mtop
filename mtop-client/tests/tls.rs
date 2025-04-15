@@ -1,7 +1,7 @@
 use mtop_client::test::{tls_server, TlsServerConfig};
 use mtop_client::{
-    MemcachedClient, MemcachedClientConfig, RendezvousSelector, Server, ServerAddress, ServerID, ServersResponse,
-    TcpClientFactory, TlsConfig,
+    MemcachedClient, MemcachedClientConfig, RendezvousSelector, Server, ServerID, ServersResponse, TcpClientFactory,
+    TlsConfig,
 };
 use rustls_pki_types::ServerName;
 use std::path::PathBuf;
@@ -14,13 +14,12 @@ fn test_path(p: &str) -> PathBuf {
 /// Start a stub server, connect to it using TLS, and run the `ping` method from the client against it.
 async fn run_server(server_config: TlsServerConfig, client_config: TlsConfig) -> (ServerID, ServersResponse<()>) {
     let (addr, server) = tls_server(server_config, Handle::current(), "localhost:0").await;
-    let server_id = ServerID::from(addr);
+    let id = ServerID::from(addr);
     let handle = tokio::spawn(server);
 
     let factory = TcpClientFactory::new(client_config, Handle::current()).await.unwrap();
     let selector = RendezvousSelector::new(vec![Server::new(
-        server_id.clone(),
-        ServerAddress::from(addr),
+        id.clone(),
         ServerName::try_from("localhost").unwrap(),
     )]);
 
@@ -29,7 +28,7 @@ async fn run_server(server_config: TlsServerConfig, client_config: TlsConfig) ->
     let res = client.ping().await.unwrap();
     handle.abort();
 
-    (server_id, res)
+    (id, res)
 }
 
 #[tokio::test]
