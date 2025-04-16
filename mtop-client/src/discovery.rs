@@ -1,5 +1,5 @@
 use crate::core::MtopError;
-use crate::dns::{DefaultDnsClient, DnsClient, Message, Name, RecordClass, RecordData, RecordType};
+use crate::dns::{DefaultDnsClient, DnsClient, Message, MessageId, Name, RecordClass, RecordData, RecordType};
 use rustls_pki_types::ServerName;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -147,8 +147,9 @@ where
         let (host, port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
         let name = host.parse()?;
+        let id = MessageId::random();
 
-        let res = self.client.resolve(name, RecordType::SRV, RecordClass::INET).await?;
+        let res = self.client.resolve(id, name, RecordType::SRV, RecordClass::INET).await?;
         Ok(Self::servers_from_answers(port, &server_name, &res))
     }
 
@@ -156,11 +157,12 @@ where
         let (host, port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
         let name: Name = host.parse()?;
+        let id = MessageId::random();
 
-        let res = self.client.resolve(name.clone(), RecordType::A, RecordClass::INET).await?;
+        let res = self.client.resolve(id, name.clone(), RecordType::A, RecordClass::INET).await?;
         let mut out = Self::servers_from_answers(port, &server_name, &res);
 
-        let res = self.client.resolve(name, RecordType::AAAA, RecordClass::INET).await?;
+        let res = self.client.resolve(id, name, RecordType::AAAA, RecordClass::INET).await?;
         out.extend(Self::servers_from_answers(port, &server_name, &res));
 
         Ok(out)
@@ -298,7 +300,13 @@ mod test {
     }
 
     impl DnsClient for MockDnsClient {
-        async fn resolve(&self, _name: Name, _rtype: RecordType, _rclass: RecordClass) -> Result<Message, MtopError> {
+        async fn resolve(
+            &self,
+            _id: MessageId,
+            _name: Name,
+            _rtype: RecordType,
+            _rclass: RecordClass,
+        ) -> Result<Message, MtopError> {
             let mut responses = self.responses.lock().await;
             let res = responses.pop().unwrap();
             Ok(res)

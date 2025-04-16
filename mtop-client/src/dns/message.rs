@@ -3,7 +3,7 @@ use crate::dns::core::{RecordClass, RecordType};
 use crate::dns::name::Name;
 use crate::dns::rdata::RecordData;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use std::fmt::{self, Debug};
+use std::fmt;
 use std::io::Seek;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -34,7 +34,7 @@ impl From<MessageId> for u16 {
 
 impl fmt::Display for MessageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -76,6 +76,11 @@ impl Message {
 
     pub fn flags(&self) -> Flags {
         self.flags
+    }
+
+    pub fn set_flags(mut self, flags: Flags) -> Self {
+        self.flags = flags;
+        self
     }
 
     pub fn questions(&self) -> &[Question] {
@@ -347,7 +352,7 @@ impl TryFrom<u16> for Flags {
     }
 }
 
-impl Debug for Flags {
+impl fmt::Debug for Flags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let qr = (self.0 & Self::MASK_QR) >> Self::OFFSET_QR;
         let op = Operation::try_from((self.0 & Self::MASK_OP) >> Self::OFFSET_OP).unwrap();
@@ -384,6 +389,12 @@ pub enum ResponseCode {
 impl Default for ResponseCode {
     fn default() -> Self {
         Self::NoError
+    }
+}
+
+impl fmt::Display for ResponseCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
     }
 }
 

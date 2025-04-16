@@ -1,5 +1,5 @@
 use crate::check::{Timing, TimingBuilder};
-use mtop_client::dns::{DefaultDnsClient, DnsClient, Name, RecordClass, RecordType, ResponseCode};
+use mtop_client::dns::{DefaultDnsClient, DnsClient, MessageId, Name, RecordClass, RecordType, ResponseCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,7 +40,7 @@ impl DnsPinger {
 
             match self
                 .client
-                .resolve(name.clone(), rtype, rclass)
+                .resolve(MessageId::random(), name.clone(), rtype, rclass)
                 .instrument(tracing::span!(Level::INFO, "client.resolve"))
                 .await
             {
