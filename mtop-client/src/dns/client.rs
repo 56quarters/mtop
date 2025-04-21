@@ -64,6 +64,7 @@ impl Default for DnsClientConfig {
 pub trait DnsClient {
     fn resolve(
         &self,
+        id: MessageId,
         name: Name,
         rtype: RecordType,
         rclass: RecordClass,
@@ -177,9 +178,14 @@ where
     U: ClientFactory<SocketAddr, UdpConnection> + Send + Sync + 'static,
     T: ClientFactory<SocketAddr, TcpConnection> + Send + Sync + 'static,
 {
-    async fn resolve(&self, name: Name, rtype: RecordType, rclass: RecordClass) -> Result<Message, MtopError> {
+    async fn resolve(
+        &self,
+        id: MessageId,
+        name: Name,
+        rtype: RecordType,
+        rclass: RecordClass,
+    ) -> Result<Message, MtopError> {
         let full = name.to_fqdn();
-        let id = MessageId::random();
         let flags = Flags::default().set_recursion_desired();
         let question = Question::new(full.clone(), rtype).set_qclass(rclass);
         let message = Message::new(id, flags).add_question(question);
@@ -199,6 +205,7 @@ where
                         }
 
                         tracing::debug!(message = "unsuitable response from nameserver, trying next one", server = %server, response_code = ?rc);
+                        errors.push(rc.to_string());
                     }
                     Err(e) => {
                         tracing::debug!(message = "nameserver failed, trying next one", server = %server, attempt = attempt + 1, max_attempts = self.config.attempts, err = %e);
@@ -347,7 +354,7 @@ impl fmt::Debug for UdpConnection {
 }
 
 /// Adapter for reading and writing to a `UdpSocket` using the `AsyncRead` and `AsyncWrite`
-/// traits. This exists to enable easier testing of `UdpClient` by allowing alternate
+/// traits. This exists to enable easier testing of `UdpConnection` by allowing alternate
 /// implementations of those traits to be used.
 pub(crate) struct SocketAdapter(UdpSocket);
 
@@ -408,31 +415,35 @@ impl ClientFactory<SocketAddr, TcpConnection> for TcpConnectionFactory {
 
 #[cfg(test)]
 mod test {
-    use super::{TcpConnection, UdpConnection};
+    use super::{DefaultDnsClient, DnsClient, DnsClientConfig, TcpConnection, UdpConnection};
     use crate::core::ErrorKind;
     use crate::dns::core::{RecordClass, RecordType};
-    use crate::dns::message::{Flags, Message, MessageId, Question, Record};
+    use crate::dns::message::{Flags, Message, MessageId, Question, Record, ResponseCode};
     use crate::dns::name::Name;
     use crate::dns::rdata::{RecordData, RecordDataA};
-    use crate::dns::test::{TcpTestSocket, UdpTestSocket};
+    use crate::dns::test::{TestTcpClientFactory, TestTcpSocket, TestUdpClientFactory, TestUdpSocket};
+    use std::collections::HashMap;
     use std::io::Cursor;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::str::FromStr;
 
     fn new_request(id: MessageId) -> Message {
         let flags = Flags::default().set_query().set_recursion_desired();
         let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
-
         Message::new(id, flags).add_question(question)
     }
 
-    fn new_response(id: MessageId) -> Message {
+    fn new_empty_response(id: MessageId) -> Message {
         let flags = Flags::default()
             .set_response()
             .set_recursion_desired()
             .set_recursion_available();
         let question = Question::new(Name::from_str("example.com.").unwrap(), RecordType::A);
+        Message::new(id, flags).add_question(question)
+    }
 
+    fn new_response(id: MessageId) -> Message {
+        let response = new_empty_response(id);
         let answer = Record::new(
             Name::from_str("example.com.").unwrap(),
             RecordType::A,
@@ -441,7 +452,7 @@ mod test {
             RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 1))),
         );
 
-        Message::new(id, flags).add_question(question).add_answer(answer)
+        response.add_answer(answer)
     }
 
     #[tokio::test]
@@ -484,7 +495,7 @@ mod test {
         let request_id = MessageId::from(123);
         let request = new_request(request_id);
 
-        let (sock, _written) = TcpTestSocket::new(vec![response]);
+        let sock = TestTcpSocket::new(vec![response]);
         let (read, write) = tokio::io::split(sock);
         let mut client = TcpConnection::new(read, write);
 
@@ -499,7 +510,7 @@ mod test {
         let response = new_response(id);
         let request = new_request(id);
 
-        let (sock, _written) = TcpTestSocket::new(vec![response.clone()]);
+        let sock = TestTcpSocket::new(vec![response.clone()]);
         let (read, write) = tokio::io::split(sock);
         let mut client = TcpConnection::new(read, write);
 
@@ -516,7 +527,7 @@ mod test {
         let response2 = new_response(id2);
         let request2 = new_request(id2);
 
-        let (sock, _written) = TcpTestSocket::new(vec![response2.clone(), response1.clone()]);
+        let sock = TestTcpSocket::new(vec![response2.clone(), response1.clone()]);
         let (read, write) = tokio::io::split(sock);
         let mut client = TcpConnection::new(read, write);
 
@@ -533,7 +544,7 @@ mod test {
         let response = new_response(id);
         let request = new_request(id);
 
-        let (sock, _written) = UdpTestSocket::new(vec![response.clone()]);
+        let sock = TestUdpSocket::new(vec![response.clone()]);
         let (read, write) = tokio::io::split(sock);
         let mut client = UdpConnection::new(read, write);
 
@@ -553,11 +564,162 @@ mod test {
         // not matching.
         let request = new_request(id2);
 
-        let (sock, _written) = UdpTestSocket::new(vec![response2.clone(), response1.clone()]);
+        let sock = TestUdpSocket::new(vec![response2.clone(), response1.clone()]);
         let (read, write) = tokio::io::split(sock);
         let mut client = UdpConnection::new(read, write);
 
         let result = client.exchange(&request).await.unwrap();
         assert_eq!(response2, result);
+    }
+
+    #[tokio::test]
+    async fn test_default_dns_client_resolve_name_error() {
+        let id = MessageId::from(123);
+        let name = Name::from_str("example.com.").unwrap();
+        let server = "127.0.0.1:53".parse().unwrap();
+
+        let udp_response = new_empty_response(id);
+        let flags = udp_response.flags().set_response_code(ResponseCode::NameError);
+        let udp_response = udp_response.set_flags(flags);
+
+        let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        udp_mapping.entry(server).or_default().push(udp_response);
+        let udp_factory = TestUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+
+        let cfg = DnsClientConfig::default();
+        let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
+        let result = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
+
+        assert_eq!(ResponseCode::NameError, result.flags().get_response_code());
+        assert!(result.answers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_default_dns_client_resolve_success() {
+        let id = MessageId::from(123);
+        let name = Name::from_str("example.com.").unwrap();
+        let server = "127.0.0.1:53".parse().unwrap();
+
+        let udp_response = new_response(id);
+        let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        udp_mapping.entry(server).or_default().push(udp_response.clone());
+        let udp_factory = TestUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+
+        let cfg = DnsClientConfig::default();
+        let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
+        let result = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
+
+        assert_eq!(udp_response, result);
+    }
+
+    #[tokio::test]
+    async fn test_default_dns_client_resolve_one_error() {
+        let id = MessageId::from(123);
+        let name = Name::from_str("example.com.").unwrap();
+        let server = "127.0.0.1:53".parse().unwrap();
+
+        let udp_response1 = new_empty_response(id);
+        let flags = udp_response1.flags().set_response_code(ResponseCode::ServerFailure);
+        let udp_response1 = udp_response1.set_flags(flags);
+        let udp_response2 = new_response(id);
+
+        let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        let entry = udp_mapping.entry(server).or_default();
+        entry.push(udp_response2.clone());
+        entry.push(udp_response1);
+
+        let udp_factory = TestUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+
+        let cfg = DnsClientConfig::default();
+        let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
+        let result = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
+
+        assert_eq!(udp_response2, result);
+    }
+
+    #[tokio::test]
+    async fn test_default_dns_client_resolve_all_errors() {
+        let id = MessageId::from(123);
+        let name = Name::from_str("example.com.").unwrap();
+        let server = "127.0.0.1:53".parse().unwrap();
+
+        let udp_response1 = new_empty_response(id);
+        let flags = udp_response1.flags().set_response_code(ResponseCode::ServerFailure);
+        let udp_response1 = udp_response1.set_flags(flags);
+
+        let udp_response2 = new_empty_response(id);
+        let flags = udp_response2.flags().set_response_code(ResponseCode::ServerFailure);
+        let udp_response2 = udp_response2.set_flags(flags);
+
+        let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        let entry = udp_mapping.entry(server).or_default();
+        entry.push(udp_response2.clone());
+        entry.push(udp_response1);
+
+        let udp_factory = TestUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+
+        let cfg = DnsClientConfig::default();
+        let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
+        let err = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap_err();
+
+        assert_eq!(ErrorKind::Runtime, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_default_dns_client_resolve_one_bad_server() {
+        let id = MessageId::from(123);
+        let name = Name::from_str("example.com.").unwrap();
+        let server1 = "127.0.0.1:53".parse().unwrap();
+        let server2 = "127.0.0.2:53".parse().unwrap();
+
+        let udp_response1 = new_empty_response(id);
+        let flags = udp_response1.flags().set_response_code(ResponseCode::ServerFailure);
+        let udp_response1 = udp_response1.set_flags(flags);
+        let udp_response2 = new_response(id);
+
+        let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        udp_mapping.entry(server1).or_default().push(udp_response1);
+        udp_mapping.entry(server2).or_default().push(udp_response2.clone());
+
+        let udp_factory = TestUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+
+        let mut cfg = DnsClientConfig::default();
+        cfg.nameservers = vec![server1, server2];
+        let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
+        let result = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
+
+        assert_eq!(udp_response2, result);
+    }
+
+    #[tokio::test]
+    async fn test_default_dns_client_resolve_udp_truncation() {
+        let id = MessageId::from(123);
+        let name = Name::from_str("example.com.").unwrap();
+        let server = "127.0.0.1:53".parse().unwrap();
+
+        let udp_response = new_empty_response(id);
+        let flags = udp_response.flags().set_truncated();
+        let udp_response = udp_response.set_flags(flags);
+        let tcp_response = new_response(id);
+
+        let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        udp_mapping.entry(server).or_default().push(udp_response);
+
+        let mut tcp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        tcp_mapping.entry(server).or_default().push(tcp_response.clone());
+
+        let udp_factory = TestUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestTcpClientFactory::new(tcp_mapping);
+
+        let cfg = DnsClientConfig::default();
+        let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
+        let result = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
+
+        assert_eq!(tcp_response, result);
     }
 }

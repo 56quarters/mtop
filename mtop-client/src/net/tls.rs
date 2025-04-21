@@ -68,7 +68,7 @@ pub(crate) async fn tls_client_config(config: TlsConfig, handle: Handle) -> Resu
     handle.spawn_blocking(move || client_config(config)).await.unwrap()
 }
 
-pub(crate) fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopError> {
+fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopError> {
     let iter = CertificateDer::pem_file_iter(path)
         .map_err(|e| MtopError::configuration_cause(format!("unable to load cert {:?}", path), e))?;
 
@@ -80,12 +80,12 @@ pub(crate) fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, 
     Ok(out)
 }
 
-pub(crate) fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
+fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
     PrivateKeyDer::from_pem_file(path)
         .map_err(|e| MtopError::configuration_cause(format!("unable to load key {:?}", path), e))
 }
 
-pub(crate) fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, MtopError> {
+fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, MtopError> {
     let mut store = RootCertStore::empty();
     for cert in ca {
         store
@@ -96,7 +96,7 @@ pub(crate) fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<Root
     Ok(store)
 }
 
-pub(crate) fn default_root_store() -> RootCertStore {
+fn default_root_store() -> RootCertStore {
     let mut store = RootCertStore::empty();
     store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(|c| c.to_owned()));
     store

@@ -1,13 +1,10 @@
 mod client;
 mod core;
 mod discovery;
+pub mod dns;
 mod net;
 mod pool;
 mod timeout;
-
-pub mod dns;
-#[doc(hidden)]
-pub mod test;
 
 pub use crate::client::{
     MemcachedClient, MemcachedClientConfig, RendezvousSelector, Selector, ServersResponse, TcpClientFactory,

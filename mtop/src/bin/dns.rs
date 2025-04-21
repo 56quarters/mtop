@@ -202,7 +202,7 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
     .await;
 
     let response = match client
-        .resolve(cmd.name.clone(), cmd.rtype, cmd.rclass)
+        .resolve(MessageId::random(), cmd.name.clone(), cmd.rtype, cmd.rclass)
         .instrument(tracing::span!(Level::INFO, "client.resolve"))
         .await
     {
