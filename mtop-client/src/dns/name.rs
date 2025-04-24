@@ -73,46 +73,18 @@ impl Name {
         T: ReadBytesExt + Seek,
     {
         let mut parts = Vec::new();
-        loop {
-            let len = buf.read_u8()?;
-            // If the length isn't a length but actually a pointer to another name
-            // or label within the message, seek to that position within the message
-            // and read the name from there. `read_offset_into` will follow any further
-            // offsets and read the labels for the name into `parts`. After resolving
-            // all pointers and reading labels, reset the stream back to immediately
-            // after the pointer.
-            if Self::is_compressed_label(len) {
-                let offset = Self::get_offset(len, buf.read_u8()?);
-                let current = buf.stream_position()?;
-                Self::read_offset_into(&mut buf, offset, &mut parts)?;
-                buf.seek(SeekFrom::Start(current))?;
-                break;
-            } else if Self::is_standard_label(len) {
-                // If the length is a length, read the next label (segment) of the name
-                // breaking the loop once we read the "root" label (`.`) signified by a
-                // length of 0.
-                if Self::read_label_into(&mut buf, len, &mut parts)? {
-                    break;
-                }
-            } else {
-                // Binary labels are deprecated (RFC 6891) and there are (currently) no other
-                // types of labels that we should expect. Return an error to make this obvious.
-                return Err(MtopError::runtime(format!("unsupported Name label type: {}", len)));
-            }
-        }
-
+        Self::read_inner(&mut buf, &mut parts)?;
         String::from_utf8(parts)
             .map_err(|e| MtopError::runtime_cause("invalid name", e))
             .and_then(|s| Self::from_str(&s))
     }
 
-    fn read_offset_into<T>(mut buf: T, offset: u64, out: &mut Vec<u8>) -> Result<(), MtopError>
+    fn read_inner<T>(buf: &mut T, out: &mut Vec<u8>) -> Result<(), MtopError>
     where
         T: ReadBytesExt + Seek,
     {
-        buf.seek(SeekFrom::Start(offset))?;
-        let mut pointers = 1;
-
+        let mut pointers = 0;
+        let mut position = None;
         loop {
             // To avoid loops from badly behaved servers, only follow a fixed number of
             // pointers when trying to resolve a single name. This number is picked to be
@@ -125,19 +97,27 @@ impl Name {
             }
 
             let len = buf.read_u8()?;
+            // If the length isn't a length but actually a pointer to another name
+            // or label within the message, seek to that position within the message
+            // and read the name from there. After resolving all pointers and reading
+            // labels, reset the stream back to immediately after the first pointer.
             if Self::is_compressed_label(len) {
-                // If this length is actually a pointer to another name or label within
-                // the message, seek there to read it on the next iteration. We don't
-                // bother keeping track of where to seek back to after resolving it because
-                // this is unnecessary since we're already resolving a pointer if this
-                // method is being called from `read_network_bytes`.
                 let offset = Self::get_offset(len, buf.read_u8()?);
-                buf.seek(SeekFrom::Start(offset))?;
+                if position.is_none() {
+                    position = Some(buf.stream_position()?);
+                }
+
+                buf.seek(SeekFrom::Start(u64::from(offset)))?;
                 pointers += 1;
             } else if Self::is_standard_label(len) {
                 // If the length is a length, read the next label (segment) of the name
-                // returning once we read the "root" label (`.`) signified by a length of 0.
-                if Self::read_label_into(&mut buf, len, out)? {
+                // returning early once we read the "root" label (`.`) signified by a
+                // length of 0.
+                if Self::read_label_into(buf, len, out)? {
+                    if let Some(p) = position {
+                        buf.seek(SeekFrom::Start(p))?;
+                    }
+
                     return Ok(());
                 }
             } else {
@@ -150,7 +130,7 @@ impl Name {
 
     /// Read the next name label of length `len` into `out` and return true if the
     /// label was the root label (`.`) and this name is complete, false otherwise.
-    fn read_label_into<T>(buf: T, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
+    fn read_label_into<T>(buf: &mut T, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
     where
         T: ReadBytesExt + Seek,
     {
@@ -200,9 +180,9 @@ impl Name {
         len & 0b1100_0000 == 192
     }
 
-    fn get_offset(len: u8, next: u8) -> u64 {
+    fn get_offset(len: u8, next: u8) -> u16 {
         let pointer = u16::from(len & 0b0011_1111) << 8;
-        u64::from(pointer | u16::from(next))
+        pointer | u16::from(next)
     }
 }
 
@@ -546,7 +526,7 @@ mod test {
 
         cur.set_position(10);
 
-        let res = Name::read_network_bytes(cur);
+        let res = Name::read_network_bytes(&mut cur);
         assert!(res.is_err());
     }
 
@@ -566,9 +546,10 @@ mod test {
 
         cur.set_position(13);
 
-        let name = Name::read_network_bytes(cur).unwrap();
+        let name = Name::read_network_bytes(&mut cur).unwrap();
         assert_eq!("www.example.com.", name.to_string());
         assert!(name.is_fqdn());
+        assert_eq!(19, cur.position());
     }
 
     #[rustfmt::skip]
@@ -590,19 +571,20 @@ mod test {
 
         cur.set_position(19);
 
-        let name = Name::read_network_bytes(cur).unwrap();
+        let name = Name::read_network_bytes(&mut cur).unwrap();
         assert_eq!("dev.www.example.com.", name.to_string());
         assert!(name.is_fqdn());
+        assert_eq!(25, cur.position());
     }
 
     #[test]
     fn test_name_read_network_bytes_pointer_loop() {
-        let cur = Cursor::new(vec![
+        let mut cur = Cursor::new(vec![
             192, 2, // pointer to offset 2
             192, 0, // pointer to offset 0
         ]);
 
-        let res = Name::read_network_bytes(cur);
+        let res = Name::read_network_bytes(&mut cur);
         assert!(res.is_err());
     }
 }
