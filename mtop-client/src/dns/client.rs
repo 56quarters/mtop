@@ -688,8 +688,10 @@ mod test {
         let udp_factory = TestUdpClientFactory::new(udp_mapping);
         let tcp_factory = TestTcpClientFactory::new(HashMap::new());
 
-        let mut cfg = DnsClientConfig::default();
-        cfg.nameservers = vec![server1, server2];
+        let cfg = DnsClientConfig {
+            nameservers: vec![server1, server2],
+            ..Default::default()
+        };
         let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
         let result = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
 

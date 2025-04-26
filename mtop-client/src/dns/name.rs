@@ -577,6 +577,38 @@ mod test {
         assert_eq!(25, cur.position());
     }
 
+    #[rustfmt::skip]
+    #[test]
+    fn test_name_read_network_bytes_multiple_pointer_multiple_name() {
+        let mut cur = Cursor::new(vec![
+            7,                                // length
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            3,                                // length
+            99, 111, 109,                     // "com"
+            0,                                // root
+            3,                                // length
+            119, 119, 119,                    // "www"
+            192, 0,                           // pointer to offset 0
+            3,                                // length
+            100, 101, 118,                    // "dev"
+            192, 13,                          // pointer to offset 13, "www"
+        ]);
+
+        let name1 = Name::read_network_bytes(&mut cur).unwrap();
+        assert_eq!("example.com.", name1.to_string());
+        assert!(name1.is_fqdn());
+
+        let name2 = Name::read_network_bytes(&mut cur).unwrap();
+        assert_eq!("www.example.com.", name2.to_string());
+        assert!(name2.is_fqdn());
+
+        let name3 = Name::read_network_bytes(&mut cur).unwrap();
+        assert_eq!("dev.www.example.com.", name3.to_string());
+        assert!(name3.is_fqdn());
+
+        assert_eq!(25, cur.position());
+    }
+
     #[test]
     fn test_name_read_network_bytes_pointer_loop() {
         let mut cur = Cursor::new(vec![
