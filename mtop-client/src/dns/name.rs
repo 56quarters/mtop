@@ -1,12 +1,12 @@
 use crate::core::MtopError;
 use byteorder::{ReadBytesExt, WriteBytesExt};
-use std::fmt::{self, Display};
+use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Name {
-    labels: Vec<String>,
+    labels: Vec<Vec<u8>>,
     is_fqdn: bool,
 }
 
@@ -62,7 +62,7 @@ impl Name {
 
         for label in self.labels.iter() {
             buf.write_u8(label.len() as u8)?;
-            buf.write_all(label.as_bytes())?;
+            buf.write_all(label)?;
         }
 
         Ok(buf.write_u8(0)?)
@@ -72,13 +72,15 @@ impl Name {
     where
         T: ReadBytesExt + Seek,
     {
-        let mut parts = Vec::new();
-        Self::read_inner(&mut buf, &mut parts)?;
-        String::from_utf8(parts)
-            .map_err(|e| MtopError::runtime_cause("invalid name", e))
-            .and_then(|s| Self::from_str(&s))
+        let mut name = Vec::new();
+        Self::read_inner(&mut buf, &mut name)?;
+        Self::from_bytes(&name)
     }
 
+    /// Read the DNS message format bytes for a `Name` and write them to `out`,
+    /// following any pointers (how names are compressed in DNS messages). The
+    /// bytes written to `out` are ASCII characters of the text representation
+    /// of the name, e.g. `"example.com.".as_bytes()`.
     fn read_inner<T>(buf: &mut T, out: &mut Vec<u8>) -> Result<(), MtopError>
     where
         T: ReadBytesExt + Seek,
@@ -128,8 +130,8 @@ impl Name {
         }
     }
 
-    /// Read the next name label of length `len` into `out` and return true if the
-    /// label was the root label (`.`) and this name is complete, false otherwise.
+    /// If `len` doesn't indicate this is the root label, read the next name label into
+    /// `out` followed by a `.` and return false, true if next label was the root.
     fn read_label_into<T>(buf: &mut T, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
     where
         T: ReadBytesExt + Seek,
@@ -184,12 +186,89 @@ impl Name {
         let pointer = u16::from(len & 0b0011_1111) << 8;
         pointer | u16::from(next)
     }
+
+    /// Construct a new `Name` from the bytes of a string representation of a domain
+    /// name, e.g. `"example.com.".as_bytes()`. This method validates the total length
+    /// of the name, the length of each label, and the characters used for each label.
+    /// An empty byte slice or a byte slice with only the ASCII `.` character are treated
+    /// as the root domain.
+    fn from_bytes(bytes: &[u8]) -> Result<Self, MtopError> {
+        if bytes.is_empty() || bytes == b"." {
+            return Ok(Self::root());
+        }
+
+        if bytes.len() > Self::MAX_LENGTH {
+            return Err(MtopError::configuration(format!(
+                "Name too long; max {} bytes, got {}",
+                Self::MAX_LENGTH,
+                bytes.len()
+            )));
+        }
+
+        // Trim any trailing dot from the domain which indicates that it is fully qualified
+        // and make a note of it. This is required since we're splitting the domain into each
+        // individual label and need to know how to construct the correct string form afterward.
+        let (bytes, is_fqdn) = match bytes.strip_suffix(b".") {
+            Some(stripped) => (stripped, true),
+            None => (bytes, false),
+        };
+
+        // Start with space for 4 labels which covers the size of typical domains.
+        let mut labels = Vec::with_capacity(4);
+
+        for label in bytes.split(|&b| b == b'.') {
+            let label_len = label.len();
+
+            for (i, b) in label.iter().enumerate() {
+                let c = char::from(*b);
+                if i + 1 > Self::MAX_LABEL_LENGTH {
+                    return Err(MtopError::configuration(format!(
+                        "label too long; max {} bytes, got {}",
+                        Self::MAX_LABEL_LENGTH,
+                        i + 1,
+                    )));
+                } else if i == 0 && c != '_' && !c.is_ascii_alphanumeric() {
+                    return Err(MtopError::configuration(format!(
+                        "label must begin with ASCII letter, number, or underscore; got {}",
+                        c
+                    )));
+                } else if i == label_len - 1 && !c.is_ascii_alphanumeric() {
+                    return Err(MtopError::configuration(format!(
+                        "label must end with ASCII letter or number; got {}",
+                        c
+                    )));
+                } else if c != '-' && c != '_' && !c.is_ascii_alphanumeric() {
+                    return Err(MtopError::configuration(format!(
+                        "label must be ASCII letter, number, hyphen, or underscore; got {}",
+                        c
+                    )));
+                }
+            }
+
+            labels.push(label.to_ascii_lowercase());
+        }
+
+        Ok(Self { labels, is_fqdn })
+    }
 }
 
-impl Display for Name {
+impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let suffix = if self.is_fqdn { "." } else { "" };
-        write!(f, "{}{}", self.labels.join("."), suffix)
+        let len = self.labels.len();
+        for (i, l) in self.labels.iter().enumerate() {
+            // Labels are all valid ASCII so there aren't any replacement characters
+            // needed. We just want to create a string from a bytes slice and not
+            // allocate. This is the easiest way that doesn't involve unsafe methods.
+            String::from_utf8_lossy(l).fmt(f)?;
+            if i != len - 1 {
+                ".".fmt(f)?;
+            }
+        }
+        if self.is_fqdn {
+            ".".fmt(f)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -197,63 +276,7 @@ impl FromStr for Name {
     type Err = MtopError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() || s == "." {
-            return Ok(Self::root());
-        }
-
-        if s.len() > Self::MAX_LENGTH {
-            return Err(MtopError::configuration(format!(
-                "Name too long; max {} bytes, got {}",
-                Self::MAX_LENGTH,
-                s
-            )));
-        }
-
-        let is_fqdn = s.ends_with('.');
-        let mut buf = String::new();
-        let mut labels = Vec::new();
-
-        for label in s.trim_end_matches('.').split('.') {
-            let len = label.len();
-            if len > Self::MAX_LABEL_LENGTH {
-                return Err(MtopError::configuration(format!(
-                    "Name label too long; max {} bytes, got {}",
-                    Self::MAX_LABEL_LENGTH,
-                    label
-                )));
-            }
-
-            buf.clear();
-
-            for (i, c) in label.char_indices() {
-                if i == 0 && !c.is_ascii_alphanumeric() && c != '_' {
-                    return Err(MtopError::configuration(format!(
-                        "Name label must begin with ASCII letter, number, or underscore; got {}",
-                        label
-                    )));
-                } else if i == len - 1 && !c.is_ascii_alphanumeric() {
-                    return Err(MtopError::configuration(format!(
-                        "Name label must end with ASCII letter or number; got {}",
-                        label
-                    )));
-                } else if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
-                    return Err(MtopError::configuration(format!(
-                        "Name label must be ASCII letter, number, hyphen, or underscore; got {}",
-                        label
-                    )));
-                } else {
-                    // If this character isn't otherwise invalid, convert it to lowercase
-                    // and add it to our buffer which will be added to the list of labels
-                    // for this Name. This avoids an extra iteration through the Name to
-                    // convert to lowercase afterward.
-                    buf.push(c.to_ascii_lowercase());
-                }
-            }
-
-            labels.push(buf.clone());
-        }
-
-        Ok(Name { labels, is_fqdn })
+        Self::from_bytes(s.as_bytes())
     }
 }
 
