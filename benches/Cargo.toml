@@ -1,0 +1,15 @@
+[package]
+name = "benches"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "GPL-3.0+"
+
+[dependencies]
+mtop-client = { path = "../mtop-client" }
+criterion = "0.5.1"
+
+[[bench]]
+name = "dns_name"
+path = "dns_name.rs"
+harness = false
