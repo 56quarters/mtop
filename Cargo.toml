@@ -4,6 +4,9 @@ resolver = "2"
 members = [
   "mtop",
   "mtop-client",
+
+  # Internal
+  "benches"
 ]
 
 # Config for 'cargo dist'
