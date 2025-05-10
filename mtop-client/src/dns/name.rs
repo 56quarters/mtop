@@ -51,7 +51,7 @@ impl Name {
         }
     }
 
-    pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
+    pub fn write_network_bytes<T>(&self, mut out: T) -> Result<(), MtopError>
     where
         T: WriteBytesExt,
     {
@@ -61,19 +61,19 @@ impl Name {
         assert!(self.is_fqdn, "only fully qualified domains can be encoded");
 
         for label in self.labels.iter() {
-            buf.write_u8(label.len() as u8)?;
-            buf.write_all(label)?;
+            out.write_u8(label.len() as u8)?;
+            out.write_all(label)?;
         }
 
-        Ok(buf.write_u8(0)?)
+        Ok(out.write_u8(0)?)
     }
 
-    pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
+    pub fn read_network_bytes<T>(mut inp: T) -> Result<Self, MtopError>
     where
         T: ReadBytesExt + Seek,
     {
         let mut name = Vec::new();
-        Self::read_inner(&mut buf, &mut name)?;
+        Self::read_inner(&mut inp, &mut name)?;
         Self::from_bytes(&name)
     }
 
@@ -81,7 +81,7 @@ impl Name {
     /// following any pointers (how names are compressed in DNS messages). The
     /// bytes written to `out` are ASCII characters of the text representation
     /// of the name, e.g. `"example.com.".as_bytes()`.
-    fn read_inner<T>(buf: &mut T, out: &mut Vec<u8>) -> Result<(), MtopError>
+    fn read_inner<T>(inp: &mut T, out: &mut Vec<u8>) -> Result<(), MtopError>
     where
         T: ReadBytesExt + Seek,
     {
@@ -98,26 +98,29 @@ impl Name {
                 )));
             }
 
-            let len = buf.read_u8()?;
+            let len = inp.read_u8()?;
             // If the length isn't a length but actually a pointer to another name
             // or label within the message, seek to that position within the message
             // and read the name from there. After resolving all pointers and reading
             // labels, reset the stream back to immediately after the first pointer.
             if Self::is_compressed_label(len) {
-                let offset = Self::get_offset(len, buf.read_u8()?);
+                let offset = Self::get_offset(len, inp.read_u8()?);
                 if position.is_none() {
-                    position = Some(buf.stream_position()?);
+                    position = Some(inp.stream_position()?);
                 }
 
-                buf.seek(SeekFrom::Start(u64::from(offset)))?;
+                inp.seek(SeekFrom::Start(u64::from(offset)))?;
                 pointers += 1;
             } else if Self::is_standard_label(len) {
                 // If the length is a length, read the next label (segment) of the name
                 // returning early once we read the "root" label (`.`) signified by a
                 // length of 0.
-                if Self::read_label_into(buf, len, out)? {
+                if Self::read_label_into(inp, len, out)? {
                     if let Some(p) = position {
-                        buf.seek(SeekFrom::Start(p))?;
+                        // If we followed a pointer to different part of the message while
+                        // parsing this name, seek to the position immediately after the
+                        // pointer now that we've finished parsing this name.
+                        inp.seek(SeekFrom::Start(p))?;
                     }
 
                     return Ok(());
@@ -132,7 +135,7 @@ impl Name {
 
     /// If `len` doesn't indicate this is the root label, read the next name label into
     /// `out` followed by a `.` and return false, true if next label was the root.
-    fn read_label_into<T>(buf: &mut T, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
+    fn read_label_into<T>(inp: &mut T, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
     where
         T: ReadBytesExt + Seek,
     {
@@ -158,7 +161,7 @@ impl Name {
             )));
         }
 
-        let mut handle = buf.take(u64::from(len));
+        let mut handle = inp.take(u64::from(len));
         let n = handle.read_to_end(out)?;
         if n != usize::from(len) {
             return Err(MtopError::runtime(format!(
@@ -466,6 +469,30 @@ mod test {
         let name = name.to_fqdn();
         assert!(name.is_fqdn());
         assert_eq!(13, name.size());
+    }
+
+    #[test]
+    fn test_name_equal_same_case() {
+        let name1 = Name::from_str("example.com.").unwrap();
+        let name2 = Name::from_str("example.com.").unwrap();
+
+        assert_eq!(name1, name2);
+    }
+
+    #[test]
+    fn test_name_equal_different_case() {
+        let name1 = Name::from_str("example.com.").unwrap();
+        let name2 = Name::from_str("EXAMPLE.cOm.").unwrap();
+
+        assert_eq!(name1, name2);
+    }
+
+    #[test]
+    fn test_name_equal_different_fqdn() {
+        let name1 = Name::from_str("example.com").unwrap();
+        let name2 = Name::from_str("example.com.").unwrap();
+
+        assert_ne!(name1, name2);
     }
 
     #[test]
