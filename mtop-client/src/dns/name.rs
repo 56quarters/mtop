@@ -222,15 +222,17 @@ impl Name {
         for label in bytes.split(|&b| b == b'.') {
             let label_len = label.len();
 
+            if label_len > Self::MAX_LABEL_LENGTH {
+                return Err(MtopError::configuration(format!(
+                    "label too long; max {} bytes, got {}",
+                    Self::MAX_LABEL_LENGTH,
+                    label_len,
+                )));
+            }
+
             for (i, b) in label.iter().enumerate() {
                 let c = char::from(*b);
-                if i + 1 > Self::MAX_LABEL_LENGTH {
-                    return Err(MtopError::configuration(format!(
-                        "label too long; max {} bytes, got {}",
-                        Self::MAX_LABEL_LENGTH,
-                        i + 1,
-                    )));
-                } else if i == 0 && c != '_' && !c.is_ascii_alphanumeric() {
+                if i == 0 && c != '_' && !c.is_ascii_alphanumeric() {
                     return Err(MtopError::configuration(format!(
                         "label must begin with ASCII letter, number, or underscore; got {}",
                         c
