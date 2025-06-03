@@ -261,10 +261,8 @@ impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let len = self.labels.len();
         for (i, l) in self.labels.iter().enumerate() {
-            // Labels are all valid ASCII so there aren't any replacement characters
-            // needed. We just want to create a string from a bytes slice and not
-            // allocate. This is the easiest way that doesn't involve unsafe methods.
-            String::from_utf8_lossy(l).fmt(f)?;
+            // SAFETY: We only allow construction of Name instances with ASCII labels
+            unsafe { str::from_utf8_unchecked(l) }.fmt(f)?;
             if i != len - 1 {
                 ".".fmt(f)?;
             }
