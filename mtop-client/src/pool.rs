@@ -105,8 +105,8 @@ impl<K, V> DerefMut for PooledClient<K, V> {
 mod test {
     use super::{ClientFactory, ClientPool, ClientPoolConfig};
     use crate::core::MtopError;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     struct CountingClient {
         dropped: Arc<AtomicU64>,

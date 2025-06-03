@@ -707,8 +707,8 @@ mod test {
         RecordDataA, RecordDataAAAA, RecordDataCNAME, RecordDataNS, RecordDataOptPair, RecordDataSOA, RecordDataSRV,
         RecordDataTXT,
     };
-    use crate::dns::name::Name;
     use crate::dns::RecordDataOpt;
+    use crate::dns::name::Name;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;

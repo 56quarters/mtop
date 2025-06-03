@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::ping::{Bundle, DnsPinger};
 use mtop::{profile, sig};
@@ -8,8 +10,8 @@ use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Handle;

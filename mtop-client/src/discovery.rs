@@ -180,7 +180,7 @@ where
         Ok(vec![Server::new(ServerID::from((host, port)), server_name)])
     }
 
-    fn servers_from_answers(port: u16, server_name: &ServerName, message: &Message) -> Vec<Server> {
+    fn servers_from_answers(port: u16, server_name: &ServerName<'static>, message: &Message) -> Vec<Server> {
         let mut servers = HashSet::new();
 
         for answer in message.answers() {

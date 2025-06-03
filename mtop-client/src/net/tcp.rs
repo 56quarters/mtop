@@ -4,9 +4,9 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{TcpStream, ToSocketAddrs};
+use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::ClientConfig;
-use tokio_rustls::TlsConnector;
 
 pub(crate) async fn tcp_connect<A>(host: A) -> Result<(ReadHalf<TcpStream>, WriteHalf<TcpStream>), MtopError>
 where

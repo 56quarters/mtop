@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Cell, Gauge, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState, Tabs,
 };
-use ratatui::{backend::CrosstermBackend, symbols, Frame, Terminal};
+use ratatui::{Frame, Terminal, backend::CrosstermBackend, symbols};
 use std::collections::HashMap;
 use std::time::Duration;
 use std::{io, panic};
@@ -71,7 +71,7 @@ where
 }
 
 /// Draw the current state of `app` on the given frame `f`
-fn render(f: &mut Frame, app: &mut Application) {
+fn render(f: &mut Frame<'_>, app: &mut Application) {
     let host = app.host();
     let hosts = app.hosts();
     let theme = app.theme();
@@ -87,7 +87,7 @@ fn render(f: &mut Frame, app: &mut Application) {
 
 fn render_host_area(
     theme: &Theme,
-    f: &mut Frame,
+    f: &mut Frame<'_>,
     host: Host,
     hosts: Vec<Host>,
     selected: usize,
@@ -126,7 +126,7 @@ fn render_host_area(
     inner_host_area
 }
 
-fn render_stats_gauges(theme: &Theme, f: &mut Frame, area: Rect, delta: &StatsDelta) {
+fn render_stats_gauges(theme: &Theme, f: &mut Frame<'_>, area: Rect, delta: &StatsDelta) {
     let units = UnitFormatter::new();
     // Split up the host area into three rows. These will be further split
     // into 3 or 4 sections horizontally
@@ -206,7 +206,7 @@ fn render_stats_gauges(theme: &Theme, f: &mut Frame, area: Rect, delta: &StatsDe
     f.render_widget(system_cpu, gauge_row_3[3]);
 }
 
-fn render_slabs_table(theme: &Theme, f: &mut Frame, area: Rect, delta: &StatsDelta, state: &mut TableState) {
+fn render_slabs_table(theme: &Theme, f: &mut Frame<'_>, area: Rect, delta: &StatsDelta, state: &mut TableState) {
     let units = UnitFormatter::new();
     let header = slab_table_header(theme);
     let rows = slab_table_rows(delta, &units);
@@ -261,7 +261,7 @@ fn host_tabs<'a>(theme: &'a Theme, hosts: &'a [Host], selected: usize) -> Tabs<'
         .select(0)
 }
 
-fn host_tabs_scrollbar(theme: &Theme) -> Scrollbar {
+fn host_tabs_scrollbar(theme: &Theme) -> Scrollbar<'_> {
     Scrollbar::default()
         .orientation(ScrollbarOrientation::HorizontalBottom)
         .begin_symbol(Some("<"))

@@ -1,4 +1,6 @@
 #![allow(clippy::uninlined_format_args)]
+#![warn(missing_debug_implementations, unreachable_pub)]
+#![deny(unused_must_use)]
 
 pub mod bench;
 pub mod check;
