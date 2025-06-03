@@ -359,7 +359,7 @@ impl fmt::Debug for UdpConnection {
 pub(crate) struct SocketAdapter(UdpSocket);
 
 impl SocketAdapter {
-    pub fn new(sock: UdpSocket) -> Self {
+    pub(crate) fn new(sock: UdpSocket) -> Self {
         Self(sock)
     }
 }

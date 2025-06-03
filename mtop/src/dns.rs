@@ -1,5 +1,5 @@
-use mtop_client::dns::{DefaultDnsClient, DnsClientConfig, ResolvConf};
 use mtop_client::MtopError;
+use mtop_client::dns::{DefaultDnsClient, DnsClientConfig, ResolvConf};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;

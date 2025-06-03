@@ -8,7 +8,7 @@ repository = "https://github.com/56quarters/mtop"
 readme = "../README.md"
 license = "GPL-3.0+"
 keywords = ["top", "memcached"]
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 clap = { version = "4.1.8", default-features = false, features = ["cargo", "derive", "env", "help", "error-context", "std", "string", "usage", "wrap_help"] }

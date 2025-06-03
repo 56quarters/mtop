@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::runtime::Handle;
 
 /// Spawn a future that waits for a CTRL-C interrupt (SIGINT on Unix) and

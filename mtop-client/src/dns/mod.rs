@@ -17,4 +17,4 @@ pub use crate::dns::rdata::{
     RecordData, RecordDataA, RecordDataAAAA, RecordDataCNAME, RecordDataNS, RecordDataOpt, RecordDataSOA,
     RecordDataSRV, RecordDataTXT, RecordDataUnknown,
 };
-pub use crate::dns::resolv::{config, ResolvConf, ResolvConfOptions};
+pub use crate::dns::resolv::{ResolvConf, ResolvConfOptions, config};

@@ -1,6 +1,6 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
-use mtop::ui::{Theme, TAILWIND};
+use mtop::ui::{TAILWIND, Theme};
 use mtop_client::{
     Discovery, MemcachedClient, MtopError, RendezvousSelector, Server, TcpClientFactory, Timeout, TlsConfig,
 };

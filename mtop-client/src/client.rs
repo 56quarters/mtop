@@ -2,16 +2,16 @@ use crate::core::{ErrorKind, Key, Memcached, Meta, MtopError, SlabItems, Slabs, 
 use crate::discovery::{Server, ServerID};
 use crate::net::{self, TlsConfig};
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig, PooledClient};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::future::Future;
+use std::hash::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::pki_types::ServerName;
 use tracing::instrument::WithSubscriber;
 
 /// Implementation of a `ClientFactory` that creates new Memcached clients that

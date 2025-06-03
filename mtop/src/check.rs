@@ -1,6 +1,6 @@
 use mtop_client::{Discovery, Key, MemcachedClient, Timeout};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::time;
 

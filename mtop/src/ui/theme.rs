@@ -1,6 +1,6 @@
 use mtop_client::MtopError;
-use ratatui::style::palette::{material, tailwind};
 use ratatui::style::Color;
+use ratatui::style::palette::{material, tailwind};
 use std::fmt;
 use std::str::FromStr;
 

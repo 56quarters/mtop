@@ -179,7 +179,7 @@ impl FromStr for OptionsToken {
 
 #[cfg(test)]
 mod test {
-    use super::{config, OptionsToken, Token};
+    use super::{OptionsToken, Token, config};
     use crate::core::ErrorKind;
     use crate::dns::{ResolvConf, ResolvConfOptions};
     use std::io::{Cursor, Error as IOError, ErrorKind as IOErrorKind};

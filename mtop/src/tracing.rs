@@ -2,8 +2,8 @@ use std::fs::{self, File};
 use std::io::{self, Stderr};
 use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::fmt::format::{DefaultFields, Format};
 use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::fmt::format::{DefaultFields, Format};
 
 #[allow(clippy::type_complexity)]
 pub fn console_subscriber(

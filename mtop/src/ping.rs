@@ -1,7 +1,7 @@
 use crate::check::{Timing, TimingBuilder};
 use mtop_client::dns::{DefaultDnsClient, DnsClient, MessageId, Name, RecordClass, RecordType, ResponseCode};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::time;
 use tracing::{Instrument, Level};

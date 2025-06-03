@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use mtop_client::{
     MemcachedClient, MemcachedClientConfig, RendezvousSelector, Server, ServerID, ServersResponse, TcpClientFactory,
     TlsConfig,
@@ -11,9 +13,9 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::runtime::Handle;
+use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
-use tokio_rustls::TlsAcceptor;
 
 const RESPONSE_VERSION: &str = "VERSION 1.6.22\r\n";
 const RESPONSE_ERROR: &str = "ERROR\r\n";
