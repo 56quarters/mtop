@@ -122,7 +122,7 @@ impl Bencher {
 
                     for kv in fixture.kvs.iter() {
                         // Write a small percentage of fixture data because cache workloads skew read heavy.
-                        if rand::thread_rng().gen_bool(write_percent.as_f64()) {
+                        if rand::rng().random_bool(write_percent.as_f64()) {
                             if let Err(e) = client.set(kv.key(), 0, ttl, kv.payload()).timeout(timeout, "client.set").await {
                                 tracing::debug!(message = "unable to set item", key = kv.key(), payload_size = kv.len(), err = %e);
                             } else {
@@ -206,7 +206,7 @@ struct FixtureData {
 impl FixtureData {
     fn new(worker: usize, num: usize) -> FixtureData {
         let mut kvs = Vec::with_capacity(num);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Using a "lambda" value of 10 means that most numbers end up in the 0 to 1.0 range
         // with the occasional value over 1.0. We're generating sizes of test data, so it doesn't
         // really matter if we occasionally have values over 1.0.

@@ -100,7 +100,7 @@ fn render_host_area(
                 Constraint::Length(3),      // tabs
                 Constraint::Percentage(90), // host info
             ])
-            .split(f.size());
+            .split(f.area());
         (chunks[0], chunks[1])
     };
 
@@ -341,7 +341,7 @@ fn slab_table<'a>(theme: &'a Theme, header: Row<'a>, rows: Vec<Row<'a>>, widths:
                 .title_style(theme.title)
                 .style(theme.text),
         )
-        .highlight_style(Style::default().bg(theme.table_select_bg).fg(theme.table_select_fg))
+        .row_highlight_style(Style::default().bg(theme.table_select_bg).fg(theme.table_select_fg))
 }
 
 fn memory_gauge<'a>(theme: &'a Theme, m: &'a StatsDelta, units: &'a UnitFormatter) -> Gauge<'a> {
