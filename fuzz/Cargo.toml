@@ -41,3 +41,10 @@ path = "fuzz_targets/fuzz_target_memcached_metas.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_target_memcached_stats"
+path = "fuzz_targets/fuzz_target_memcached_stats.rs"
+test = false
+doc = false
+bench = false
