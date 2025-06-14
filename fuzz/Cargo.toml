@@ -1,0 +1,43 @@
+[package]
+name = "fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "GPL-3.0+"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4.0", features = ["arbitrary-derive"] }
+mtop-client = { path = "../mtop-client" }
+tokio = { version = "1.14.0", features = ["full"] }
+urlencoding = "2.1.2"
+
+[[bin]]
+name = "fuzz_target_dns_name"
+path = "fuzz_targets/fuzz_target_dns_name.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_dns_message"
+path = "fuzz_targets/fuzz_target_dns_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_memcached_get"
+path = "fuzz_targets/fuzz_target_memcached_get.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_memcached_metas"
+path = "fuzz_targets/fuzz_target_memcached_metas.rs"
+test = false
+doc = false
+bench = false

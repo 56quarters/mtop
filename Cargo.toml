@@ -6,7 +6,8 @@ members = [
   "mtop-client",
 
   # Internal
-  "benches"
+  "benches",
+  "fuzz",
 ]
 
 # Config for 'cargo dist'

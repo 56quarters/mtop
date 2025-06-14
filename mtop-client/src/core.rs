@@ -700,6 +700,8 @@ pub struct Memcached {
 }
 
 impl Memcached {
+    const MAX_PAYLOAD_SIZE: u64 = 1024 * 1024 * 1024;
+
     pub fn new<R, W>(read: R, write: W) -> Self
     where
         R: AsyncRead + Send + Sync + Unpin + 'static,
@@ -872,6 +874,18 @@ impl Memcached {
                 let flags: u64 = parse_value(flags, line)?;
                 let len: u64 = parse_value(len, line)?;
                 let cas: u64 = parse_value(cas, line)?;
+
+                // The max size of an object in Memcached is `u64` which means it's basically
+                // infinite. In practice the default max size of an object in a Memcached server
+                // is 1MB but can be configured higher. Place a limit on the size that we'll
+                // accept here to avoid a denial of service from bad lengths.
+                if len > Self::MAX_PAYLOAD_SIZE {
+                    return Err(MtopError::runtime(format!(
+                        "server response of length {} exceeds client max of {}",
+                        len,
+                        Self::MAX_PAYLOAD_SIZE
+                    )));
+                }
 
                 // Two extra bytes to read the trailing \r\n but then truncate them.
                 let mut data = Vec::with_capacity(len as usize + 2);
