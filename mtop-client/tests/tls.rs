@@ -160,7 +160,7 @@ async fn run_server(server_config: TlsServerConfig, client_config: TlsConfig) ->
     let id = ServerID::from(addr);
     let handle = tokio::spawn(server);
 
-    let factory = TcpClientFactory::new(client_config, Handle::current()).await.unwrap();
+    let factory = TcpClientFactory::new(client_config).await.unwrap();
     let selector = RendezvousSelector::new(vec![Server::new(
         id.clone(),
         ServerName::try_from("localhost").unwrap(),

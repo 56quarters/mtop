@@ -23,11 +23,11 @@ pub struct TcpClientFactory {
 }
 
 impl TcpClientFactory {
-    pub async fn new(tls: TlsConfig, handle: Handle) -> Result<Self, MtopError> {
+    pub async fn new(tls: TlsConfig) -> Result<Self, MtopError> {
         let server_name = if tls.enabled { tls.server_name.clone() } else { None };
 
         let client_config = if tls.enabled {
-            Some(Arc::new(net::tls_client_config(tls, handle).await?))
+            Some(Arc::new(net::tls_client_config(tls).await?))
         } else {
             None
         };

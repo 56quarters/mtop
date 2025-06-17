@@ -221,7 +221,7 @@ async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedCl
     };
 
     let selector = RendezvousSelector::new(servers.to_vec());
-    let factory = TcpClientFactory::new(tls_config, Handle::current()).await?;
+    let factory = TcpClientFactory::new(tls_config).await?;
     Ok(MemcachedClient::new(
         Default::default(),
         Handle::current(),
