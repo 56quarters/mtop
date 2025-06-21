@@ -1015,7 +1015,7 @@ impl Memcached {
         Some(ProtocolError { kind, message })
     }
 
-    async fn send<'a>(&'a mut self, cmd: Command<'a>) -> Result<(), MtopError> {
+    async fn send(&mut self, cmd: Command<'_>) -> Result<(), MtopError> {
         let cmd_bytes: Vec<u8> = cmd.into();
         self.write.write_all(&cmd_bytes).await?;
         Ok(self.write.flush().await?)
