@@ -8,22 +8,58 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_FUZZ_VERSION: 0.12.0
+  FUZZ_TIME: 60
 
 jobs:
   build-lint-test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    # Temporary while https://github.com/rust-lang/rust-clippy/issues/12014 is affecting stable
     - name: Rustup
-      run: rustup update nightly && rustup default nightly && rustup component add clippy rustfmt
+      run: rustup update stable && rustup default stable && rustup component add clippy rustfmt
     - name: Versions
       run: cargo --version && rustc --version
     - name: Build
       run: cargo build --verbose
-    - name: Clippy
-      run: cargo clippy --verbose
     - name: Format
       run: cargo fmt --check --verbose
+    - name: Clippy
+      run: cargo clippy --verbose
     - name: Tests
       run: cargo test --verbose
+
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+        - fuzz_target: fuzz_target_dns_message
+        - fuzz_target: fuzz_target_dns_name
+        - fuzz_target: fuzz_target_memcached_get
+        - fuzz_target: fuzz_target_memcached_metas
+        - fuzz_target: fuzz_target_memcached_stats
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rustup
+      run: rustup update nightly && rustup default nightly
+    - uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/cargo-fuzz
+        key: cargo-fuzz-bin-${{ env.CARGO_FUZZ_VERSION }}
+    - name: Setup PATH
+      run: echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> $GITHUB_PATH
+    - name: Cargo fuzz
+      run: cargo install --root "${{ runner.tool_cache }}/cargo-fuzz" --version ${{ env.CARGO_FUZZ_VERSION }} cargo-fuzz --locked
+    - name: Versions
+      run: cargo --version && rustc --version && cargo fuzz --version
+    - name: Fuzz build
+      run: cargo fuzz build ${{ matrix.fuzz_target }}
+    - name: Fuzz run
+      run: cargo fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=${{ env.FUZZ_TIME }}
+    - name: On failure
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: fuzzing-artifacts-${{ matrix.fuzz_target }}-${{ github.sha }}
+        path: fuzz/artifacts
