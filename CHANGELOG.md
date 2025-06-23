@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.15.0 - 2025-06-23
+
+- Change retry behavior of DNS lookups (used for the `dns` binary and cache server
+  service discovery) to try all configured DNS servers and then retry. #202
+- Refactor and improve performance of parsing DNS results. #206 #209 #211 #213
+- Introduce a max size for individual cache results of 1GB. #215
+
 ## v0.14.0 - 2025-02-05
 
 - Add `flush-all` subcommand to `mc` to flush all entries from a cache. #196
