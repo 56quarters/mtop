@@ -875,10 +875,10 @@ impl Memcached {
                 let len: u64 = parse_value(len, line)?;
                 let cas: u64 = parse_value(cas, line)?;
 
-                // The max size of an object in Memcached is `u64` which means it's basically
-                // infinite. In practice the default max size of an object in a Memcached server
-                // is 1MB but can be configured higher. Place a limit on the size that we'll
-                // accept here to avoid a denial of service from bad lengths.
+                // The max size of an object in Memcached is represented with a `u64` which
+                // means it's basically infinite. In practice the default max size of an object
+                // in a Memcached server is 1MB but can be configured higher. Place a limit on
+                // the size that we'll accept here to avoid a denial of service from bad lengths.
                 if len > Self::MAX_PAYLOAD_SIZE {
                     return Err(MtopError::runtime(format!(
                         "server response of length {} exceeds client max of {}",
