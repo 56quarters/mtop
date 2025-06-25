@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.15.0 - 2025-06-23
+## v0.15.0 - unreleased
 
 - Change retry behavior of DNS lookups (used for the `dns` binary and cache server
   service discovery) to try all configured DNS servers and then retry. #202
