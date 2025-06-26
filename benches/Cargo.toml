@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "benches"
 version = "0.0.0"
