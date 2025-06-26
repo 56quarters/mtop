@@ -4,10 +4,6 @@ resolver = "2"
 members = [
   "mtop",
   "mtop-client",
-
-  # Internal
-  "benches",
-  "fuzz",
 ]
 
 # Config for 'cargo dist'
@@ -21,11 +17,18 @@ installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Which actions to run on pull requests
-pr-run-mode = "skip"
+pr-run-mode = "plan"
 # The archive format to use for non-windows builds (defaults .tar.xz)
 unix-archive = ".tar.gz"
+
+[workspace.metadata.dist.github-custom-runners]
+# Update to newer runners since ubuntu-20.04 is EOL for Github actions
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+x86_64-unknown-linux-musl = "ubuntu-22.04"
+global = "ubuntu-22.04"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
+

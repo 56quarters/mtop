@@ -54,9 +54,9 @@ jobs:
     - name: Versions
       run: cargo --version && rustc --version && cargo fuzz --version
     - name: Fuzz build
-      run: cargo fuzz build ${{ matrix.fuzz_target }}
+      run: cd fuzz && cargo fuzz build ${{ matrix.fuzz_target }}
     - name: Fuzz run
-      run: cargo fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=${{ env.FUZZ_TIME }}
+      run: cd fuzz && cargo fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=${{ env.FUZZ_TIME }}
     - name: On failure
       uses: actions/upload-artifact@v4
       if: failure()
