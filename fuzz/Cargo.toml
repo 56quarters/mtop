@@ -18,35 +18,35 @@ urlencoding = "2.1.2"
 
 [[bin]]
 name = "fuzz_target_dns_name"
-path = "fuzz_targets/fuzz_target_dns_name.rs"
+path = "fuzz_targets/dns_name.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "fuzz_target_dns_message"
-path = "fuzz_targets/fuzz_target_dns_message.rs"
+path = "fuzz_targets/dns_message.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "fuzz_target_memcached_get"
-path = "fuzz_targets/fuzz_target_memcached_get.rs"
+path = "fuzz_targets/memcached_get.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "fuzz_target_memcached_metas"
-path = "fuzz_targets/fuzz_target_memcached_metas.rs"
+path = "fuzz_targets/memcached_metas.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "fuzz_target_memcached_stats"
-path = "fuzz_targets/fuzz_target_memcached_stats.rs"
+path = "fuzz_targets/memcached_stats.rs"
 test = false
 doc = false
 bench = false
