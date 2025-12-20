@@ -198,7 +198,7 @@ impl DnsClient for DefaultDnsClient {
                             return Ok(v);
                         }
 
-                        tracing::debug!(message = "unsuitable response from nameserver, trying next one", server = %server, response_code = ?rc);
+                        tracing::debug!(message = "unsuitable response from nameserver, trying next one", server = %server, attempt = attempt + 1, max_attempts = self.config.attempts, response_code = ?rc);
                         errors.push(rc.to_string());
                     }
                     Err(e) => {
