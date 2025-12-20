@@ -369,9 +369,10 @@ impl fmt::Debug for Flags {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
 #[repr(u16)]
 pub enum ResponseCode {
+    #[default]
     NoError = 0,
     FormatError = 1,
     ServerFailure = 2,
@@ -384,12 +385,6 @@ pub enum ResponseCode {
     NotAuth = 9,
     NotZone = 10,
     BadVersion = 16,
-}
-
-impl Default for ResponseCode {
-    fn default() -> Self {
-        Self::NoError
-    }
 }
 
 impl fmt::Display for ResponseCode {
@@ -423,20 +418,15 @@ impl TryFrom<u16> for ResponseCode {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
 #[repr(u16)]
 pub enum Operation {
+    #[default]
     Query = 0,
     IQuery = 1,
     Status = 2,
     Notify = 4,
     Update = 5,
-}
-
-impl Default for Operation {
-    fn default() -> Self {
-        Self::Query
-    }
 }
 
 impl TryFrom<u16> for Operation {

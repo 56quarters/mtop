@@ -2,8 +2,9 @@ use crate::core::{ErrorKind, Key, Memcached, Meta, MtopError, SlabItems, Slabs, 
 use crate::discovery::{Server, ServerID};
 use crate::net::{self, TlsConfig};
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig, PooledClient};
+use async_trait::async_trait;
 use std::collections::HashMap;
-use std::future::Future;
+use std::fmt;
 use std::hash::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -65,6 +66,7 @@ impl TcpClientFactory {
     }
 }
 
+#[async_trait]
 impl ClientFactory<Server, Memcached> for TcpClientFactory {
     async fn make(&self, server: &Server) -> Result<Memcached, MtopError> {
         if let Some(cfg) = &self.client_config {
@@ -78,10 +80,10 @@ impl ClientFactory<Server, Memcached> for TcpClientFactory {
 /// Logic for picking a server to "own" a particular cache key.
 pub trait Selector {
     /// Get a copy of all known servers.
-    fn servers(&self) -> impl Future<Output = Vec<Server>> + Send + Sync;
+    fn servers(&self) -> Vec<Server>;
 
     /// Get the `Server` that owns the given key, or an error if there are no servers.
-    fn server(&self, key: &Key) -> impl Future<Output = Result<Server, MtopError>> + Send + Sync;
+    fn server(&self, key: &Key) -> Result<Server, MtopError>;
 }
 
 /// Logic for picking a server to "own" a particular cache key that uses
@@ -114,11 +116,11 @@ impl RendezvousSelector {
 }
 
 impl Selector for RendezvousSelector {
-    async fn servers(&self) -> Vec<Server> {
+    fn servers(&self) -> Vec<Server> {
         self.servers.clone()
     }
 
-    async fn server(&self, key: &Key) -> Result<Server, MtopError> {
+    fn server(&self, key: &Key) -> Result<Server, MtopError> {
         if self.servers.is_empty() {
             Err(MtopError::runtime("no servers available"))
         } else if self.servers.len() == 1 {
@@ -185,7 +187,7 @@ macro_rules! spawn_for_host {
 macro_rules! operation_for_key {
     ($self:ident, $method:ident, $key:expr $(, $args:expr)* $(,)?) => {{
         let key = Key::one($key)?;
-        let server = $self.selector.server(&key).await?;
+        let server = $self.selector.server(&key)?;
         let mut conn = $self.pool.get(&server).await?;
 
         match conn.$method(&key, $($args,)*).await {
@@ -209,7 +211,7 @@ macro_rules! operation_for_key {
 /// Run a method on a connection to every server and bucket the results and errors by server.
 macro_rules! operation_for_all {
     ($self:ident, $method:ident) => {{
-        let servers = $self.selector.servers().await;
+        let servers = $self.selector.servers();
         let tasks = servers
             .into_iter()
             .map(|server| (server.id().clone(), spawn_for_host!($self, $method, &server)))
@@ -255,29 +257,24 @@ impl Default for MemcachedClientConfig {
 
 /// Memcached client that operates on multiple servers, pooling connections
 /// to them, and sharding keys via a `Selector` implementation.
-#[derive(Debug)]
-pub struct MemcachedClient<S = RendezvousSelector, F = TcpClientFactory>
-where
-    S: Selector + Send + Sync + 'static,
-    F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
-{
+pub struct MemcachedClient {
     handle: Handle,
-    selector: S,
-    pool: Arc<ClientPool<Server, Memcached, F>>,
+    selector: Box<dyn Selector + Send + Sync>,
+    pool: Arc<ClientPool<Server, Memcached>>,
 }
 
-impl<S, F> MemcachedClient<S, F>
-where
-    S: Selector + Send + Sync + 'static,
-    F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
-{
+impl MemcachedClient {
     /// Create a new `MemcachedClient` instance.
     ///
     /// `handle` is used to spawn multiple async tasks to fetch data from servers in
     /// parallel. `selector` is used to determine which server "owns" a particular key.
     /// `factory` is used for establishing new connections, which are pooled, to each
     /// server as needed.
-    pub fn new(config: MemcachedClientConfig, handle: Handle, selector: S, factory: F) -> Self {
+    pub fn new<S, F>(config: MemcachedClientConfig, handle: Handle, selector: S, factory: F) -> Self
+    where
+        S: Selector + Send + Sync + 'static,
+        F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
+    {
         let pool_config = ClientPoolConfig {
             name: "memcached-tcp".to_owned(),
             max_idle: config.pool_max_idle,
@@ -285,7 +282,7 @@ where
 
         Self {
             handle,
-            selector,
+            selector: Box::new(selector),
             pool: Arc::new(ClientPool::new(pool_config, factory)),
         }
     }
@@ -366,7 +363,7 @@ where
         // Note that we aren't using operation_for_all! here because we want to pass a
         // different delay argument to each server. This allows callers to flush the cache
         // in one server after another, with a delay between each for safety.
-        let servers = self.selector.servers().await;
+        let servers = self.selector.servers();
 
         let tasks = servers
             .into_iter()
@@ -400,7 +397,7 @@ where
         let num_keys = keys.len();
         let mut by_server: HashMap<Server, Vec<Key>> = HashMap::new();
         for key in keys {
-            let server = self.selector.server(&key).await?;
+            let server = self.selector.server(&key)?;
             let entry = by_server.entry(server).or_default();
             entry.push(key);
         }
@@ -521,12 +518,22 @@ where
     }
 }
 
+impl fmt::Debug for MemcachedClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemcachedClient")
+            .field("selector", &"...")
+            .field("pool", &self.pool)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::{MemcachedClient, MemcachedClientConfig, Selector};
     use crate::core::{ErrorKind, Key, Memcached, MtopError, Value};
     use crate::discovery::{Server, ServerID};
     use crate::pool::ClientFactory;
+    use async_trait::async_trait;
     use rustls_pki_types::ServerName;
     use std::collections::HashMap;
     use std::io::Cursor;
@@ -539,11 +546,11 @@ mod test {
     }
 
     impl Selector for MockSelector {
-        async fn servers(&self) -> Vec<Server> {
+        fn servers(&self) -> Vec<Server> {
             self.mapping.values().cloned().collect()
         }
 
-        async fn server(&self, key: &Key) -> Result<Server, MtopError> {
+        fn server(&self, key: &Key) -> Result<Server, MtopError> {
             self.mapping
                 .get(key)
                 .cloned()
@@ -556,6 +563,7 @@ mod test {
         contents: HashMap<Server, Vec<u8>>,
     }
 
+    #[async_trait]
     impl ClientFactory<Server, Memcached> for MockClientFactory {
         async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
             let bytes = self

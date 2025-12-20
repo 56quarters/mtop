@@ -248,6 +248,7 @@ mod test {
         DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordData, RecordDataA,
         RecordDataAAAA, RecordDataSRV, RecordType,
     };
+    use async_trait::async_trait;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::str::FromStr;
     use tokio::sync::Mutex;
@@ -299,6 +300,7 @@ mod test {
         }
     }
 
+    #[async_trait]
     impl DnsClient for MockDnsClient {
         async fn resolve(
             &self,

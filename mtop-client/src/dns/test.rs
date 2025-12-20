@@ -2,6 +2,7 @@ use crate::core::MtopError;
 use crate::dns::client::{TcpConnection, UdpConnection};
 use crate::dns::message::Message;
 use crate::pool::ClientFactory;
+use async_trait::async_trait;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 use std::io::{Cursor, Error};
@@ -124,6 +125,7 @@ impl TestUdpClientFactory {
     }
 }
 
+#[async_trait]
 impl ClientFactory<SocketAddr, UdpConnection> for TestUdpClientFactory {
     async fn make(&self, key: &SocketAddr) -> Result<UdpConnection, MtopError> {
         let messages = self
@@ -151,6 +153,7 @@ impl TestTcpClientFactory {
     }
 }
 
+#[async_trait]
 impl ClientFactory<SocketAddr, TcpConnection> for TestTcpClientFactory {
     async fn make(&self, key: &SocketAddr) -> Result<TcpConnection, MtopError> {
         let messages = self

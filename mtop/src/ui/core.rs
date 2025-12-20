@@ -51,20 +51,20 @@ where
     loop {
         terminal.draw(|f| render(f, &mut app))?;
 
-        if event::poll(DRAW_INTERVAL)? {
-            if let Event::Key(key) = event::read()? {
-                let ctrl = key.modifiers.intersects(KeyModifiers::CONTROL);
+        if event::poll(DRAW_INTERVAL)?
+            && let Event::Key(key) = event::read()?
+        {
+            let ctrl = key.modifiers.intersects(KeyModifiers::CONTROL);
 
-                match key.code {
-                    KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('c') if ctrl => return Ok(()),
-                    KeyCode::Char('m') => app.toggle_mode(),
-                    KeyCode::Right | KeyCode::Char('l') => app.next_host(),
-                    KeyCode::Left | KeyCode::Char('h') => app.prev_host(),
-                    KeyCode::Up | KeyCode::Char('k') => app.prev_row(),
-                    KeyCode::Down | KeyCode::Char('j') => app.next_row(),
-                    _ => {}
-                }
+            match key.code {
+                KeyCode::Char('q') => return Ok(()),
+                KeyCode::Char('c') if ctrl => return Ok(()),
+                KeyCode::Char('m') => app.toggle_mode(),
+                KeyCode::Right | KeyCode::Char('l') => app.next_host(),
+                KeyCode::Left | KeyCode::Char('h') => app.prev_host(),
+                KeyCode::Up | KeyCode::Char('k') => app.prev_row(),
+                KeyCode::Down | KeyCode::Char('j') => app.next_row(),
+                _ => {}
             }
         }
     }

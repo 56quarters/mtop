@@ -1,18 +1,20 @@
 use crate::core::MtopError;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::Future;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 /// Trait used by a client pool for creating new client instances when needed.
 ///
 /// Implementations are expected to retain any required configuration for client
 /// instances beyond the identifier for an instance (usually a server address).
+#[async_trait]
 pub trait ClientFactory<K, V> {
     /// Create a new client instance based on its ID.
-    fn make(&self, key: &K) -> impl Future<Output = Result<V, MtopError>> + Send + Sync;
+    async fn make(&self, key: &K) -> Result<V, MtopError>;
 }
 
 #[derive(Debug, Clone)]
@@ -21,27 +23,29 @@ pub(crate) struct ClientPoolConfig {
     pub max_idle: u64,
 }
 
-#[derive(Debug)]
-pub(crate) struct ClientPool<K, V, F>
+pub(crate) struct ClientPool<K, V>
 where
-    K: Eq + Hash + Clone + fmt::Display,
-    F: ClientFactory<K, V> + Send + Sync,
+    K: Eq + Hash + Clone + fmt::Debug + fmt::Display,
 {
     clients: Mutex<HashMap<K, Vec<PooledClient<K, V>>>>,
     config: ClientPoolConfig,
-    factory: F,
+    factory: Box<dyn ClientFactory<K, V> + Send + Sync>,
+    ids: AtomicU64,
 }
 
-impl<K, V, F> ClientPool<K, V, F>
+impl<K, V> ClientPool<K, V>
 where
-    K: Eq + Hash + Clone + fmt::Display,
-    F: ClientFactory<K, V> + Send + Sync,
+    K: Eq + Hash + Clone + fmt::Debug + fmt::Display,
 {
-    pub(crate) fn new(config: ClientPoolConfig, factory: F) -> Self {
+    pub(crate) fn new<F>(config: ClientPoolConfig, factory: F) -> Self
+    where
+        F: ClientFactory<K, V> + Send + Sync + 'static,
+    {
         Self {
             clients: Mutex::new(HashMap::new()),
+            factory: Box::new(factory),
+            ids: AtomicU64::new(0),
             config,
-            factory,
         }
     }
 
@@ -56,13 +60,14 @@ where
 
         match client {
             Some(c) => {
-                tracing::trace!(message = "using existing client", pool = self.config.name, server = %key);
+                tracing::trace!(message = "using existing client", pool = self.config.name, server = %key, id = c.id);
                 Ok(c)
             }
             None => {
                 tracing::trace!(message = "creating new client", pool = self.config.name, server = %key);
                 let inner = self.factory.make(key).await?;
                 Ok(PooledClient {
+                    id: self.ids.fetch_add(1, Ordering::Relaxed),
                     key: key.clone(),
                     inner,
                 })
@@ -79,10 +84,24 @@ where
     }
 }
 
+impl<K, V> fmt::Debug for ClientPool<K, V>
+where
+    K: Eq + Hash + Clone + fmt::Debug + fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPool")
+            .field("config", &self.config)
+            .field("clients", &"...")
+            .field("factory", &"...")
+            .finish()
+    }
+}
+
 /// Wrapper for a client that belongs to a pool and must be returned
 /// to the pool when complete.
 #[derive(Debug)]
 pub struct PooledClient<K, V> {
+    id: u64,
     key: K,
     inner: V,
 }
@@ -105,6 +124,7 @@ impl<K, V> DerefMut for PooledClient<K, V> {
 mod test {
     use super::{ClientFactory, ClientPool, ClientPoolConfig};
     use crate::core::MtopError;
+    use async_trait::async_trait;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -123,6 +143,7 @@ mod test {
         dropped: Arc<AtomicU64>,
     }
 
+    #[async_trait]
     impl ClientFactory<String, CountingClient> for CountingClientFactory {
         async fn make(&self, _key: &String) -> Result<CountingClient, MtopError> {
             self.created.fetch_add(1, Ordering::Release);
@@ -133,10 +154,7 @@ mod test {
         }
     }
 
-    fn new_pool(
-        created: Arc<AtomicU64>,
-        dropped: Arc<AtomicU64>,
-    ) -> ClientPool<String, CountingClient, CountingClientFactory> {
+    fn new_pool(created: Arc<AtomicU64>, dropped: Arc<AtomicU64>) -> ClientPool<String, CountingClient> {
         let factory = CountingClientFactory {
             created: created.clone(),
             dropped: dropped.clone(),

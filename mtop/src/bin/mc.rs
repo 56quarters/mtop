@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
-use std::{env, io};
+use std::{env, io, slice};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::runtime::Handle;
 use tracing::{Instrument, Level};
@@ -513,7 +513,7 @@ async fn run_flush_all(opts: &McConfig, cmd: &FlushAllCommand, client: &Memcache
 
 async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) -> ExitCode {
     let response = match client
-        .get(&[cmd.key.clone()])
+        .get(slice::from_ref(&cmd.key))
         .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.get")
         .instrument(tracing::span!(Level::INFO, "client.get"))
         .await
@@ -525,10 +525,10 @@ async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) ->
         }
     };
 
-    if let Some(v) = response.values.get(&cmd.key) {
-        if let Err(e) = print_data(v).await {
-            tracing::warn!(message = "error writing output", err = %e);
-        }
+    if let Some(v) = response.values.get(&cmd.key)
+        && let Err(e) = print_data(v).await
+    {
+        tracing::warn!(message = "error writing output", err = %e);
     }
 
     for (id, e) in response.errors.iter() {
