@@ -156,27 +156,35 @@ pub struct ValuesResponse {
     pub errors: HashMap<ServerID, MtopError>,
 }
 
+/// Run a method for a particular server, getting a connection from the pool
+/// and return the connection after it finishes if there were no errors.
+macro_rules! run_for_host {
+    ($pool:expr, $server:expr, $method:ident $(, $args:expr)* $(,)?) => {{
+        let mut conn = $pool.get($server).await?;
+        match conn.$method($($args,)*).await {
+            Ok(v) => {
+                $pool.put(conn).await;
+                Ok(v)
+            }
+            Err(e) => {
+                // Only return the client to the pool if error was due to an
+                // expected server error. Otherwise, we have no way to know the
+                // state of the client and associated connection.
+                if e.kind() == ErrorKind::Protocol {
+                    $pool.put(conn).await;
+                }
+                Err(e)
+            }
+        }
+    }};
+}
+
 /// Run a method for a particular server in a spawned future.
 macro_rules! spawn_for_host {
-    ($self:ident, $method:ident, $server:expr $(, $args:expr)* $(,)?) => {{
+    ($self:ident, $server:expr, $method:ident $(, $args:expr)* $(,)?) => {{
         let pool = $self.pool.clone();
         $self.handle.spawn(async move {
-            let mut conn = pool.get($server).await?;
-            match conn.$method($($args,)*).await {
-                Ok(v) => {
-                    pool.put(conn).await;
-                    Ok(v)
-                }
-                Err(e) => {
-                    // Only return the client to the pool if error was due to an
-                    // expected server error. Otherwise, we have no way to know the
-                    // state of the client and associated connection.
-                    if e.kind() == ErrorKind::Protocol {
-                        pool.put(conn).await;
-                    }
-                    Err(e)
-                }
-            }
+            run_for_host!(pool, $server, $method, $($args,)*)
         }
         // Ensure this new future uses the same subscriber as the current one.
         .with_current_subscriber())
@@ -188,23 +196,8 @@ macro_rules! operation_for_key {
     ($self:ident, $method:ident, $key:expr $(, $args:expr)* $(,)?) => {{
         let key = Key::one($key)?;
         let server = $self.selector.server(&key)?;
-        let mut conn = $self.pool.get(&server).await?;
 
-        match conn.$method(&key, $($args,)*).await {
-            Ok(v) => {
-                $self.pool.put(conn).await;
-                Ok(v)
-            }
-            Err(e) => {
-                // Only return the client to the pool if error was due to an expected
-                // server error. Otherwise, we have no way to know the state of the client
-                // and associated connection.
-                if e.kind() == ErrorKind::Protocol {
-                    $self.pool.put(conn).await;
-                }
-                Err(e)
-            }
-        }
+        run_for_host!($self.pool, &server, $method, &key, $($args,)*)
     }};
 }
 
@@ -214,7 +207,7 @@ macro_rules! operation_for_all {
         let servers = $self.selector.servers();
         let tasks = servers
             .into_iter()
-            .map(|server| (server.id().clone(), spawn_for_host!($self, $method, &server)))
+            .map(|server| (server.id().clone(), spawn_for_host!($self, &server, $method)))
             .collect::<Vec<_>>();
 
         Ok(collect_results(tasks).await)
@@ -370,7 +363,7 @@ impl MemcachedClient {
             .enumerate()
             .map(|(i, server)| {
                 let delay = wait.map(|d| d * i as u32);
-                (server.id().clone(), spawn_for_host!(self, flush_all, &server, delay))
+                (server.id().clone(), spawn_for_host!(self, &server, flush_all, delay))
             })
             .collect::<Vec<_>>();
 
@@ -404,7 +397,7 @@ impl MemcachedClient {
 
         let tasks = by_server
             .into_iter()
-            .map(|(server, keys)| (server.id().clone(), spawn_for_host!(self, get, &server, &keys)))
+            .map(|(server, keys)| (server.id().clone(), spawn_for_host!(self, &server, get, &keys)))
             .collect::<Vec<_>>();
 
         let mut values = HashMap::with_capacity(num_keys);
