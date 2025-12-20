@@ -5,8 +5,8 @@ use crate::dns::name::Name;
 use crate::net::tcp_connect;
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig};
 use crate::timeout::Timeout;
+use async_trait::async_trait;
 use std::fmt;
-use std::future::Future;
 use std::io::{self, Cursor, Error};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
@@ -61,14 +61,15 @@ impl Default for DnsClientConfig {
 ///
 /// There is currently only a single non-test implementation because this
 /// trait exists to make testing consumers easier.
+#[async_trait]
 pub trait DnsClient {
-    fn resolve(
+    async fn resolve(
         &self,
         id: MessageId,
         name: Name,
         rtype: RecordType,
         rclass: RecordClass,
-    ) -> impl Future<Output = Result<Message, MtopError>>;
+    ) -> Result<Message, MtopError>;
 }
 
 /// Implementation of a `DnsClient` that uses UDP with TCP fallback.
@@ -82,25 +83,21 @@ pub trait DnsClient {
 /// operation. This means that a single call to `resolve` make take longer
 /// than the timeout since failed network operations are retried.
 #[derive(Debug)]
-pub struct DefaultDnsClient<U = UdpConnectionFactory, T = TcpConnectionFactory>
-where
-    U: ClientFactory<SocketAddr, UdpConnection> + Send + Sync + 'static,
-    T: ClientFactory<SocketAddr, TcpConnection> + Send + Sync + 'static,
-{
+pub struct DefaultDnsClient {
     config: DnsClientConfig,
     server_idx: AtomicUsize,
-    udp_pool: ClientPool<SocketAddr, UdpConnection, U>,
-    tcp_pool: ClientPool<SocketAddr, TcpConnection, T>,
+    udp_pool: ClientPool<SocketAddr, UdpConnection>,
+    tcp_pool: ClientPool<SocketAddr, TcpConnection>,
 }
 
-impl<U, T> DefaultDnsClient<U, T>
-where
-    U: ClientFactory<SocketAddr, UdpConnection> + Send + Sync + 'static,
-    T: ClientFactory<SocketAddr, TcpConnection> + Send + Sync + 'static,
-{
+impl DefaultDnsClient {
     /// Create a new DnsClient that will resolve names using UDP or TCP connections
     /// and behavior based on a resolv.conf configuration file.
-    pub fn new(config: DnsClientConfig, udp_factory: U, tcp_factory: T) -> Self {
+    pub fn new<U, T>(config: DnsClientConfig, udp_factory: U, tcp_factory: T) -> Self
+    where
+        U: ClientFactory<SocketAddr, UdpConnection> + Send + Sync + 'static,
+        T: ClientFactory<SocketAddr, TcpConnection> + Send + Sync + 'static,
+    {
         let udp_config = ClientPoolConfig {
             name: "dns-udp".to_owned(),
             max_idle: config.pool_max_idle,
@@ -173,11 +170,8 @@ where
     }
 }
 
-impl<U, T> DnsClient for DefaultDnsClient<U, T>
-where
-    U: ClientFactory<SocketAddr, UdpConnection> + Send + Sync + 'static,
-    T: ClientFactory<SocketAddr, TcpConnection> + Send + Sync + 'static,
-{
+#[async_trait]
+impl DnsClient for DefaultDnsClient {
     async fn resolve(
         &self,
         id: MessageId,
@@ -389,6 +383,7 @@ impl AsyncWrite for SocketAdapter {
 #[derive(Debug, Clone, Default)]
 pub struct UdpConnectionFactory;
 
+#[async_trait]
 impl ClientFactory<SocketAddr, UdpConnection> for UdpConnectionFactory {
     async fn make(&self, address: &SocketAddr) -> Result<UdpConnection, MtopError> {
         let local = if address.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
@@ -406,6 +401,7 @@ impl ClientFactory<SocketAddr, UdpConnection> for UdpConnectionFactory {
 #[derive(Debug, Clone, Default)]
 pub struct TcpConnectionFactory;
 
+#[async_trait]
 impl ClientFactory<SocketAddr, TcpConnection> for TcpConnectionFactory {
     async fn make(&self, address: &SocketAddr) -> Result<TcpConnection, MtopError> {
         let (read, write) = tcp_connect(address).await?;

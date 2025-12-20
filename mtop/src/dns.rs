@@ -1,5 +1,5 @@
 use mtop_client::MtopError;
-use mtop_client::dns::{DefaultDnsClient, DnsClientConfig, ResolvConf};
+use mtop_client::dns::{DefaultDnsClient, DnsClientConfig, ResolvConf, TcpConnectionFactory, UdpConnectionFactory};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -44,9 +44,7 @@ where
         client_config.timeout = t;
     }
 
-    // Use default instances of the UDP and TCP connection factories, alternate
-    // implementations are only useful for unit testing.
-    DefaultDnsClient::new(client_config, Default::default(), Default::default())
+    DefaultDnsClient::new(client_config, UdpConnectionFactory, TcpConnectionFactory)
 }
 
 async fn load_config<P>(resolv: P) -> Result<ResolvConf, MtopError>
