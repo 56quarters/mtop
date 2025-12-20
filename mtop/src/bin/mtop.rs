@@ -2,7 +2,8 @@ use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{TAILWIND, Theme};
 use mtop_client::{
-    Discovery, MemcachedClient, MtopError, RendezvousSelector, Server, TcpClientFactory, Timeout, TlsConfig,
+    Discovery, MemcachedClient, MemcachedClientConfig, MtopError, RendezvousSelector, Server, TcpClientFactory,
+    Timeout, TlsConfig, TlsTcpClientFactory,
 };
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::env;
@@ -212,22 +213,23 @@ async fn expand_hosts(hosts: &[String], discovery: &Discovery, timeout: Duration
 }
 
 async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
-    let tls_config = TlsConfig {
-        enabled: opts.tls_enabled,
-        ca_path: opts.tls_ca.clone(),
-        cert_path: opts.tls_cert.clone(),
-        key_path: opts.tls_key.clone(),
-        server_name: opts.tls_server_name.clone(),
-    };
-
     let selector = RendezvousSelector::new(servers.to_vec());
-    let factory = TcpClientFactory::new(tls_config).await?;
-    Ok(MemcachedClient::new(
-        Default::default(),
-        Handle::current(),
-        selector,
-        factory,
-    ))
+    let cfg = MemcachedClientConfig::default();
+
+    if opts.tls_enabled {
+        let factory = TlsTcpClientFactory::new(TlsConfig {
+            ca_path: opts.tls_ca.clone(),
+            cert_path: opts.tls_cert.clone(),
+            key_path: opts.tls_key.clone(),
+            server_name: opts.tls_server_name.clone(),
+        })
+        .await?;
+
+        Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
+    } else {
+        let factory = TcpClientFactory;
+        Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
+    }
 }
 
 #[derive(Debug)]

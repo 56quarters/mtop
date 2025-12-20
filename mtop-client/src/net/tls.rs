@@ -8,9 +8,6 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 /// Configuration for establishing a TLS connection to server with optional mTLS.
 #[derive(Debug, Clone, Default)]
 pub struct TlsConfig {
-    /// Enable TLS connections to the server.
-    pub enabled: bool,
-
     /// Path to a custom certificate authority. If not supplied, default root certificates
     /// from the `webpki_roots` crate are used.
     pub ca_path: Option<PathBuf>,

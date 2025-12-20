@@ -1,8 +1,8 @@
 #![allow(clippy::uninlined_format_args)]
 
 use mtop_client::{
-    MemcachedClient, MemcachedClientConfig, RendezvousSelector, Server, ServerID, ServersResponse, TcpClientFactory,
-    TlsConfig,
+    MemcachedClient, MemcachedClientConfig, RendezvousSelector, Server, ServerID, ServersResponse, TlsConfig,
+    TlsTcpClientFactory,
 };
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
@@ -160,7 +160,7 @@ async fn run_server(server_config: TlsServerConfig, client_config: TlsConfig) ->
     let id = ServerID::from(addr);
     let handle = tokio::spawn(server);
 
-    let factory = TcpClientFactory::new(client_config).await.unwrap();
+    let factory = TlsTcpClientFactory::new(client_config).await.unwrap();
     let selector = RendezvousSelector::new(vec![Server::new(
         id.clone(),
         ServerName::try_from("localhost").unwrap(),
@@ -183,7 +183,6 @@ async fn test_tls_client_mtls_default_roots_server() {
             ca: None,
         },
         TlsConfig {
-            enabled: true,
             ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
             cert_path: Some(test_path("certs/memcached-client-cert.pem")),
             key_path: Some(test_path("certs/memcached-client-key.pem")),
@@ -214,7 +213,6 @@ async fn test_tls_client_mtls_invalid_client_cert() {
             ca: Some(test_path("certs/memcached-ca-cert.pem")),
         },
         TlsConfig {
-            enabled: true,
             ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
             cert_path: Some(test_path("certs/memcached-bad-client-cert.pem")),
             key_path: Some(test_path("certs/memcached-bad-client-key.pem")),
@@ -245,7 +243,6 @@ async fn test_tls_client_mtls_missing_client_cert() {
             ca: Some(test_path("certs/memcached-ca-cert.pem")),
         },
         TlsConfig {
-            enabled: true,
             ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
             cert_path: None,
             key_path: None,
@@ -276,7 +273,6 @@ async fn test_tls_client_mtls_success() {
             ca: Some(test_path("certs/memcached-ca-cert.pem")),
         },
         TlsConfig {
-            enabled: true,
             ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
             cert_path: Some(test_path("certs/memcached-client-cert.pem")),
             key_path: Some(test_path("certs/memcached-client-key.pem")),
