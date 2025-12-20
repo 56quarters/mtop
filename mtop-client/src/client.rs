@@ -16,64 +16,52 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tracing::instrument::WithSubscriber;
 
 /// Implementation of a `ClientFactory` that creates new Memcached clients that
-/// use plaintext or TLS TCP connections.
+/// use TLS TCP connections.
 #[derive(Debug)]
-pub struct TcpClientFactory {
-    client_config: Option<Arc<ClientConfig>>,
+pub struct TlsTcpClientFactory {
+    client_config: Arc<ClientConfig>,
     server_name: Option<ServerName<'static>>,
 }
 
-impl TcpClientFactory {
+impl TlsTcpClientFactory {
     pub async fn new(tls: TlsConfig) -> Result<Self, MtopError> {
-        let server_name = if tls.enabled { tls.server_name.clone() } else { None };
-
-        let client_config = if tls.enabled {
-            Some(Arc::new(net::tls_client_config(tls).await?))
-        } else {
-            None
-        };
+        let server_name = tls.server_name.clone();
+        let client_config = Arc::new(net::tls_client_config(tls).await?);
 
         Ok(Self {
             client_config,
             server_name,
         })
     }
+}
 
-    fn get_server_name(&self, server: &Server) -> ServerName<'static> {
-        self.server_name.clone().unwrap_or_else(|| server.server_name().clone())
-    }
-
-    async fn connect(id: &ServerID) -> Result<Memcached, MtopError> {
-        let (read, write) = match id {
-            ServerID::Socket(sock) => net::tcp_connect(sock).await?,
-            ServerID::Name(name) => net::tcp_connect(name).await?,
-        };
-
-        Ok(Memcached::new(read, write))
-    }
-
-    async fn connect_tls(
-        id: &ServerID,
-        server_name: ServerName<'static>,
-        cfg: Arc<ClientConfig>,
-    ) -> Result<Memcached, MtopError> {
-        let (read, write) = match id {
-            ServerID::Socket(sock) => net::tcp_tls_connect(sock, server_name, cfg.clone()).await?,
-            ServerID::Name(name) => net::tcp_tls_connect(name, server_name, cfg.clone()).await?,
+#[async_trait]
+impl ClientFactory<Server, Memcached> for TlsTcpClientFactory {
+    async fn make(&self, server: &Server) -> Result<Memcached, MtopError> {
+        let server_name = self.server_name.clone().unwrap_or_else(|| server.server_name().clone());
+        let (read, write) = match server.id() {
+            ServerID::Socket(sock) => net::tcp_tls_connect(sock, server_name, self.client_config.clone()).await?,
+            ServerID::Name(name) => net::tcp_tls_connect(name, server_name, self.client_config.clone()).await?,
         };
 
         Ok(Memcached::new(read, write))
     }
 }
 
+/// Implementation of a `ClientFactory` that creates new Memcached clients that
+/// use plaintext TCP connections.
+#[derive(Debug)]
+pub struct TcpClientFactory;
+
 #[async_trait]
 impl ClientFactory<Server, Memcached> for TcpClientFactory {
-    async fn make(&self, server: &Server) -> Result<Memcached, MtopError> {
-        if let Some(cfg) = &self.client_config {
-            Self::connect_tls(server.id(), self.get_server_name(server), cfg.clone()).await
-        } else {
-            Self::connect(server.id()).await
-        }
+    async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
+        let (read, write) = match key.id() {
+            ServerID::Socket(sock) => net::tcp_connect(sock).await?,
+            ServerID::Name(name) => net::tcp_connect(name).await?,
+        };
+
+        Ok(Memcached::new(read, write))
     }
 }
 
