@@ -37,11 +37,12 @@ impl TlsTcpClientFactory {
 
 #[async_trait]
 impl ClientFactory<Server, Memcached> for TlsTcpClientFactory {
-    async fn make(&self, server: &Server) -> Result<Memcached, MtopError> {
-        let server_name = self.server_name.clone().unwrap_or_else(|| server.server_name().clone());
-        let (read, write) = match server.id() {
+    async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
+        let server_name = self.server_name.clone().unwrap_or_else(|| key.server_name().clone());
+        let (read, write) = match key.id() {
             ServerID::Socket(sock) => net::tcp_tls_connect(sock, server_name, self.client_config.clone()).await?,
             ServerID::Name(name) => net::tcp_tls_connect(name, server_name, self.client_config.clone()).await?,
+            id => panic!("unexpected {:?} passed to TlsTcpClientFactory: this is a bug", id),
         };
 
         Ok(Memcached::new(read, write))
@@ -59,6 +60,66 @@ impl ClientFactory<Server, Memcached> for TcpClientFactory {
         let (read, write) = match key.id() {
             ServerID::Socket(sock) => net::tcp_connect(sock).await?,
             ServerID::Name(name) => net::tcp_connect(name).await?,
+            id => panic!("unexpected {:?} passed to TcpClientFactory: this is a bug", id),
+        };
+
+        Ok(Memcached::new(read, write))
+    }
+}
+
+/// Implementation of a `ClientFactory` that creates new Memcached clients that
+/// use TLS UNIX socket connections.
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct TlsUnixClientFactory {
+    client_config: Arc<ClientConfig>,
+    server_name: ServerName<'static>,
+}
+
+#[cfg(unix)]
+impl TlsUnixClientFactory {
+    pub async fn new(tls: TlsConfig) -> Result<Self, MtopError> {
+        let server_name = tls
+            .server_name
+            .clone()
+            .expect("TLS server name must be explicitly configured when using TlsUnixClientFactory: this is a bug");
+
+        let client_config = Arc::new(net::tls_client_config(tls).await?);
+        Ok(Self {
+            client_config,
+            server_name,
+        })
+    }
+}
+
+#[cfg(unix)]
+#[async_trait]
+impl ClientFactory<Server, Memcached> for TlsUnixClientFactory {
+    async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
+        let (read, write) = match key.id() {
+            ServerID::Path(path) => {
+                net::unix_tls_connect(path, self.server_name.clone(), self.client_config.clone()).await?
+            }
+            id => panic!("unexpected {:?} passed to TlsUnixClientFactory: this is a bug", id),
+        };
+
+        Ok(Memcached::new(read, write))
+    }
+}
+
+/// Implementation of a `ClientFactory` that creates new Memcached clients that
+/// use plaintext UNIX socket connections.
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct UnixClientFactory;
+
+#[cfg(unix)]
+#[async_trait]
+impl ClientFactory<Server, Memcached> for UnixClientFactory {
+    async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
+        let (read, write) = match key.id() {
+            ServerID::Path(path) => net::unix_connect(path).await?,
+            id => panic!("unexpected {:?} passed to UnixClientFactory: this is a bug", id),
         };
 
         Ok(Memcached::new(read, write))
@@ -96,6 +157,7 @@ impl RendezvousSelector {
         match server.id() {
             ServerID::Name(name) => name.hash(&mut hasher),
             ServerID::Socket(addr) => addr.hash(&mut hasher),
+            ServerID::Path(path) => path.hash(&mut hasher),
         }
 
         hasher.write(key.as_ref().as_bytes());
@@ -228,11 +290,15 @@ async fn collect_results<T>(tasks: Vec<(ServerID, JoinHandle<Result<T, MtopError
 #[derive(Debug, Clone)]
 pub struct MemcachedClientConfig {
     pub pool_max_idle: u64,
+    pub pool_name: String,
 }
 
 impl Default for MemcachedClientConfig {
     fn default() -> Self {
-        Self { pool_max_idle: 4 }
+        Self {
+            pool_max_idle: 4,
+            pool_name: "memcached-tcp".to_owned(),
+        }
     }
 }
 
@@ -257,7 +323,7 @@ impl MemcachedClient {
         F: ClientFactory<Server, Memcached> + Send + Sync + 'static,
     {
         let pool_config = ClientPoolConfig {
-            name: "memcached-tcp".to_owned(),
+            name: config.pool_name,
             max_idle: config.pool_max_idle,
         };
 
@@ -559,7 +625,7 @@ mod test {
 
     macro_rules! new_client {
         () => {{
-            let cfg = MemcachedClientConfig { pool_max_idle: 1 };
+            let cfg = MemcachedClientConfig::default();
             let handle = Handle::current();
             let selector = MockSelector::default();
             let factory = MockClientFactory::default();
@@ -583,7 +649,7 @@ mod test {
             contents.insert(server, $contents.to_vec());
             )*
 
-            let cfg = MemcachedClientConfig { pool_max_idle: 1 };
+            let cfg = MemcachedClientConfig::default();
             let handle = Handle::current();
             let selector = MockSelector { mapping };
             let factory = MockClientFactory { contents };

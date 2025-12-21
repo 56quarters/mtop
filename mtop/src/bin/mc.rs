@@ -353,6 +353,7 @@ async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClie
     let selector = RendezvousSelector::new(servers.to_vec());
     let cfg = MemcachedClientConfig {
         pool_max_idle: opts.connections.get(),
+        ..Default::default()
     };
 
     if opts.tls_enabled {
