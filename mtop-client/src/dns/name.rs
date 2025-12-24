@@ -200,14 +200,6 @@ impl Name {
             return Ok(Self::root());
         }
 
-        if bytes.len() > Self::MAX_LENGTH {
-            return Err(MtopError::configuration(format!(
-                "Name too long; max {} bytes, got {}",
-                Self::MAX_LENGTH,
-                bytes.len()
-            )));
-        }
-
         // Trim any trailing dot from the domain which indicates that it is fully qualified
         // and make a note of it. This is required since we're splitting the domain into each
         // individual label and need to know how to construct the correct string form afterward.
@@ -215,6 +207,17 @@ impl Name {
             Some(stripped) => (stripped, true),
             None => (bytes, false),
         };
+
+        // We add 2 to the length in bytes of the name since we need to account for the
+        // byte used for the length of the first label when in encoded form (as opposed
+        // to the text form using ASCII bytes) and the dot used to encode the root.
+        if bytes.len() + 2 > Self::MAX_LENGTH {
+            return Err(MtopError::configuration(format!(
+                "Name too long; max {} bytes, got {}",
+                Self::MAX_LENGTH,
+                bytes.len()
+            )));
+        }
 
         // Start with space for 4 labels which covers the size of typical domains.
         let mut labels = Vec::with_capacity(4);
@@ -290,15 +293,43 @@ mod test {
     use std::str::FromStr;
 
     #[test]
-    fn test_name_from_str_max_length() {
+    fn test_name_from_str_error_max_length_fqdn() {
         let parts = [
             "a".repeat(Name::MAX_LABEL_LENGTH),
             "b".repeat(Name::MAX_LABEL_LENGTH),
             "c".repeat(Name::MAX_LABEL_LENGTH),
-            "d".repeat(Name::MAX_LABEL_LENGTH),
-            "com.".to_owned(),
+            "d".repeat(Name::MAX_LABEL_LENGTH - 1),
         ];
-        let res = Name::from_str(&parts.join("."));
+
+        let complete = {
+            let mut s = parts.join(".");
+            s.push('.');
+            s
+        };
+
+        // We're testing a name with:
+        // 1b + 63b + 1b + 63b + 1b + 63b + 1b + 62b + 1b = 256b
+        // One byte for the length of each label and one byte for the root.
+        let res = Name::from_str(&complete);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_name_from_str_error_max_length_not_fqdn() {
+        let parts = [
+            "a".repeat(Name::MAX_LABEL_LENGTH),
+            "b".repeat(Name::MAX_LABEL_LENGTH),
+            "c".repeat(Name::MAX_LABEL_LENGTH),
+            "d".repeat(Name::MAX_LABEL_LENGTH - 1),
+        ];
+
+        let complete = parts.join(".");
+
+        // We're testing a name with:
+        // 1b + 63b + 1b + 63b + 1b + 63b + 1b + 62b = 255b
+        // that _omits_ the root from the end of the Name. We still need to
+        // validate that the Name is under the length limit including the root.
+        let res = Name::from_str(&complete);
         assert!(res.is_err());
     }
 
