@@ -14,6 +14,8 @@ pub use crate::client::{
     MemcachedClient, MemcachedClientConfig, RendezvousSelector, Selector, ServersResponse, TcpClientFactory,
     TlsTcpClientFactory, ValuesResponse,
 };
+#[cfg(unix)]
+pub use crate::client::{TlsUnixClientFactory, UnixClientFactory};
 pub use crate::core::{
     ErrorKind, Key, Memcached, Meta, MtopError, ProtocolError, ProtocolErrorKind, Slab, SlabItem, SlabItems, Slabs,
     Stats, Value,

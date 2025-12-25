@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 
 const DNS_A_PREFIX: &str = "dns+";
 const DNS_SRV_PREFIX: &str = "dnssrv+";
@@ -15,6 +16,7 @@ const DNS_SRV_PREFIX: &str = "dnssrv+";
 pub enum ServerID {
     Name(String),
     Socket(SocketAddr),
+    Path(PathBuf),
 }
 
 impl ServerID {
@@ -54,6 +56,7 @@ impl fmt::Display for ServerID {
         match self {
             ServerID::Name(n) => n.fmt(f),
             ServerID::Socket(s) => s.fmt(f),
+            ServerID::Path(p) => fmt::Debug::fmt(p, f),
         }
     }
 }
