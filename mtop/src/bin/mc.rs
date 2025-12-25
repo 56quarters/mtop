@@ -111,7 +111,7 @@ struct AddCommand {
     /// in 30 days, it will be treated as a UNIX timestamp, setting the item to expire at a
     /// particular date/time.
     #[arg(required = true)]
-    ttl: u32,
+    ttl_secs: u32,
 }
 
 /// Run a benchmark against the cache.
@@ -254,7 +254,7 @@ struct ReplaceCommand {
     /// in 30 days, it will be treated as a UNIX timestamp, setting the item to expire at a
     /// particular date/time.
     #[arg(required = true)]
-    ttl: u32,
+    ttl_secs: u32,
 }
 
 /// Set a value in the cache.
@@ -271,7 +271,7 @@ struct SetCommand {
     /// in 30 days, it will be treated as a UNIX timestamp, setting the item to expire at a
     /// particular date/time.
     #[arg(required = true)]
-    ttl: u32,
+    ttl_secs: u32,
 }
 
 /// Update the TTL of an item in the cache.
@@ -286,7 +286,7 @@ struct TouchCommand {
     /// in 30 days, it will be treated as a UNIX timestamp, setting the item to expire at a
     /// particular date/time.
     #[arg(required = true)]
-    ttl: u32,
+    ttl_secs: u32,
 }
 
 #[tokio::main]
@@ -396,7 +396,7 @@ async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) ->
     };
 
     if let Err(e) = client
-        .add(&cmd.key, 0, cmd.ttl, &buf)
+        .add(&cmd.key, 0, cmd.ttl_secs, &buf)
         .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.add")
         .instrument(tracing::span!(Level::INFO, "client.add"))
         .await
@@ -604,7 +604,7 @@ async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedCl
     };
 
     if let Err(e) = client
-        .replace(&cmd.key, 0, cmd.ttl, &buf)
+        .replace(&cmd.key, 0, cmd.ttl_secs, &buf)
         .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.replace")
         .instrument(tracing::span!(Level::INFO, "client.replace"))
         .await
@@ -626,7 +626,7 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) ->
     };
 
     if let Err(e) = client
-        .set(&cmd.key, 0, cmd.ttl, &buf)
+        .set(&cmd.key, 0, cmd.ttl_secs, &buf)
         .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.set")
         .instrument(tracing::span!(Level::INFO, "client.set"))
         .await
@@ -640,7 +640,7 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) ->
 
 async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
-        .touch(&cmd.key, cmd.ttl)
+        .touch(&cmd.key, cmd.ttl_secs)
         .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.touch")
         .instrument(tracing::span!(Level::INFO, "client.touch"))
         .await
