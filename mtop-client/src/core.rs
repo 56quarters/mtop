@@ -1024,7 +1024,10 @@ impl Memcached {
 
 impl fmt::Debug for Memcached {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Memcached {{ read: <...>, write: <...> }}")
+        f.debug_struct("Memcached")
+            .field("read", &"...")
+            .field("write", &"...")
+            .finish()
     }
 }
 

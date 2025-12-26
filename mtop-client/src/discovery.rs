@@ -65,19 +65,23 @@ impl fmt::Display for ServerID {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Server {
     id: ServerID,
-    name: ServerName<'static>,
+    name: Option<ServerName<'static>>,
 }
 
 impl Server {
     pub fn new(id: ServerID, name: ServerName<'static>) -> Self {
-        Self { id, name }
+        Self { id, name: Some(name) }
+    }
+
+    pub fn without_name(id: ServerID) -> Self {
+        Self { id, name: None }
     }
 
     pub fn id(&self) -> &ServerID {
         &self.id
     }
 
-    pub fn server_name(&self) -> &ServerName<'static> {
+    pub fn server_name(&self) -> &Option<ServerName<'static>> {
         &self.name
     }
 }
