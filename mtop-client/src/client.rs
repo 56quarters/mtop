@@ -38,7 +38,12 @@ impl TlsTcpClientFactory {
 #[async_trait]
 impl ClientFactory<Server, Memcached> for TlsTcpClientFactory {
     async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
-        let server_name = self.server_name.clone().unwrap_or_else(|| key.server_name().clone());
+        let server_name = self
+            .server_name
+            .clone()
+            .or_else(|| key.server_name().clone())
+            .expect("TLS server name must be set on each server when using TlsTcpClientFactory: this is a bug");
+
         let (read, write) = match key.id() {
             ServerID::Socket(sock) => net::tcp_tls_connect(sock, server_name, self.client_config.clone()).await?,
             ServerID::Name(name) => net::tcp_tls_connect(name, server_name, self.client_config.clone()).await?,
