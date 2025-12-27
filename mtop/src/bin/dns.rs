@@ -181,7 +181,7 @@ async fn run_ping(cmd: &PingCommand) -> ExitCode {
         cmd.nameserver,
         cmd.nameserver_timeout_secs.map(|v| Duration::from_secs(v.get())),
     )
-    .instrument(tracing::span!(Level::INFO, "dns.new_client"))
+    .instrument(tracing::span!(Level::INFO, "dns::new_client"))
     .await;
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -200,12 +200,12 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
         cmd.nameserver,
         cmd.nameserver_timeout_secs.map(|v| Duration::from_secs(v.get())),
     )
-    .instrument(tracing::span!(Level::INFO, "dns.new_client"))
+    .instrument(tracing::span!(Level::INFO, "dns::new_client"))
     .await;
 
     let response = match client
         .resolve(MessageId::random(), cmd.name.clone(), cmd.rtype, cmd.rclass)
-        .instrument(tracing::span!(Level::INFO, "client.resolve"))
+        .instrument(tracing::span!(Level::INFO, "dns_client.resolve"))
         .await
     {
         Ok(r) => r,

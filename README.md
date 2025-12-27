@@ -104,8 +104,17 @@ starts.
 Some examples of invoking `mtop` are given below.
 
 ### Connecting to a local server
+
 ```
 mtop localhost:11211
+```
+
+### Connecting to a local server via UNIX socket
+
+When Memcached is listening on a UNIX socket via `memcached --unix-socket /tmp/memcached.sock`:
+
+```
+mtop /tmp/memcached.sock
 ```
 
 ### Connecting to multiple servers

@@ -4,6 +4,7 @@
 
 pub mod bench;
 pub mod check;
+pub mod discovery;
 pub mod dns;
 pub mod ping;
 pub mod profile;

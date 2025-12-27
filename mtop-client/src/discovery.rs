@@ -1,5 +1,5 @@
 use crate::core::MtopError;
-use crate::dns::{DefaultDnsClient, DnsClient, Message, MessageId, Name, RecordClass, RecordData, RecordType};
+use crate::dns::{DnsClient, Message, MessageId, Name, RecordClass, RecordData, RecordType};
 use rustls_pki_types::ServerName;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 const DNS_A_PREFIX: &str = "dns+";
 const DNS_SRV_PREFIX: &str = "dnssrv+";
+const UNIX_SOCKET_PREFIX: &str = "/";
 
 /// Unique ID and address for a server in a Memcached cluster for indexing responses
 /// or errors and establishing connections.
@@ -108,24 +109,22 @@ impl fmt::Display for Server {
 ///
 /// Different types of DNS records and different behaviors are used based on the
 /// presence of specific prefixes for hostnames. See `resolve_by_proto` for details.
-#[derive(Debug)]
-pub struct Discovery<C = DefaultDnsClient>
-where
-    C: DnsClient + Send + Sync + 'static,
-{
-    client: C,
+pub struct Discovery {
+    client: Box<dyn DnsClient + Send + Sync>,
 }
 
-impl<C> Discovery<C>
-where
-    C: DnsClient + Send + Sync + 'static,
-{
-    pub fn new(client: C) -> Self {
-        Self { client }
+impl Discovery {
+    pub fn new<C>(client: C) -> Self
+    where
+        C: DnsClient + Send + Sync + 'static,
+    {
+        Self {
+            client: Box::new(client),
+        }
     }
 
     /// Resolve a hostname to one or multiple Memcached servers based on DNS records
-    /// and the presence of `proto+` prefixes on the hostnames.
+    /// and/or the presence of certain prefixes on the hostnames.
     ///
     /// * `dns+` will resolve a hostname into multiple A and AAAA records and use the
     ///   IP addresses from the records as Memcached servers.
@@ -133,6 +132,8 @@ where
     ///   unresolved targets from the SRV records as Memcached servers. Resolution of
     ///   the targets to IP addresses will happen at connection time using the system
     ///   resolver.
+    /// * `/` will resolve a hostname into a UNIX socket path and will use this path
+    ///   as a local Memcached server on a UNIX socket.
     /// * No prefix with an IPv4 or IPv6 address will use the IP address as a Memcached
     ///   server.
     /// * No prefix with a non-IP address will use the host as a Memcached server.
@@ -143,10 +144,12 @@ where
             Ok(self.resolve_a_aaaa(name.trim_start_matches(DNS_A_PREFIX)).await?)
         } else if name.starts_with(DNS_SRV_PREFIX) {
             Ok(self.resolve_srv(name.trim_start_matches(DNS_SRV_PREFIX)).await?)
+        } else if name.starts_with(UNIX_SOCKET_PREFIX) {
+            Ok(Self::resolve_unix_addr(name))
         } else if let Ok(addr) = name.parse::<SocketAddr>() {
-            Ok(Self::resolv_socket_addr(name, addr)?)
+            Ok(Self::resolve_socket_addr(name, addr)?)
         } else {
-            Ok(Self::resolv_bare_host(name)?)
+            Ok(Self::resolve_bare_host(name)?)
         }
     }
 
@@ -175,13 +178,18 @@ where
         Ok(out)
     }
 
-    fn resolv_socket_addr(name: &str, addr: SocketAddr) -> Result<Vec<Server>, MtopError> {
+    fn resolve_unix_addr(name: &str) -> Vec<Server> {
+        let path = PathBuf::from(name);
+        vec![Server::without_name(ServerID::Path(path))]
+    }
+
+    fn resolve_socket_addr(name: &str, addr: SocketAddr) -> Result<Vec<Server>, MtopError> {
         let (host, _port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
         Ok(vec![Server::new(ServerID::from(addr), server_name)])
     }
 
-    fn resolv_bare_host(name: &str) -> Result<Vec<Server>, MtopError> {
+    fn resolve_bare_host(name: &str) -> Result<Vec<Server>, MtopError> {
         let (host, port) = Self::host_and_port(name)?;
         let server_name = Self::server_name(host)?;
         Ok(vec![Server::new(ServerID::from((host, port)), server_name)])
@@ -244,6 +252,12 @@ where
         ServerName::try_from(host)
             .map(|s| s.to_owned())
             .map_err(|e| MtopError::configuration_cause(format!("invalid server name '{}'", host), e))
+    }
+}
+
+impl fmt::Debug for Discovery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Discovery").field("client", &"...").finish()
     }
 }
 

@@ -73,46 +73,6 @@ impl ClientFactory<Server, Memcached> for TcpClientFactory {
 }
 
 /// Implementation of a `ClientFactory` that creates new Memcached clients that
-/// use TLS UNIX socket connections.
-#[cfg(unix)]
-#[derive(Debug)]
-pub struct TlsUnixClientFactory {
-    client_config: Arc<ClientConfig>,
-    server_name: ServerName<'static>,
-}
-
-#[cfg(unix)]
-impl TlsUnixClientFactory {
-    pub async fn new(tls: TlsConfig) -> Result<Self, MtopError> {
-        let server_name = tls
-            .server_name
-            .clone()
-            .expect("TLS server name must be explicitly configured when using TlsUnixClientFactory: this is a bug");
-
-        let client_config = Arc::new(net::tls_client_config(tls).await?);
-        Ok(Self {
-            client_config,
-            server_name,
-        })
-    }
-}
-
-#[cfg(unix)]
-#[async_trait]
-impl ClientFactory<Server, Memcached> for TlsUnixClientFactory {
-    async fn make(&self, key: &Server) -> Result<Memcached, MtopError> {
-        let (read, write) = match key.id() {
-            ServerID::Path(path) => {
-                net::unix_tls_connect(path, self.server_name.clone(), self.client_config.clone()).await?
-            }
-            id => panic!("unexpected {:?} passed to TlsUnixClientFactory: this is a bug", id),
-        };
-
-        Ok(Memcached::new(read, write))
-    }
-}
-
-/// Implementation of a `ClientFactory` that creates new Memcached clients that
 /// use plaintext UNIX socket connections.
 #[cfg(unix)]
 #[derive(Debug)]

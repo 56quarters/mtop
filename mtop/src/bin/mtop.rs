@@ -1,10 +1,7 @@
 use clap::{Parser, ValueHint};
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{TAILWIND, Theme};
-use mtop_client::{
-    Discovery, MemcachedClient, MemcachedClientConfig, MtopError, RendezvousSelector, Server, TcpClientFactory,
-    Timeout, TlsConfig, TlsTcpClientFactory,
-};
+use mtop_client::{Discovery, MemcachedClient, MtopError, Server, Timeout, TlsConfig};
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::env;
 use std::num::NonZeroU64;
@@ -40,6 +37,10 @@ struct MtopConfig {
     #[arg(long, env = "MTOP_TIMEOUT_SECS", default_value_t = NonZeroU64::new(5).unwrap())]
     timeout_secs: NonZeroU64,
 
+    /// Maximum number of idle connections to maintain per host.
+    #[arg(long, env = "MTOP_CONNECTIONS", default_value_t = NonZeroU64::new(2).unwrap())]
+    connections: NonZeroU64,
+
     /// File to log errors to since they cannot be logged to the console. If the path is not
     /// writable, mtop will not start.
     #[arg(long, env = "MTOP_LOG_FILE", default_value = default_log_file().into_os_string(), value_hint = ValueHint::FilePath)]
@@ -73,16 +74,35 @@ struct MtopConfig {
     #[arg(long, env = "MTOP_TLS_KEY", requires = "tls_cert", value_hint = ValueHint::FilePath)]
     tls_key: Option<PathBuf>,
 
-    /// Memcached hosts to connect to in the form 'hostname:port'. Must be specified at least
-    /// once and may be used multiple times (separated by spaces).
+    /// Memcached hosts to connect to in the form 'hostname:port' or an absolute path to a UNIX
+    /// socket starting with a `/`. Must be specified at least once and may be used multiple times
+    /// (separated by spaces). All hosts must all be 'hostname:port' or all be UNIX sockets, the
+    /// two types of servers cannot be mixed.
     ///
-    /// Hostnames may be prefixed by the strings 'dns+' or 'dnssrv+'. When prefixed with 'dns+',
-    /// the hostname will be resolved to A or AAAA records and each IP address will be connected
-    /// to at the provided port. When prefixed with 'dnssrv+', the hostname will be resolved to
-    /// SRV records and the target of each record will be connected to at the provided port. Note
-    /// that the port from the SRV record is ignored.
+    /// Network hostnames may be prefixed by the strings 'dns+' or 'dnssrv+'. When prefixed with
+    /// 'dns+', the hostname will be resolved to A or AAAA records and each IP address will be
+    /// connected to at the provided port. When prefixed with 'dnssrv+', the hostname will be
+    /// resolved to SRV records and the target of each record will be connected to at the provided
+    /// port. Note that the port from the SRV record is ignored.
     #[arg(required = true, value_hint = ValueHint::Hostname)]
     hosts: Vec<String>,
+}
+
+impl TryInto<TlsConfig> for &MtopConfig {
+    type Error = ();
+
+    fn try_into(self) -> Result<TlsConfig, Self::Error> {
+        if self.tls_enabled {
+            Ok(TlsConfig {
+                ca_path: self.tls_ca.clone(),
+                cert_path: self.tls_cert.clone(),
+                key_path: self.tls_key.clone(),
+                server_name: self.tls_server_name.clone(),
+            })
+        } else {
+            Err(())
+        }
+    }
 }
 
 fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {
@@ -116,7 +136,7 @@ async fn main() -> ExitCode {
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let discovery = Discovery::new(dns_client);
 
-    let servers = match expand_hosts(&opts.hosts, &discovery, timeout).await {
+    let servers = match mtop::discovery::resolve(&opts.hosts, &discovery, timeout).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(message = "unable to resolve host names", hosts = ?opts.hosts, error = %e);
@@ -129,7 +149,7 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let client = match new_client(&opts, &servers).await {
+    let client = match mtop::discovery::new_client(&servers, opts.connections.get(), (&opts).try_into().ok()).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(message = "unable to initialize memcached client", hosts = fmt_servers(&servers), err = %e);
@@ -191,45 +211,6 @@ async fn main() -> ExitCode {
 fn fmt_servers(servers: &[Server]) -> String {
     let ids: Vec<String> = servers.iter().map(|s| s.id().to_string()).collect();
     format!("[{}]", ids.join(", "))
-}
-
-/// Perform DNS resolution on provided hostnames, expanding any "dns+" or "dnssrv+" prefixed
-/// hosts that have multiple A, AAAA, or SRV records.
-async fn expand_hosts(hosts: &[String], discovery: &Discovery, timeout: Duration) -> Result<Vec<Server>, MtopError> {
-    let mut out = Vec::with_capacity(hosts.len());
-
-    for host in hosts {
-        out.extend(
-            discovery
-                .resolve_by_proto(host)
-                .timeout(timeout, "discovery.resolve_by_proto")
-                .instrument(tracing::span!(Level::INFO, "discovery.resolve_by_proto"))
-                .await?,
-        );
-    }
-
-    out.sort();
-    Ok(out)
-}
-
-async fn new_client(opts: &MtopConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
-    let selector = RendezvousSelector::new(servers.to_vec());
-    let cfg = MemcachedClientConfig::default();
-
-    if opts.tls_enabled {
-        let factory = TlsTcpClientFactory::new(TlsConfig {
-            ca_path: opts.tls_ca.clone(),
-            cert_path: opts.tls_cert.clone(),
-            key_path: opts.tls_key.clone(),
-            server_name: opts.tls_server_name.clone(),
-        })
-        .await?;
-
-        Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
-    } else {
-        let factory = TcpClientFactory;
-        Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
-    }
 }
 
 #[derive(Debug)]
