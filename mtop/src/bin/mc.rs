@@ -2,10 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Bundle, Checker};
 use mtop::profile;
-use mtop_client::{
-    Discovery, MemcachedClient, MemcachedClientConfig, Meta, MtopError, RendezvousSelector, Server, TcpClientFactory,
-    Timeout, TlsConfig, TlsTcpClientFactory, Value,
-};
+use mtop_client::{Discovery, MemcachedClient, Meta, MtopError, Timeout, TlsConfig, Value};
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
@@ -32,7 +29,8 @@ struct McConfig {
     #[arg(long, env = "MC_RESOLV_CONF", default_value = "/etc/resolv.conf", value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
-    /// Memcached host to connect to in the form 'hostname:port'.
+    /// Memcached hosts to connect to in the form 'hostname:port' or an absolute path to a UNIX
+    /// socket starting with a `/`.
     #[arg(long, env = "MC_HOST", default_value = "localhost:11211", value_hint = ValueHint::Hostname)]
     host: String,
 
@@ -75,6 +73,23 @@ struct McConfig {
 
     #[command(subcommand)]
     mode: Action,
+}
+
+impl TryInto<TlsConfig> for &McConfig {
+    type Error = ();
+
+    fn try_into(self) -> Result<TlsConfig, Self::Error> {
+        if self.tls_enabled {
+            Ok(TlsConfig {
+                ca_path: self.tls_ca.clone(),
+                cert_path: self.tls_cert.clone(),
+                key_path: self.tls_key.clone(),
+                server_name: self.tls_server_name.clone(),
+            })
+        } else {
+            Err(())
+        }
+    }
 }
 
 fn parse_server_name(s: &str) -> Result<ServerName<'static>, InvalidDnsNameError> {
@@ -300,12 +315,7 @@ async fn main() -> ExitCode {
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let discovery = Discovery::new(dns_client);
     let timeout = Duration::from_secs(opts.timeout_secs.get());
-    let servers = match discovery
-        .resolve_by_proto(&opts.host)
-        .timeout(timeout, "discovery.resolve_by_proto")
-        .instrument(tracing::span!(Level::INFO, "discovery.resolve_by_proto"))
-        .await
-    {
+    let servers = match mtop::discovery::resolve_single(&opts.host, &discovery, timeout).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(message = "unable to resolve host names", hosts = ?opts.host, err = %e);
@@ -313,7 +323,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    let client = match new_client(&opts, &servers).await {
+    let client = match mtop::discovery::new_client(&servers, opts.connections.get(), (&opts).try_into().ok()).await {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(message = "unable to initialize memcached client", host = opts.host, err = %e);
@@ -347,29 +357,6 @@ async fn main() -> ExitCode {
     }
 
     code
-}
-
-async fn new_client(opts: &McConfig, servers: &[Server]) -> Result<MemcachedClient, MtopError> {
-    let selector = RendezvousSelector::new(servers.to_vec());
-    let cfg = MemcachedClientConfig {
-        pool_max_idle: opts.connections.get(),
-        ..Default::default()
-    };
-
-    if opts.tls_enabled {
-        let factory = TlsTcpClientFactory::new(TlsConfig {
-            ca_path: opts.tls_ca.clone(),
-            cert_path: opts.tls_cert.clone(),
-            key_path: opts.tls_key.clone(),
-            server_name: opts.tls_server_name.clone(),
-        })
-        .await?;
-
-        Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
-    } else {
-        let factory = TcpClientFactory;
-        Ok(MemcachedClient::new(cfg, Handle::current(), selector, factory))
-    }
 }
 
 async fn connect(client: &MemcachedClient, timeout: Duration) -> Result<(), MtopError> {

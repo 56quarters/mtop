@@ -41,7 +41,7 @@ impl DnsPinger {
             match self
                 .client
                 .resolve(MessageId::random(), name.clone(), rtype, rclass)
-                .instrument(tracing::span!(Level::INFO, "client.resolve"))
+                .instrument(tracing::span!(Level::INFO, "dns_client.resolve"))
                 .await
             {
                 Ok(r) => {
