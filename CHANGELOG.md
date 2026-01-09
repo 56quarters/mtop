@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.16.1 - 2026-01-08
+## v0.16.2 - 2026-01-08
 
 - Add support for connecting to Memcached servers over UNIX sockets. #233 #234 #236 #237
 
