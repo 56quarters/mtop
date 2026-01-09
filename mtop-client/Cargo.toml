@@ -1,6 +1,6 @@
 [package]
 name = "mtop-client"
-version = "0.16.0"
+version = "0.16.1"
 authors = ["Nick Pillitteri"]
 description = "Memcached client for mtop"
 homepage = "https://github.com/56quarters/mtop"

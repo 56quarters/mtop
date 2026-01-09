@@ -1,6 +1,6 @@
 [package]
 name = "mtop"
-version = "0.16.0"
+version = "0.16.1"
 authors = ["Nick Pillitteri"]
 description = "mtop: top for Memcached"
 homepage = "https://github.com/56quarters/mtop"
@@ -13,7 +13,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.40", default-features = false, features = ["cargo", "derive", "env", "help", "error-context", "std", "string", "usage", "wrap_help"] }
 crossterm = "0.29.0"
-mtop-client = { path = "../mtop-client", version = "0.16.0" }
+mtop-client = { path = "../mtop-client", version = "0.16.1" }
 rand = "0.9.1"
 rand_distr = "0.5.1"
 rustls-pki-types = "1.12.0"
