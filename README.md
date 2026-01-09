@@ -117,6 +117,8 @@ When Memcached is listening on a UNIX socket via `memcached --unix-socket /tmp/m
 mtop /tmp/memcached.sock
 ```
 
+Note that paths to UNIX sockets _must_ be absolute (start with `/`).
+
 ### Connecting to multiple servers
 
 ```

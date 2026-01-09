@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.16.0 - 2026-01-08
+
+- Add support for connecting to Memcached servers over UNIX sockets. #233 #234 #236 #237
+
 ## v0.15.0 - 2025-06-26
 
 - Change retry behavior of DNS lookups (used for the `dns` binary and cache server
