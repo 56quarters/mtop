@@ -22,9 +22,14 @@ pr-run-mode = "plan"
 unix-archive = ".tar.gz"
 
 [workspace.metadata.dist.github-custom-runners]
-# Update to newer runners since ubuntu-20.04 is EOL for Github actions
+# macos-13 is EOL for Github actions
+aarch64-apple-darwin = "macos-15"
+x86_64-apple-darwin = "macos-15-intel"
+# ubuntu-20.04 is EOL for Github actions
 x86_64-unknown-linux-gnu = "ubuntu-22.04"
 x86_64-unknown-linux-musl = "ubuntu-22.04"
+# windows-2019 uses a version of Rust too old for mtop and some of our dependencies (1.87)
+x86_64-pc-windows-msvc = "windows-2025"
 global = "ubuntu-22.04"
 
 # The profile that 'cargo dist' will build with
