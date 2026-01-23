@@ -52,6 +52,12 @@ impl From<(String, u16)> for ServerID {
     }
 }
 
+impl From<PathBuf> for ServerID {
+    fn from(value: PathBuf) -> Self {
+        Self::Path(value)
+    }
+}
+
 impl fmt::Display for ServerID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -180,7 +186,7 @@ impl Discovery {
 
     fn resolve_unix_addr(name: &str) -> Vec<Server> {
         let path = PathBuf::from(name);
-        vec![Server::without_name(ServerID::Path(path))]
+        vec![Server::without_name(ServerID::from(path))]
     }
 
     fn resolve_socket_addr(name: &str, addr: SocketAddr) -> Result<Vec<Server>, MtopError> {
