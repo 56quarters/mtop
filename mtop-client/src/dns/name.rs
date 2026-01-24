@@ -72,16 +72,17 @@ impl Name {
     where
         T: ReadBytesExt + Seek,
     {
-        let mut name = Vec::new();
-        Self::read_inner(&mut inp, &mut name)?;
-        Self::from_bytes(&name)
+        let mut labels = Vec::new();
+        Self::read_inner(&mut inp, &mut labels)?;
+
+        Ok(Self { labels, is_fqdn: true })
     }
 
     /// Read the DNS message format bytes for a `Name` and write them to `out`,
     /// following any pointers (how names are compressed in DNS messages). The
     /// bytes written to `out` are ASCII characters of the text representation
     /// of the name, e.g. `"example.com.".as_bytes()`.
-    fn read_inner<T>(inp: &mut T, out: &mut Vec<u8>) -> Result<(), MtopError>
+    fn read_inner<T>(inp: &mut T, out: &mut Vec<Vec<u8>>) -> Result<(), MtopError>
     where
         T: ReadBytesExt + Seek,
     {
@@ -115,15 +116,17 @@ impl Name {
                 // If the length is a length, read the next label (segment) of the name
                 // returning early once we read the "root" label (`.`) signified by a
                 // length of 0.
-                if Self::read_label_into(inp, len, out)? {
+                let mut label = Vec::with_capacity(usize::from(len));
+                if Self::read_label_into(inp, len, &mut label)? {
                     if let Some(p) = position {
                         // If we followed a pointer to different part of the message while
                         // parsing this name, seek to the position immediately after the
                         // pointer now that we've finished parsing this name.
                         inp.seek(SeekFrom::Start(p))?;
                     }
-
                     return Ok(());
+                } else {
+                    out.push(label);
                 }
             } else {
                 // Binary labels are deprecated (RFC 6891) and there are (currently) no other
@@ -170,8 +173,33 @@ impl Name {
             )));
         }
 
-        out.push(b'.');
+        Self::validate_label(out)?;
+        out.make_ascii_lowercase();
         Ok(false)
+    }
+
+    fn validate_label(label: &[u8]) -> Result<(), MtopError> {
+        for (i, b) in label.iter().enumerate() {
+            let c = char::from(*b);
+            if i == 0 && c != '_' && !c.is_ascii_alphanumeric() {
+                return Err(MtopError::configuration(format!(
+                    "label must begin with ASCII letter, number, or underscore; got {}",
+                    c
+                )));
+            } else if i == label.len() - 1 && !c.is_ascii_alphanumeric() {
+                return Err(MtopError::configuration(format!(
+                    "label must end with ASCII letter or number; got {}",
+                    c
+                )));
+            } else if c != '-' && c != '_' && !c.is_ascii_alphanumeric() {
+                return Err(MtopError::configuration(format!(
+                    "label must be ASCII letter, number, hyphen, or underscore; got {}",
+                    c
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     fn is_standard_label(len: u8) -> bool {
@@ -223,36 +251,15 @@ impl Name {
         let mut labels = Vec::with_capacity(4);
 
         for label in bytes.split(|&b| b == b'.') {
-            let label_len = label.len();
-
-            if label_len > Self::MAX_LABEL_LENGTH {
+            if label.len() > Self::MAX_LABEL_LENGTH {
                 return Err(MtopError::configuration(format!(
                     "label too long; max {} bytes, got {}",
                     Self::MAX_LABEL_LENGTH,
-                    label_len,
+                    label.len(),
                 )));
             }
 
-            for (i, b) in label.iter().enumerate() {
-                let c = char::from(*b);
-                if i == 0 && c != '_' && !c.is_ascii_alphanumeric() {
-                    return Err(MtopError::configuration(format!(
-                        "label must begin with ASCII letter, number, or underscore; got {}",
-                        c
-                    )));
-                } else if i == label_len - 1 && !c.is_ascii_alphanumeric() {
-                    return Err(MtopError::configuration(format!(
-                        "label must end with ASCII letter or number; got {}",
-                        c
-                    )));
-                } else if c != '-' && c != '_' && !c.is_ascii_alphanumeric() {
-                    return Err(MtopError::configuration(format!(
-                        "label must be ASCII letter, number, hyphen, or underscore; got {}",
-                        c
-                    )));
-                }
-            }
-
+            Self::validate_label(label)?;
             labels.push(label.to_ascii_lowercase());
         }
 
@@ -311,7 +318,7 @@ mod test {
         // 1b + 63b + 1b + 63b + 1b + 63b + 1b + 62b + 1b = 256b
         // One byte for the length of each label and one byte for the root.
         let res = Name::from_str(&complete);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[test]
@@ -330,32 +337,32 @@ mod test {
         // that _omits_ the root from the end of the Name. We still need to
         // validate that the Name is under the length limit including the root.
         let res = Name::from_str(&complete);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[test]
     fn test_name_from_str_error_max_label() {
         let parts = ["a".repeat(Name::MAX_LABEL_LENGTH + 1), "com.".to_owned()];
         let res = Name::from_str(&parts.join("."));
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[test]
     fn test_name_from_str_error_bad_label_start() {
         let res = Name::from_str("-example.com.");
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[test]
     fn test_name_from_str_error_bad_label_end() {
         let res = Name::from_str("example-.com.");
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[test]
     fn test_name_from_str_error_bad_label_char() {
         let res = Name::from_str("exa%mple.com.");
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[test]
@@ -589,7 +596,7 @@ mod test {
         ]);
 
         let res = Name::read_network_bytes(cur);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[rustfmt::skip]
@@ -608,7 +615,7 @@ mod test {
         cur.set_position(10);
 
         let res = Name::read_network_bytes(&mut cur);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[rustfmt::skip]
@@ -690,6 +697,60 @@ mod test {
         assert_eq!(25, cur.position());
     }
 
+    #[rustfmt::skip]
+    #[test]
+    fn test_name_read_network_bytes_single_pointer_bad_chars() {
+        let mut cur = Cursor::new(vec![
+            7,                                // length
+            101, 120, 97, 37, 112, 108, 101, // "exa%ple"
+            3,                                // length
+            99, 111, 109,                     // "com"
+            0,                                // root
+            3,                                // length
+            119, 119, 119,                    // "www"
+            192, 0,                           // pointer to offset 0
+        ]);
+
+        cur.set_position(13);
+
+        let res = Name::read_network_bytes(&mut cur);
+        assert!(res.is_err(), "expected an error, got {:?}", res);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_name_read_network_bytes_single_pointer_normalize_case() {
+        let mut cur1 = Cursor::new(vec![
+            7,                                // length
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            3,                                // length
+            99, 111, 109,                     // "com"
+            0,                                // root
+            3,                                // length
+            119, 119, 119,                    // "www"
+            192, 0,                           // pointer to offset 0
+        ]);
+
+        cur1.set_position(13);
+
+        let mut cur2 = Cursor::new(vec![
+            7,                                // length
+            101, 120, 97, 77, 112, 108, 101, // "exaMple"
+            3,                                // length
+            99, 111, 109,                     // "com"
+            0,                                // root
+            3,                                // length
+            119, 119, 119,                    // "www"
+            192, 0,                           // pointer to offset 0
+        ]);
+
+        cur2.set_position(13);
+
+        let name1 = Name::read_network_bytes(&mut cur1).unwrap();
+        let name2 = Name::read_network_bytes(&mut cur2).unwrap();
+        assert_eq!(name1, name2);
+    }
+
     #[test]
     fn test_name_read_network_bytes_pointer_loop() {
         let mut cur = Cursor::new(vec![
@@ -698,6 +759,6 @@ mod test {
         ]);
 
         let res = Name::read_network_bytes(&mut cur);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 }
