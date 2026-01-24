@@ -161,30 +161,19 @@ impl Ord for Slab {
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 #[repr(transparent)]
-pub struct Slabs {
-    slabs: Vec<Slab>,
-}
+pub struct Slabs(Vec<Slab>);
 
 impl Slabs {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Slab> {
-        self.slabs.iter()
+        self.0.iter()
     }
 
     pub fn len(&self) -> usize {
-        self.slabs.len()
+        self.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.slabs.is_empty()
-    }
-
-    pub fn find_for_size(&self, size: u64) -> Option<&Slab> {
-        // Find the slab with an appropriate chunk size for an item with the given
-        // size. If there is no slab with a chunk size that fits the item, return the
-        // last (hence largest) slab class since this is what Memcached does internally.
-        self.slabs
-            .get(self.slabs.partition_point(|s| s.chunk_size < size))
-            .or_else(|| self.slabs.last())
+        self.0.is_empty()
     }
 }
 
@@ -193,7 +182,7 @@ impl IntoIterator for Slabs {
     type IntoIter = std::vec::IntoIter<Slab>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.slabs.into_iter()
+        self.0.into_iter()
     }
 }
 
@@ -236,7 +225,7 @@ impl TryFrom<&HashMap<String, String>> for Slabs {
             })
         }
 
-        Ok(Self { slabs })
+        Ok(Self(slabs))
     }
 }
 
@@ -287,21 +276,19 @@ impl Ord for SlabItem {
 
 #[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
 #[repr(transparent)]
-pub struct SlabItems {
-    items: Vec<SlabItem>,
-}
+pub struct SlabItems(Vec<SlabItem>);
 
 impl SlabItems {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &SlabItem> {
-        self.items.iter()
+        self.0.iter()
     }
 
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.0.is_empty()
     }
 }
 
@@ -310,7 +297,7 @@ impl IntoIterator for SlabItems {
     type IntoIter = std::vec::IntoIter<SlabItem>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.items.into_iter()
+        self.0.into_iter()
     }
 }
 
@@ -371,7 +358,7 @@ impl TryFrom<&HashMap<String, String>> for SlabItems {
             })
         }
 
-        Ok(Self { items })
+        Ok(Self(items))
     }
 }
 
@@ -1667,7 +1654,7 @@ mod test {
         let (_rx, mut client) = client!("STAT active_slabs 0\r\n", "STAT total_malloced 0\r\n", "END\r\n");
         let res = client.slabs().await.unwrap();
 
-        assert!(res.slabs.is_empty());
+        assert!(res.0.is_empty());
     }
 
     #[tokio::test]
@@ -1756,7 +1743,7 @@ mod test {
             },
         ];
 
-        assert_eq!(expected, res.slabs);
+        assert_eq!(expected, res.0);
     }
 
     ///////////
@@ -1816,39 +1803,37 @@ mod test {
         );
         let res = client.items().await.unwrap();
 
-        let expected = SlabItems {
-            items: vec![SlabItem {
-                id: 39,
-                number: 3,
-                number_hot: 0,
-                number_warm: 1,
-                number_cold: 2,
-                age_hot: 0,
-                age_warm: 7,
-                age: 8,
-                mem_requested: 1535788,
-                evicted: 1646,
-                evicted_nonzero: 1646,
-                evicted_time: 0,
-                out_of_memory: 9,
-                tail_repairs: 0,
-                reclaimed: 13,
-                expired_unfetched: 4,
-                evicted_unfetched: 202,
-                evicted_active: 6,
-                crawler_reclaimed: 0,
-                crawler_items_checked: 40,
-                lrutail_reflocked: 17365,
-                moves_to_cold: 8703,
-                moves_to_warm: 7285,
-                moves_within_lru: 3651,
-                direct_reclaims: 1949,
-                hits_to_hot: 894,
-                hits_to_warm: 4079,
-                hits_to_cold: 8043,
-                hits_to_temp: 0,
-            }],
-        };
+        let expected = SlabItems(vec![SlabItem {
+            id: 39,
+            number: 3,
+            number_hot: 0,
+            number_warm: 1,
+            number_cold: 2,
+            age_hot: 0,
+            age_warm: 7,
+            age: 8,
+            mem_requested: 1535788,
+            evicted: 1646,
+            evicted_nonzero: 1646,
+            evicted_time: 0,
+            out_of_memory: 9,
+            tail_repairs: 0,
+            reclaimed: 13,
+            expired_unfetched: 4,
+            evicted_unfetched: 202,
+            evicted_active: 6,
+            crawler_reclaimed: 0,
+            crawler_items_checked: 40,
+            lrutail_reflocked: 17365,
+            moves_to_cold: 8703,
+            moves_to_warm: 7285,
+            moves_within_lru: 3651,
+            direct_reclaims: 1949,
+            hits_to_hot: 894,
+            hits_to_warm: 4079,
+            hits_to_cold: 8043,
+            hits_to_temp: 0,
+        }]);
 
         assert_eq!(expected, res);
     }
