@@ -76,6 +76,7 @@ version = "0.0.0"
 dependencies = [
  "criterion",
  "mtop-client",
+ "tokio",
 ]
 
 [[package]]

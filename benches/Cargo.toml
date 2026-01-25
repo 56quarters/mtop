@@ -10,8 +10,14 @@ license = "GPL-3.0+"
 [dependencies]
 criterion = "0.5.1"
 mtop-client = { path = "../mtop-client" }
+tokio = { version = "1.14.0", features = ["full"] }
 
 [[bench]]
 name = "dns_name"
 path = "dns_name.rs"
+harness = false
+
+[[bench]]
+name = "memcached_core"
+path = "memcached_core.rs"
 harness = false
