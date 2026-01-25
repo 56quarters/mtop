@@ -1,12 +1,12 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use mtop_client::Memcached;
+use mtop_client::{Key, Memcached};
 use std::io::Cursor;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 static RT: OnceLock<Runtime> = OnceLock::new();
 
-fn memcached_methods(c: &mut Criterion) {
+fn memcached_stats(c: &mut Criterion) {
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
     c.bench_function("Memcached::stats", |b| {
@@ -34,7 +34,36 @@ fn memcached_methods(c: &mut Criterion) {
     });
 }
 
-criterion_group!(memcached_core, memcached_methods);
+fn memcached_read_write(c: &mut Criterion) {
+    let runtime = RT.get_or_init(|| Runtime::new().unwrap());
+
+    c.bench_function("Memcached::get", |b| {
+        b.iter_batched(
+            || Memcached::new(Cursor::new(GETS), Vec::new()),
+            |mut conn| {
+                runtime.block_on(async {
+                    let _ = conn.get(
+                        &[
+                            Key::one("foo1").unwrap(),
+                            Key::one("foo2").unwrap(),
+                            Key::one("foo3").unwrap(),
+                            Key::one("foo4").unwrap(),
+                            Key::one("foo5").unwrap(),
+                            Key::one("foo6").unwrap(),
+                            Key::one("foo7").unwrap(),
+                            Key::one("foo8").unwrap(),
+                            Key::one("foo9").unwrap(),
+                            Key::one("foo10").unwrap(),
+                        ]
+                    ).await.unwrap();
+                })
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+criterion_group!(memcached_core, memcached_stats, memcached_read_write);
 criterion_main!(memcached_core);
 
 const STATS: &str = concat!(
@@ -314,5 +343,29 @@ const METAS: &str = concat!(
     "key=mc-bench-0-244 exp=1769308162 la=1769307862 cas=29837 fetch=yes cls=18 size=4494 flags=0\r\n",
     "key=mc-bench-0-647 exp=1769308162 la=1769307862 cas=29870 fetch=yes cls=17 size=2975 flags=0\r\n",
     "key=mc-bench-0-520 exp=1769308161 la=1769307862 cas=29083 fetch=yes cls=10 size=661 flags=0\r\n",
+    "END\r\n",
+);
+
+const GETS: &str = concat!(
+    "VALUE foo1 32 4 1\r\n",
+    "bar1\r\n",
+    "VALUE foo2 32 4 1\r\n",
+    "bar2\r\n",
+    "VALUE foo3 32 4 1\r\n",
+    "bar3\r\n",
+    "VALUE foo4 32 4 1\r\n",
+    "bar4\r\n",
+    "VALUE foo5 32 4 1\r\n",
+    "bar5\r\n",
+    "VALUE foo6 32 4 1\r\n",
+    "bar6\r\n",
+    "VALUE foo7 32 4 1\r\n",
+    "bar7\r\n",
+    "VALUE foo8 32 4 1\r\n",
+    "bar8\r\n",
+    "VALUE foo9 32 4 1\r\n",
+    "bar9\r\n",
+    "VALUE foo10 32 5 1\r\n",
+    "bar10\r\n",
     "END\r\n",
 );
