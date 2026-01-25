@@ -179,8 +179,8 @@ impl Name {
     }
 
     fn validate_label(label: &[u8]) -> Result<(), MtopError> {
-        for (i, b) in label.iter().enumerate() {
-            let c = char::from(*b);
+        for (i, b) in label.iter().copied().enumerate() {
+            let c = char::from(b);
             if i == 0 && c != '_' && !c.is_ascii_alphanumeric() {
                 return Err(MtopError::configuration(format!(
                     "label must begin with ASCII letter, number, or underscore; got {}",
