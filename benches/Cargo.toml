@@ -21,3 +21,6 @@ harness = false
 name = "memcached_core"
 path = "memcached_core.rs"
 harness = false
+
+[profile.release]
+lto = "fat"

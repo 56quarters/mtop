@@ -35,5 +35,6 @@ global = "ubuntu-22.04"
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "thin"
 
+[profile.release]
+lto = "fat"
