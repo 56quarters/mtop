@@ -2,7 +2,7 @@ use crate::core::MtopError;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(u16)]
 pub enum RecordType {
     A,
@@ -89,7 +89,7 @@ impl FromStr for RecordType {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(u16)]
 pub enum RecordClass {
     INET,
