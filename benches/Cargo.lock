@@ -74,6 +74,7 @@ dependencies = [
 name = "benches"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "criterion",
  "mtop-client",
  "tokio",

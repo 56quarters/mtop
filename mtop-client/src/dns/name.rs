@@ -4,7 +4,7 @@ use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Name {
     labels: Vec<Vec<u8>>,
     is_fqdn: bool,

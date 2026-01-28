@@ -8,6 +8,7 @@ edition = "2024"
 license = "GPL-3.0+"
 
 [dependencies]
+async-trait = "0.1.89"
 criterion = "0.5.1"
 mtop-client = { path = "../mtop-client" }
 tokio = { version = "1.14.0", features = ["full"] }
@@ -20,6 +21,11 @@ harness = false
 [[bench]]
 name = "memcached_core"
 path = "memcached_core.rs"
+harness = false
+
+[[bench]]
+name = "memcached_discovery"
+path = "memcached_discovery.rs"
 harness = false
 
 [profile.release]

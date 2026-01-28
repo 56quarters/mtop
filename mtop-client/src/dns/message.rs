@@ -74,6 +74,11 @@ impl Message {
         self.id
     }
 
+    pub fn set_id(mut self, id: MessageId) -> Self {
+        self.id = id;
+        self
+    }
+
     pub fn flags(&self) -> Flags {
         self.flags
     }
