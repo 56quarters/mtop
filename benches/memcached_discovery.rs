@@ -40,25 +40,14 @@ fn new_response_srv() -> Message {
         .set_recursion_desired()
         .set_recursion_available();
 
-    Message::new(MessageId::random(), flags)
-        .add_question(Question::new(
-            Name::from_str("_memcached._tcp.example.com").unwrap(),
-            RecordType::SRV,
-        ))
-        .add_answer(Record::new(
-            Name::from_str("cache01.example.com").unwrap(),
-            RecordType::SRV,
-            RecordClass::INET,
-            300,
-            RecordData::SRV(RecordDataSRV::new(
-                10,
-                10,
-                11211,
-                Name::from_str("cache01.example.com").unwrap(),
-            )),
-        ))
-        .add_answer(Record::new(
-            Name::from_str("cache02.example.com").unwrap(),
+    let name = Name::from_str("_memcached._tcp.example.com").unwrap();
+
+    let mut message =
+        Message::new(MessageId::random(), flags).add_question(Question::new(name.clone(), RecordType::SRV));
+
+    for i in 0..15 {
+        message = message.add_answer(Record::new(
+            name.clone(),
             RecordType::SRV,
             RecordClass::INET,
             300,
@@ -66,9 +55,12 @@ fn new_response_srv() -> Message {
                 10,
                 10,
                 11211,
-                Name::from_str("cache02.example.com").unwrap(),
+                Name::from_str(&format!("cache{:0>2}.example.com", i)).unwrap(),
             )),
-        ))
+        ));
+    }
+
+    message
 }
 
 fn new_response_a() -> Message {
@@ -77,25 +69,22 @@ fn new_response_a() -> Message {
         .set_recursion_desired()
         .set_recursion_available();
 
-    Message::new(MessageId::random(), flags)
-        .add_question(Question::new(
-            Name::from_str("cache.example.com").unwrap(),
-            RecordType::A,
-        ))
-        .add_answer(Record::new(
-            Name::from_str("cache01.example.com").unwrap(),
-            RecordType::A,
-            RecordClass::INET,
-            300,
-            RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 1))),
-        ))
-        .add_answer(Record::new(
-            Name::from_str("cache02.example.com").unwrap(),
+    let mut message = Message::new(MessageId::random(), flags).add_question(Question::new(
+        Name::from_str("cache.example.com").unwrap(),
+        RecordType::A,
+    ));
+
+    for i in 0..15 {
+        message = message.add_answer(Record::new(
+            Name::from_str(&format!("cache{:0>2}.example.com", i)).unwrap(),
             RecordType::A,
             RecordClass::INET,
             300,
-            RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 2))),
+            RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, i))),
         ))
+    }
+
+    message
 }
 
 fn new_response_aaaa() -> Message {
