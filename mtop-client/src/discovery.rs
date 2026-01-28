@@ -202,7 +202,7 @@ impl Discovery {
     }
 
     fn servers_from_answers(port: u16, server_name: &ServerName<'static>, message: &Message) -> Vec<Server> {
-        let mut servers = HashSet::new();
+        let mut servers = HashSet::with_capacity(message.answers().len());
 
         for answer in message.answers() {
             let id = match answer.rdata() {
