@@ -14,6 +14,7 @@ impl Name {
     const MAX_LENGTH: usize = 255;
     const MAX_LABEL_LENGTH: usize = 63;
     const MAX_POINTERS: u32 = 64;
+    const NUM_LABELS_HINT: usize = 4;
 
     pub fn root() -> Self {
         Name {
@@ -72,7 +73,7 @@ impl Name {
     where
         T: ReadBytesExt + Seek,
     {
-        let mut labels = Vec::new();
+        let mut labels = Vec::with_capacity(Self::NUM_LABELS_HINT);
         Self::read_inner(&mut inp, &mut labels)?;
 
         Ok(Self { labels, is_fqdn: true })
@@ -246,9 +247,7 @@ impl Name {
             )));
         }
 
-        // Start with space for 4 labels which covers the size of typical domains.
-        let mut labels = Vec::with_capacity(4);
-
+        let mut labels = Vec::with_capacity(Self::NUM_LABELS_HINT);
         for label in bytes.split(|&b| b == b'.') {
             if label.len() > Self::MAX_LABEL_LENGTH {
                 return Err(MtopError::configuration(format!(
