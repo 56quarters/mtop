@@ -70,6 +70,16 @@ impl Name {
         );
 
         for label in self.labels.iter() {
+            // It shouldn't be possible to create Name instances with labels that
+            // exceed the max length for an individual label so if we're being asked
+            // to encode one, it's a bug and we should panic here.
+            assert!(
+                label.len() <= Name::MAX_LABEL_LENGTH,
+                "label length of {} exceeds maximum of {}",
+                label.len(),
+                Name::MAX_LABEL_LENGTH
+            );
+
             out.write_u8(label.len() as u8)?;
             out.write_all(label)?;
         }
