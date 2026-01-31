@@ -202,10 +202,12 @@ impl Name {
         Ok(())
     }
 
+    #[inline(always)]
     fn is_standard_label(len: u8) -> bool {
         len & 0b1100_0000 == 0
     }
 
+    #[inline(always)]
     fn is_compressed_label(len: u8) -> bool {
         // The top two bits of the length byte of a name label (section) are used
         // to indicate the name is actually an offset in the DNS message to a previous
@@ -213,6 +215,7 @@ impl Name {
         len & 0b1100_0000 == 192
     }
 
+    #[inline(always)]
     fn get_offset(len: u8, next: u8) -> u16 {
         let pointer = u16::from(len & 0b0011_1111) << 8;
         pointer | u16::from(next)
