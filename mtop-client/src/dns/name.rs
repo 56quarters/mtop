@@ -60,6 +60,14 @@ impl Name {
         // that, it's a bug and we should panic here. Encoded names all end with the
         // root so trying to encode something that doesn't makes no sense.
         assert!(self.is_fqdn, "only fully qualified domains can be encoded");
+        // It shouldn't be possible to create Name instances that exceed the max length
+        // so if we're being asked to encode one, it's a bug and we should panic here.
+        assert!(
+            self.size() <= Name::MAX_LENGTH,
+            "size {} of domain exceeds maximum of {}",
+            self.size(),
+            Name::MAX_LENGTH
+        );
 
         for label in self.labels.iter() {
             out.write_u8(label.len() as u8)?;
@@ -87,6 +95,7 @@ impl Name {
     where
         T: ReadBytesExt + Seek,
     {
+        let mut total_len = 0;
         let mut pointers = 0;
         let mut position = None;
         loop {
@@ -118,7 +127,7 @@ impl Name {
                 // returning early once we read the "root" label (`.`) signified by a
                 // length of 0.
                 let mut label = Vec::with_capacity(usize::from(len));
-                if Self::read_label_into(inp, len, &mut label)? {
+                if Self::read_label_into(inp, total_len, len, &mut label)? {
                     if let Some(p) = position {
                         // If we followed a pointer to different part of the message while
                         // parsing this name, seek to the position immediately after the
@@ -127,6 +136,7 @@ impl Name {
                     }
                     return Ok(());
                 } else {
+                    total_len += label.len() + 1;
                     out.push(label);
                 }
             } else {
@@ -138,8 +148,8 @@ impl Name {
     }
 
     /// If `len` doesn't indicate this is the root label, read the next name label into
-    /// `out` followed by a `.` and return false, true if next label was the root.
-    fn read_label_into<T>(inp: &mut T, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
+    /// `out` and return false, true if next label was the root.
+    fn read_label_into<T>(inp: &mut T, total_len: usize, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
     where
         T: ReadBytesExt + Seek,
     {
@@ -157,11 +167,14 @@ impl Name {
             )));
         }
 
-        if usize::from(len) + out.len() + 1 > Self::MAX_LENGTH {
+        // Since we're only operating on a single label at a time, we need to be
+        // told the current total length of this name to validate it before we read
+        // the next label. Check the length of this label, one byte needed to record
+        // the length, the total so far, and one byte for the root.
+        if usize::from(len) + 1 + total_len + 1 > Self::MAX_LENGTH {
             return Err(MtopError::runtime(format!(
                 "max size for name would be exceeded adding {} bytes to {}",
-                len,
-                out.len()
+                len, total_len
             )));
         }
 
@@ -747,6 +760,63 @@ mod test {
         let name1 = Name::read_network_bytes(&mut cur1).unwrap();
         let name2 = Name::read_network_bytes(&mut cur2).unwrap();
         assert_eq!(name1, name2);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_name_read_network_bytes_invalid_label_length() {
+        let cur = Cursor::new(vec![
+            66,                               // length
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            3,                                // length
+            99, 111, 109,                     // "com"
+            0,                                // root
+        ]);
+
+        let res = Name::read_network_bytes(cur);
+        assert!(res.is_err(), "expected an error, got {:?}", res);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_name_read_network_bytes_invalid_total_length() {
+        let label63 = vec![
+            63,                                // length
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+        ];
+
+        let label62 = vec![
+            62,                                // length
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108, 101, // "example"
+            101, 120, 97, 109, 112, 108,      // "exampl"
+        ];
+
+        // Total length of label data and their length prefixes is 255 bytes.
+        // However, this should trigger an error since we need room for the root.
+        let mut complete = Vec::new();
+        complete.extend_from_slice(&label63); // label 1, 1+63 bytes
+        complete.extend_from_slice(&label63); // label 2, 1+63 bytes
+        complete.extend_from_slice(&label63); // label 3, 1+63 bytes
+        complete.extend_from_slice(&label62); // label 4, 1+62 bytes
+        complete.push(0u8);             // root
+
+        let res = Name::read_network_bytes(Cursor::new(complete));
+        assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
     #[test]
