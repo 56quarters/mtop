@@ -98,9 +98,8 @@ impl Name {
     }
 
     /// Read the DNS message format bytes for a `Name` and write them to `out`,
-    /// following any pointers (how names are compressed in DNS messages). The
-    /// bytes written to `out` are ASCII characters of the text representation
-    /// of the name, e.g. `"example.com.".as_bytes()`.
+    /// following any pointers (how names are compressed in DNS messages). The bytes
+    /// of each label is written into a `Vec<u8>`.
     fn read_inner<T>(inp: &mut T, out: &mut Vec<Vec<u8>>) -> Result<(), MtopError>
     where
         T: ReadBytesExt + Seek,
