@@ -131,23 +131,19 @@ impl Name {
 
                 inp.seek(SeekFrom::Start(u64::from(offset)))?;
                 pointers += 1;
-            } else if Self::is_standard_label(len) {
-                // If the length is a length, read the next label (segment) of the name
-                // returning early once we read the "root" label (`.`) signified by a
-                // length of 0.
-                let mut label = Vec::with_capacity(usize::from(len));
-                if Self::read_label_into(inp, total_len, len, &mut label)? {
-                    if let Some(p) = position {
-                        // If we followed a pointer to different part of the message while
-                        // parsing this name, seek to the position immediately after the
-                        // pointer now that we've finished parsing this name.
-                        inp.seek(SeekFrom::Start(p))?;
-                    }
-                    return Ok(());
-                } else {
-                    total_len += label.len() + 1;
-                    out.push(label);
+            } else if Self::is_standard_label(len) && len == 0 {
+                if let Some(p) = position {
+                    // If we followed a pointer to different part of the message while
+                    // parsing this name, seek to the position immediately after the
+                    // pointer now that we've finished parsing this name.
+                    inp.seek(SeekFrom::Start(p))?;
                 }
+                return Ok(());
+            } else if Self::is_standard_label(len) {
+                let mut label = Vec::with_capacity(usize::from(len));
+                Self::read_label_into(inp, total_len, len, &mut label)?;
+                total_len += label.len() + 1;
+                out.push(label);
             } else {
                 // Binary labels are deprecated (RFC 6891) and there are (currently) no other
                 // types of labels that we should expect. Return an error to make this obvious.
@@ -162,10 +158,6 @@ impl Name {
     where
         T: ReadBytesExt + Seek,
     {
-        if len == 0 {
-            return Ok(true);
-        }
-
         // Only six bits of the length are supposed to be used to encode the
         // length of a label so 63 is the max length but double check just in
         // case one of the pointer bits was set for some reason.
