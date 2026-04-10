@@ -638,13 +638,13 @@ enum Command<'a> {
     FlushAllWait(u64),
     Gets(&'a [Key]),
     Incr(&'a Key, u64),
+    MetaNoop,
     Replace(&'a Key, u64, u32, &'a [u8]),
     Stats,
     StatsItems,
     StatsSlabs,
     Set(&'a Key, u64, u32, &'a [u8]),
     Touch(&'a Key, u32),
-    Version,
 }
 
 impl<'a> From<Command<'a>> for Vec<u8> {
@@ -658,13 +658,13 @@ impl<'a> From<Command<'a>> for Vec<u8> {
             Command::FlushAllWait(wait) => format!("flush_all {}\r\n", wait).into_bytes(),
             Command::Gets(keys) => format!("gets {}\r\n", keys.join(" ")).into_bytes(),
             Command::Incr(key, delta) => format!("incr {} {}\r\n", key, delta).into_bytes(),
+            Command::MetaNoop => "mn\r\n".to_owned().into_bytes(),
             Command::Replace(key, flags, ttl, data) => storage_command("replace", key, flags, ttl, data),
             Command::Stats => "stats\r\n".to_owned().into_bytes(),
             Command::StatsItems => "stats items\r\n".to_owned().into_bytes(),
             Command::StatsSlabs => "stats slabs\r\n".to_owned().into_bytes(),
             Command::Set(key, flags, ttl, data) => storage_command("set", key, flags, ttl, data),
             Command::Touch(key, ttl) => format!("touch {} {}\r\n", key, ttl).into_bytes(),
-            Command::Version => "version\r\n".to_owned().into_bytes(),
         }
     }
 }
@@ -684,6 +684,9 @@ fn storage_command(verb: &str, key: &Key, flags: u64, ttl: u32, data: &[u8]) -> 
 pub struct Memcached {
     read: BufReader<Box<dyn AsyncRead + Send + Sync + Unpin>>,
     write: BufWriter<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
+
+    buf_pairs: HashMap<String, String>,
+    buf_line: String,
 }
 
 impl Memcached {
@@ -697,14 +700,15 @@ impl Memcached {
         Memcached {
             read: BufReader::new(Box::new(read)),
             write: BufWriter::new(Box::new(write)),
+            buf_pairs: HashMap::new(),
+            buf_line: String::new(),
         }
     }
 
     /// Get a `Stats` object with the current values of the interesting stats for the server.
     pub async fn stats(&mut self) -> Result<Stats, MtopError> {
         self.send(Command::Stats).await?;
-        let raw = self.read_stats_response().await?;
-        Stats::try_from(&raw)
+        self.read_stats_response().await
     }
 
     /// Get a `Slabs` object with information about each set of `Slab`s maintained by
@@ -713,8 +717,7 @@ impl Memcached {
     /// on the size of items actually stored by the server.
     pub async fn slabs(&mut self) -> Result<Slabs, MtopError> {
         self.send(Command::StatsSlabs).await?;
-        let raw = self.read_stats_response().await?;
-        Slabs::try_from(&raw)
+        self.read_stats_response().await
     }
 
     /// Get a `SlabsItems` object with information about the `SlabItem` items stored in
@@ -723,40 +726,7 @@ impl Memcached {
     /// not be contiguous based on the size of items actually stored by the server.
     pub async fn items(&mut self) -> Result<SlabItems, MtopError> {
         self.send(Command::StatsItems).await?;
-        let raw = self.read_stats_response().await?;
-        SlabItems::try_from(&raw)
-    }
-
-    async fn read_stats_response(&mut self) -> Result<HashMap<String, String>, MtopError> {
-        let mut out = HashMap::new();
-        let mut buf = String::new();
-
-        while self.read.read_line(&mut buf).await? != 0 {
-            let line = buf.trim_end();
-            if line == "END" {
-                break;
-            }
-
-            let (key, val) = Self::parse_stat_line(line)?;
-            out.insert(key.to_owned(), val.to_owned());
-            buf.clear();
-        }
-
-        Ok(out)
-    }
-
-    fn parse_stat_line(line: &str) -> Result<(&str, &str), MtopError> {
-        let mut parts = line.splitn(3, ' ');
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some("STAT"), Some(key), Some(val)) => Ok((key, val)),
-            _ => {
-                if let Some(err) = Self::parse_error(line) {
-                    Err(MtopError::from(err))
-                } else {
-                    Err(MtopError::runtime(format!("unable to parse '{}'", line)))
-                }
-            }
-        }
+        self.read_stats_response().await
     }
 
     /// Get a `Meta` object for every item in the cache which includes its key and expiration
@@ -764,12 +734,13 @@ impl Memcached {
     /// infinite TTL.
     pub async fn metas(&mut self) -> Result<Vec<Meta>, MtopError> {
         self.send(Command::CrawlerMetadump).await?;
-        let mut out = Vec::new();
-        let mut raw = HashMap::new();
-        let mut buf = String::new();
 
-        while self.read.read_line(&mut buf).await? != 0 {
-            let line = buf.trim_end();
+        let mut out = Vec::new();
+        self.buf_line.clear();
+        self.buf_pairs.clear();
+
+        while self.read.read_line(&mut self.buf_line).await? != 0 {
+            let line = self.buf_line.trim_end();
             if line == "END" {
                 break;
             }
@@ -781,54 +752,20 @@ impl Memcached {
                 return Err(MtopError::from(err));
             }
 
-            let item = Self::parse_crawler_meta(line, Meta::KEYS, &mut raw)?;
+            let item = Self::parse_crawler_meta(line, Meta::KEYS, &mut self.buf_pairs)?;
             out.push(item);
-            buf.clear();
+
+            self.buf_line.clear();
+            self.buf_pairs.clear();
         }
 
         Ok(out)
     }
 
-    fn parse_crawler_meta(line: &str, keys: &[&str], raw: &mut HashMap<String, String>) -> Result<Meta, MtopError> {
-        // Avoid allocating a new HashMap to parse every meta entry just to throw it away
-        raw.clear();
-
-        for p in line.split(' ') {
-            let (key, val) = p
-                .split_once('=')
-                .ok_or_else(|| MtopError::runtime(format!("unexpected metadump format '{}'", line)))?;
-
-            // Avoid spending time decoding values or allocating for data we don't care about.
-            // Use a slice here since it's faster than a HashSet when the number of entries is
-            // small and the number of keys we're searching through is always small.
-            if !keys.contains(&key) {
-                continue;
-            }
-
-            let decoded = urlencoding::decode(val)
-                .map_err(|e| MtopError::runtime_cause(format!("unexpected metadump encoding '{}'", line), e))?;
-            raw.insert(key.to_owned(), decoded.into_owned());
-        }
-
-        Meta::try_from(raw.deref())
-    }
-
     /// Send a simple command to verify our connection to the server is working.
     pub async fn ping(&mut self) -> Result<(), MtopError> {
-        self.send(Command::Version).await?;
-        let mut buf = String::new();
-
-        if self.read.read_line(&mut buf).await? != 0 {
-            let line = buf.trim_end();
-            if let Some(e) = Self::parse_error(line) {
-                return Err(MtopError::from(e));
-            }
-            if !line.starts_with("VERSION") {
-                return Err(MtopError::runtime(format!("unable to parse '{}'", line)));
-            }
-        }
-
-        Ok(())
+        self.send(Command::MetaNoop).await?;
+        self.read_simple_response("MN").await
     }
 
     /// Flush all entries in the cache, optionally after a delay. When a delay is used, the
@@ -848,81 +785,32 @@ impl Memcached {
     /// including the key, flags, and data.
     pub async fn get(&mut self, keys: &[Key]) -> Result<HashMap<String, Value>, MtopError> {
         self.send(Command::Gets(keys)).await?;
-        let mut out = HashMap::with_capacity(keys.len());
-        let mut buf = String::new();
 
-        while self.read.read_line(&mut buf).await? != 0 {
-            let line = buf.trim_end();
+        let mut out = HashMap::with_capacity(keys.len());
+        self.buf_line.clear();
+
+        while self.read.read_line(&mut self.buf_line).await? != 0 {
+            let line = self.buf_line.trim_end();
             if line == "END" {
                 break;
             }
 
-            let value = self.parse_gets_value(line).await?;
+            let value = Self::parse_gets_value(line, &mut self.read).await?;
             out.insert(value.key.clone(), value);
-            buf.clear();
+            self.buf_line.clear();
         }
 
         Ok(out)
-    }
-
-    async fn parse_gets_value(&mut self, line: &str) -> Result<Value, MtopError> {
-        let mut parts = line.splitn(5, ' ');
-
-        match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
-            (Some("VALUE"), Some(k), Some(flags), Some(len), Some(cas)) => {
-                let flags: u64 = parse_value(flags, line)?;
-                let len: u64 = parse_value(len, line)?;
-                let cas: u64 = parse_value(cas, line)?;
-
-                // The max size of an object in Memcached is represented with a `u64` which
-                // means it's basically infinite. In practice the default max size of an object
-                // in a Memcached server is 1MB but can be configured higher. Place a limit on
-                // the size that we'll accept here to avoid a denial of service from bad lengths.
-                if len > Self::MAX_PAYLOAD_SIZE {
-                    return Err(MtopError::runtime(format!(
-                        "server response of length {} exceeds client max of {}",
-                        len,
-                        Self::MAX_PAYLOAD_SIZE
-                    )));
-                }
-
-                let data = {
-                    // Two extra bytes to read the trailing \r\n but then truncate them.
-                    let mut data = Vec::with_capacity(len as usize + 2);
-                    let reader = &mut self.read;
-                    reader.take(len + 2).read_to_end(&mut data).await?;
-                    data.truncate(len as usize);
-                    data
-                };
-
-                Ok(Value {
-                    key: k.to_owned(),
-                    flags,
-                    cas,
-                    data,
-                })
-            }
-            _ => {
-                // Response doesn't look like a `VALUE` line, see if the server has
-                // responded with an error that we can parse. Otherwise, consider this
-                // an internal error.
-                if let Some(err) = Self::parse_error(line) {
-                    Err(MtopError::from(err))
-                } else {
-                    Err(MtopError::runtime(format!("unable to parse '{}'", line)))
-                }
-            }
-        }
     }
 
     /// Increment the value of a key by the given delta if the value is numeric returning
     /// the new value. Returns an error if the value is _not_ numeric.
     pub async fn incr(&mut self, key: &Key, delta: u64) -> Result<u64, MtopError> {
         self.send(Command::Incr(key, delta)).await?;
-        let mut buf = String::new();
+        self.buf_line.clear();
 
-        if self.read.read_line(&mut buf).await? != 0 {
-            Self::parse_numeric_response(buf.trim_end())
+        if self.read.read_line(&mut self.buf_line).await? != 0 {
+            Self::parse_numeric_response(self.buf_line.trim_end())
         } else {
             Err(MtopError::runtime("unexpected empty response"))
         }
@@ -932,21 +820,12 @@ impl Memcached {
     /// the new value with a minimum of 0. Returns an error if the value is _not_ numeric.
     pub async fn decr(&mut self, key: &Key, delta: u64) -> Result<u64, MtopError> {
         self.send(Command::Decr(key, delta)).await?;
-        let mut buf = String::new();
+        self.buf_line.clear();
 
-        if self.read.read_line(&mut buf).await? != 0 {
-            Self::parse_numeric_response(buf.trim_end())
+        if self.read.read_line(&mut self.buf_line).await? != 0 {
+            Self::parse_numeric_response(self.buf_line.trim_end())
         } else {
             Err(MtopError::runtime("unexpected empty response"))
-        }
-    }
-
-    fn parse_numeric_response(line: &str) -> Result<u64, MtopError> {
-        if let Some(err) = Self::parse_error(line) {
-            Err(MtopError::from(err))
-        } else {
-            line.parse()
-                .map_err(|_e| MtopError::runtime(format!("unable to parse '{}'", line)))
         }
     }
 
@@ -989,11 +868,132 @@ impl Memcached {
         self.read_simple_response("DELETED").await
     }
 
-    async fn read_simple_response(&mut self, expected: &str) -> Result<(), MtopError> {
-        let mut buf = String::new();
+    async fn read_stats_response<'this, 's, S>(&'this mut self) -> Result<S, MtopError>
+    where
+        'this: 's,
+        S: TryFrom<&'s HashMap<String, String>, Error = MtopError>,
+    {
+        self.buf_pairs.clear();
+        self.buf_line.clear();
 
-        if self.read.read_line(&mut buf).await? != 0 {
-            let line = buf.trim_end();
+        while self.read.read_line(&mut self.buf_line).await? != 0 {
+            let line = self.buf_line.trim_end();
+            if line == "END" {
+                break;
+            }
+
+            let (key, val) = Self::parse_stat_line(line)?;
+            self.buf_pairs.insert(key.to_owned(), val.to_owned());
+            self.buf_line.clear();
+        }
+
+        S::try_from(&self.buf_pairs)
+    }
+
+    fn parse_stat_line(line: &str) -> Result<(&str, &str), MtopError> {
+        let mut parts = line.splitn(3, ' ');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("STAT"), Some(key), Some(val)) => Ok((key, val)),
+            _ => {
+                if let Some(err) = Self::parse_error(line) {
+                    Err(MtopError::from(err))
+                } else {
+                    Err(MtopError::runtime(format!("unable to parse '{}'", line)))
+                }
+            }
+        }
+    }
+
+    fn parse_crawler_meta(line: &str, keys: &[&str], raw: &mut HashMap<String, String>) -> Result<Meta, MtopError> {
+        // Avoid allocating a new HashMap to parse every meta entry just to throw it away
+        raw.clear();
+
+        for p in line.split(' ') {
+            let (key, val) = p
+                .split_once('=')
+                .ok_or_else(|| MtopError::runtime(format!("unexpected metadump format '{}'", line)))?;
+
+            // Avoid spending time decoding values or allocating for data we don't care about.
+            // Use a slice here since it's faster than a HashSet when the number of entries is
+            // small and the number of keys we're searching through is always small.
+            if !keys.contains(&key) {
+                continue;
+            }
+
+            let decoded = urlencoding::decode(val)
+                .map_err(|e| MtopError::runtime_cause(format!("unexpected metadump encoding '{}'", line), e))?;
+            raw.insert(key.to_owned(), decoded.into_owned());
+        }
+
+        Meta::try_from(raw.deref())
+    }
+
+    async fn parse_gets_value<R>(line: &str, reader: &mut BufReader<R>) -> Result<Value, MtopError>
+    where
+        R: AsyncRead + Send + Sync + Unpin + 'static,
+    {
+        let mut parts = line.splitn(5, ' ');
+
+        match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some("VALUE"), Some(k), Some(flags), Some(len), Some(cas)) => {
+                let flags: u64 = parse_value(flags, line)?;
+                let len: u64 = parse_value(len, line)?;
+                let cas: u64 = parse_value(cas, line)?;
+
+                // The max size of an object in Memcached is represented with a `u64` which
+                // means it's basically infinite. In practice the default max size of an object
+                // in a Memcached server is 1MB but can be configured higher. Place a limit on
+                // the size that we'll accept here to avoid a denial of service from bad lengths.
+                if len > Self::MAX_PAYLOAD_SIZE {
+                    return Err(MtopError::runtime(format!(
+                        "server response of length {} exceeds client max of {}",
+                        len,
+                        Self::MAX_PAYLOAD_SIZE
+                    )));
+                }
+
+                let data = {
+                    // Two extra bytes to read the trailing \r\n but then truncate them.
+                    let mut data = Vec::with_capacity(len as usize + 2);
+                    reader.take(len + 2).read_to_end(&mut data).await?;
+                    data.truncate(len as usize);
+                    data
+                };
+
+                Ok(Value {
+                    key: k.to_owned(),
+                    flags,
+                    cas,
+                    data,
+                })
+            }
+            _ => {
+                // Response doesn't look like a `VALUE` line, see if the server has
+                // responded with an error that we can parse. Otherwise, consider this
+                // an internal error.
+                if let Some(err) = Self::parse_error(line) {
+                    Err(MtopError::from(err))
+                } else {
+                    Err(MtopError::runtime(format!("unable to parse '{}'", line)))
+                }
+            }
+        }
+    }
+
+    fn parse_numeric_response(line: &str) -> Result<u64, MtopError> {
+        if let Some(err) = Self::parse_error(line) {
+            Err(MtopError::from(err))
+        } else {
+            line.parse()
+                .map_err(|_e| MtopError::runtime(format!("unable to parse '{}'", line)))
+        }
+    }
+
+    async fn read_simple_response(&mut self, expected: &str) -> Result<(), MtopError> {
+        self.buf_line.clear();
+
+        if self.read.read_line(&mut self.buf_line).await? != 0 {
+            let line = self.buf_line.trim_end();
             if line == expected {
                 Ok(())
             } else if let Some(err) = Self::parse_error(line) {
@@ -1338,17 +1338,17 @@ mod test {
 
         let bytes = rx.recv().await.unwrap();
         let command = String::from_utf8(bytes).unwrap();
-        assert_eq!("version\r\n", command);
+        assert_eq!("mn\r\n", command);
     }
 
     #[tokio::test]
     async fn test_memcached_ping_success() {
-        let (mut rx, mut client) = client!("VERSION 1.6.22\r\n");
+        let (mut rx, mut client) = client!("MN\r\n");
         client.ping().await.unwrap();
 
         let bytes = rx.recv().await.unwrap();
         let command = String::from_utf8(bytes).unwrap();
-        assert_eq!("version\r\n", command);
+        assert_eq!("mn\r\n", command);
     }
 
     macro_rules! test_store_command_success {
