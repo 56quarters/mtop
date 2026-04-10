@@ -9,7 +9,7 @@ use tokio::runtime::Handle;
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
 
-const RESPONSE_VERSION: &str = "VERSION 1.6.22\r\n";
+const RESPONSE_META_NOP: &str = "MN\r\n";
 const RESPONSE_ERROR: &str = "ERROR\r\n";
 
 /// Return a full version of path `p` relative to the integration test directory.
@@ -29,7 +29,7 @@ where
         match read.next_line().await {
             Ok(Some(v)) => {
                 let response = match v.trim_end() {
-                    "version" => RESPONSE_VERSION.as_bytes(),
+                    "mn" => RESPONSE_META_NOP.as_bytes(),
                     _ => RESPONSE_ERROR.as_bytes(),
                 };
 

@@ -647,8 +647,8 @@ mod test {
     #[tokio::test]
     async fn test_memcached_client_ping_no_errors() {
         let client = new_client!(
-            "cache01.example.com:11211" => "unused1" => "VERSION 1.6.22\r\n".as_bytes(),
-            "cache02.example.com:11211" => "unused2" => "VERSION 1.6.22\r\n".as_bytes(),
+            "cache01.example.com:11211" => "unused1" => "MN\r\n".as_bytes(),
+            "cache02.example.com:11211" => "unused2" => "MN\r\n".as_bytes(),
         );
         let response = client.ping().await.unwrap();
 
@@ -660,7 +660,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_client_ping_some_errors() {
         let client = new_client!(
-            "cache01.example.com:11211" => "unused1" => "VERSION 1.6.22\r\n".as_bytes(),
+            "cache01.example.com:11211" => "unused1" => "MN\r\n".as_bytes(),
             "cache02.example.com:11211" => "unused2" => "ERROR Too many open connections\r\n".as_bytes(),
         );
         let response = client.ping().await.unwrap();
