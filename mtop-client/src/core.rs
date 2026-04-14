@@ -904,6 +904,7 @@ impl Memcached {
         }
     }
 
+    #[inline]
     fn parse_crawler_meta(line: &str, keys: &[&str], raw: &mut HashMap<String, String>) -> Result<Meta, MtopError> {
         assert!(raw.is_empty(), "scratch HashMap should be cleared before being used");
 
