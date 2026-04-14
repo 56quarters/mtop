@@ -905,8 +905,7 @@ impl Memcached {
     }
 
     fn parse_crawler_meta(line: &str, keys: &[&str], raw: &mut HashMap<String, String>) -> Result<Meta, MtopError> {
-        // Avoid allocating a new HashMap to parse every meta entry just to throw it away
-        raw.clear();
+        assert!(raw.is_empty(), "scratch HashMap should be cleared before being used");
 
         for p in line.split(' ') {
             let (key, val) = p
