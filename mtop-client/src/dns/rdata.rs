@@ -345,15 +345,22 @@ impl RecordDataTXT {
     pub fn size(&self) -> usize {
         // Total size is the size in bytes of each segment plus number of segments
         // since the length of each is stored as a single u8
-        self.0.iter().map(|v| v.len()).sum::<usize>() + self.0.len()
+        self.0.iter().map(Vec::len).sum::<usize>() + self.0.len()
     }
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
         T: WriteBytesExt,
     {
-        for txt in self.0.iter() {
-            buf.write_u8(txt.len() as u8)?;
+        for txt in &self.0 {
+            assert!(
+                txt.len() <= Self::MAX_SEGMENT_LENGTH,
+                "segment size of {} exceeds maximum of {}",
+                txt.len(),
+                Self::MAX_SEGMENT_LENGTH,
+            );
+
+            buf.write_u8(u8::try_from(txt.len()).unwrap())?;
             buf.write_all(txt)?;
         }
 
@@ -398,7 +405,7 @@ impl RecordDataTXT {
 
 impl Display for RecordDataTXT {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for txt in self.0.iter() {
+        for txt in &self.0 {
             // We're trying to display the record so make an attempt at converting to
             // a string but don't return an error or panic if there's invalid UTF-8. We
             // also escape any double quotes within the string since we use those to
@@ -553,8 +560,15 @@ impl RecordDataOptPair {
     where
         T: WriteBytesExt,
     {
+        assert!(
+            self.data.len() <= Self::MAX_DATA_LENGTH,
+            "data size of {} exceeds maximum of {}",
+            self.data.len(),
+            Self::MAX_DATA_LENGTH,
+        );
+
         buf.write_u16::<NetworkEndian>(self.code)?;
-        buf.write_u16::<NetworkEndian>(self.data.len() as u16)?;
+        buf.write_u16::<NetworkEndian>(u16::try_from(self.data.len()).unwrap())?;
         Ok(buf.write_all(&self.data)?)
     }
 
@@ -598,7 +612,7 @@ impl RecordDataOpt {
     }
 
     fn options_size(opts: &[RecordDataOptPair]) -> usize {
-        opts.iter().map(|o| o.size()).sum()
+        opts.iter().map(RecordDataOptPair::size).sum()
     }
 
     pub fn options(&self) -> &[RecordDataOptPair] {
@@ -613,7 +627,7 @@ impl RecordDataOpt {
     where
         T: WriteBytesExt,
     {
-        for opt in self.options.iter() {
+        for opt in &self.options {
             opt.write_network_bytes(&mut buf)?;
         }
 
@@ -640,7 +654,7 @@ impl RecordDataOpt {
 
 impl Display for RecordDataOpt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for opt in self.options.iter() {
+        for opt in &self.options {
             write!(f, "{}", opt)?;
         }
 
@@ -684,13 +698,14 @@ impl RecordDataUnknown {
     {
         let mut bytes = Vec::with_capacity(usize::from(rdata_len));
         let n = buf.take(u64::from(rdata_len)).read_to_end(&mut bytes)?;
-        if n != usize::from(rdata_len) {
+
+        if n == usize::from(rdata_len) {
+            Self::new(bytes)
+        } else {
             Err(MtopError::runtime(format!(
                 "short read for RecordDataUnknown; expected {} got {}",
                 rdata_len, n
             )))
-        } else {
-            Self::new(bytes)
         }
     }
 }
@@ -715,7 +730,7 @@ mod test {
 
     #[test]
     fn test_record_data_a_write_network_bytes() {
-        let rdata = RecordDataA::new(Ipv4Addr::new(127, 0, 0, 1));
+        let rdata = RecordDataA::new(Ipv4Addr::LOCALHOST);
 
         let mut cur = Cursor::new(Vec::new());
         rdata.write_network_bytes(&mut cur).unwrap();
@@ -725,10 +740,10 @@ mod test {
     }
     #[test]
     fn test_record_data_a_read_network_bytes() {
-        let cur = Cursor::new(vec![127, 0, 0, 53]);
+        let cur = Cursor::new(vec![127, 0, 0, 1]);
         let rdata = RecordDataA::read_network_bytes(cur).unwrap();
 
-        assert_eq!(Ipv4Addr::new(127, 0, 0, 53), rdata.addr());
+        assert_eq!(Ipv4Addr::LOCALHOST, rdata.addr());
     }
 
     #[rustfmt::skip]
@@ -818,7 +833,7 @@ mod test {
     fn test_record_data_soa_write_network_bytes() {
         let mname = Name::from_str("m.example.com.").unwrap();
         let rname = Name::from_str("r.example.com.").unwrap();
-        let serial = 123456790;
+        let serial = 123_456_790;
         let refresh = 3000;
         let retry = 300;
         let expire = 3600;
@@ -883,7 +898,7 @@ mod test {
         let rdata = RecordDataSOA::read_network_bytes(cur).unwrap();
         assert_eq!("m.example.com.", rdata.mname().to_string());
         assert_eq!("r.example.com.", rdata.rname().to_string());
-        assert_eq!(123456790, rdata.serial());
+        assert_eq!(123_456_790, rdata.serial());
         assert_eq!(3000, rdata.refresh());
         assert_eq!(300, rdata.retry());
         assert_eq!(3600, rdata.expire());
@@ -934,7 +949,7 @@ mod test {
                 117, 115, 101, 114, 61, 119, 111, 114, 108, 100, // user=world
             ],
             buf,
-        )
+        );
     }
 
     #[rustfmt::skip]
@@ -946,7 +961,7 @@ mod test {
             10,                                              // length
             117, 115, 101, 114, 61, 119, 111, 114, 108, 100, // user=world
         ];
-        let bytes_len = bytes.len() as u16;
+        let bytes_len = u16::try_from(bytes.len()).unwrap();
         let cur = Cursor::new(bytes);
 
         let rdata = RecordDataTXT::read_network_bytes(bytes_len, cur).unwrap();
@@ -957,7 +972,7 @@ mod test {
 
     #[test]
     fn test_record_data_aaaa_write_network_bytes() {
-        let addr = Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1);
+        let addr = Ipv6Addr::LOCALHOST;
         let rdata = RecordDataAAAA::new(addr);
 
         let mut cur = Cursor::new(Vec::new());
@@ -972,7 +987,7 @@ mod test {
         let cur = Cursor::new(vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
         let rdata = RecordDataAAAA::read_network_bytes(cur).unwrap();
 
-        assert_eq!(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), rdata.addr());
+        assert_eq!(Ipv6Addr::LOCALHOST, rdata.addr());
     }
 
     #[rustfmt::skip]
@@ -997,7 +1012,7 @@ mod test {
                 0,                                // root
             ],
             buf,
-        )
+        );
     }
 
     #[rustfmt::skip]
@@ -1073,7 +1088,7 @@ mod test {
                 97, 98, 99, // data
             ],
             buf,
-        )
+        );
     }
 
     #[rustfmt::skip]

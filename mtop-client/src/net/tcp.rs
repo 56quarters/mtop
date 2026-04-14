@@ -38,6 +38,6 @@ where
         .await
         // The client buffers and flushes writes so we don't need delay here to
         // avoid lots of tiny packets.
-        .and_then(|s| s.set_nodelay(true).map(|_| s))
+        .and_then(|s| s.set_nodelay(true).map(|()| s))
         .map_err(|e| MtopError::from((host.to_string(), e)))
 }

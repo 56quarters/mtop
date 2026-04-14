@@ -47,7 +47,7 @@ impl ClientFactory<Server, Memcached> for TlsTcpClientFactory {
         let (read, write) = match key.id() {
             ServerID::Socket(sock) => net::tcp_tls_connect(sock, server_name, self.client_config.clone()).await?,
             ServerID::Name(name) => net::tcp_tls_connect(name, server_name, self.client_config.clone()).await?,
-            id => panic!("unexpected {:?} passed to TlsTcpClientFactory: this is a bug", id),
+            id @ ServerID::Path(_) => panic!("unexpected {:?} passed to TlsTcpClientFactory: this is a bug", id),
         };
 
         Ok(Memcached::new(read, write))
@@ -65,7 +65,7 @@ impl ClientFactory<Server, Memcached> for TcpClientFactory {
         let (read, write) = match key.id() {
             ServerID::Socket(sock) => net::tcp_connect(sock).await?,
             ServerID::Name(name) => net::tcp_connect(name).await?,
-            id => panic!("unexpected {:?} passed to TcpClientFactory: this is a bug", id),
+            id @ ServerID::Path(_) => panic!("unexpected {:?} passed to TcpClientFactory: this is a bug", id),
         };
 
         Ok(Memcached::new(read, write))
@@ -103,7 +103,7 @@ pub trait Selector {
 /// Logic for picking a server to "own" a particular cache key that uses
 /// rendezvous hashing.
 ///
-/// See https://en.wikipedia.org/wiki/Rendezvous_hashing
+/// See <https://en.wikipedia.org/wiki/Rendezvous_hashing>
 #[derive(Debug)]
 pub struct RendezvousSelector {
     servers: Vec<Server>,
@@ -144,7 +144,7 @@ impl Selector for RendezvousSelector {
             let mut max = u64::MIN;
             let mut choice = None;
 
-            for server in self.servers.iter() {
+            for server in &self.servers {
                 let score = Self::score(server, key);
                 if score >= max {
                     choice = Some(server);
@@ -229,7 +229,7 @@ macro_rules! operation_for_all {
     }};
 }
 
-/// Await the results of a list of tasks and assemble a ServersResponse from them.
+/// Await the results of a list of tasks and assemble a `ServersResponse` from them.
 async fn collect_results<T>(tasks: Vec<(ServerID, JoinHandle<Result<T, MtopError>>)>) -> ServersResponse<T> {
     let mut values = HashMap::with_capacity(tasks.len());
     let mut errors = HashMap::new();
@@ -245,7 +245,7 @@ async fn collect_results<T>(tasks: Vec<(ServerID, JoinHandle<Result<T, MtopError
             Err(e) => {
                 errors.insert(id, MtopError::runtime_cause("fetching cluster values", e));
             }
-        };
+        }
     }
 
     ServersResponse { values, errors }
@@ -309,7 +309,7 @@ impl MemcachedClient {
     /// number of idle connections to that server are currently in the pool, otherwise close
     /// it immediately.
     pub async fn raw_close(&self, connection: PooledClient<Server, Memcached>) {
-        self.pool.put(connection).await
+        self.pool.put(connection).await;
     }
 
     /// Get a `Stats` object with the current values of the interesting stats for each server.
@@ -381,7 +381,7 @@ impl MemcachedClient {
             .into_iter()
             .enumerate()
             .map(|(i, server)| {
-                let delay = wait.map(|d| d * i as u32);
+                let delay = wait.map(|d| d * u32::try_from(i).unwrap());
                 (server.id().clone(), spawn_for_host!(self, &server, flush_all, delay))
             })
             .collect::<Vec<_>>();
@@ -433,7 +433,7 @@ impl MemcachedClient {
                 Err(e) => {
                     errors.insert(id, MtopError::runtime_cause("fetching keys", e));
                 }
-            };
+            }
         }
 
         Ok(ValuesResponse { values, errors })
@@ -535,7 +535,7 @@ impl fmt::Debug for MemcachedClient {
         f.debug_struct("MemcachedClient")
             .field("selector", &"...")
             .field("pool", &self.pool)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -771,7 +771,7 @@ mod test {
         assert_eq!(values.values.get("key2"), None);
 
         let id = ServerID::from(("cache02.example.com", 11211));
-        assert_eq!(values.errors.get(&id).map(|e| e.kind()), Some(ErrorKind::Protocol))
+        assert_eq!(values.errors.get(&id).map(MtopError::kind), Some(ErrorKind::Protocol));
     }
 
     ///////////////
