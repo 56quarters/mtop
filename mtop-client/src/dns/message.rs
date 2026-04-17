@@ -64,16 +64,17 @@ impl Message {
         self.id.size()
             + self.flags.size()
             + (2 * 4) // lengths of questions, answers, authority, extra
-            + self.questions.iter().map(|q| q.size()).sum::<usize>()
-            + self.answers.iter().map(|r| r.size()).sum::<usize>()
-            + self.authority.iter().map(|r| r.size()).sum::<usize>()
-            + self.extra.iter().map(|r| r.size()).sum::<usize>()
+            + self.questions.iter().map(Question::size).sum::<usize>()
+            + self.answers.iter().map(Record::size).sum::<usize>()
+            + self.authority.iter().map(Record::size).sum::<usize>()
+            + self.extra.iter().map(Record::size).sum::<usize>()
     }
 
     pub fn id(&self) -> MessageId {
         self.id
     }
 
+    #[must_use]
     pub fn set_id(mut self, id: MessageId) -> Self {
         self.id = id;
         self
@@ -83,6 +84,7 @@ impl Message {
         self.flags
     }
 
+    #[must_use]
     pub fn set_flags(mut self, flags: Flags) -> Self {
         self.flags = flags;
         self
@@ -92,6 +94,7 @@ impl Message {
         &self.questions
     }
 
+    #[must_use]
     pub fn add_question(mut self, q: Question) -> Self {
         self.questions.push(q);
         self
@@ -101,6 +104,7 @@ impl Message {
         &self.answers
     }
 
+    #[must_use]
     pub fn add_answer(mut self, r: Record) -> Self {
         self.answers.push(r);
         self
@@ -110,6 +114,7 @@ impl Message {
         &self.authority
     }
 
+    #[must_use]
     pub fn add_authority(mut self, r: Record) -> Self {
         self.authority.push(r);
         self
@@ -119,6 +124,7 @@ impl Message {
         &self.extra
     }
 
+    #[must_use]
     pub fn add_extra(mut self, r: Record) -> Self {
         self.extra.push(r);
         self
@@ -133,10 +139,10 @@ impl Message {
         Header {
             id: self.id,
             flags: self.flags,
-            num_questions: self.questions.len() as u16,
-            num_answers: self.answers.len() as u16,
-            num_authority: self.authority.len() as u16,
-            num_extra: self.extra.len() as u16,
+            num_questions: u16::try_from(self.questions.len()).unwrap(),
+            num_answers: u16::try_from(self.answers.len()).unwrap(),
+            num_authority: u16::try_from(self.authority.len()).unwrap(),
+            num_extra: u16::try_from(self.extra.len()).unwrap(),
         }
     }
 
@@ -147,19 +153,19 @@ impl Message {
         let header = self.header();
         header.write_network_bytes(&mut buf)?;
 
-        for q in self.questions.iter() {
+        for q in &self.questions {
             q.write_network_bytes(&mut buf)?;
         }
 
-        for r in self.answers.iter() {
+        for r in &self.answers {
             r.write_network_bytes(&mut buf)?;
         }
 
-        for r in self.authority.iter() {
+        for r in &self.authority {
             r.write_network_bytes(&mut buf)?;
         }
 
-        for r in self.extra.iter() {
+        for r in &self.extra {
             r.write_network_bytes(&mut buf)?;
         }
 
@@ -277,6 +283,7 @@ impl Flags {
         !(self.0 & Self::MASK_QR) > 0
     }
 
+    #[must_use]
     pub fn set_query(self) -> Self {
         Flags(self.0 & !Self::MASK_QR)
     }
@@ -285,6 +292,7 @@ impl Flags {
         self.0 & Self::MASK_QR > 0
     }
 
+    #[must_use]
     pub fn set_response(self) -> Self {
         Flags(self.0 | Self::MASK_QR)
     }
@@ -293,6 +301,7 @@ impl Flags {
         Operation::try_from((self.0 & Self::MASK_OP) >> Self::OFFSET_OP).unwrap()
     }
 
+    #[must_use]
     pub fn set_op_code(self, op: Operation) -> Self {
         let op = (op as u16) << Self::OFFSET_OP;
         Flags(self.0 | op)
@@ -302,6 +311,7 @@ impl Flags {
         self.0 & Self::MASK_AA > 0
     }
 
+    #[must_use]
     pub fn set_authoritative(self) -> Self {
         Flags(self.0 | Self::MASK_AA)
     }
@@ -310,6 +320,7 @@ impl Flags {
         self.0 & Self::MASK_TC > 0
     }
 
+    #[must_use]
     pub fn set_truncated(self) -> Self {
         Flags(self.0 | Self::MASK_TC)
     }
@@ -318,6 +329,7 @@ impl Flags {
         self.0 & Self::MASK_RD > 0
     }
 
+    #[must_use]
     pub fn set_recursion_desired(self) -> Self {
         Flags(self.0 | Self::MASK_RD)
     }
@@ -326,6 +338,7 @@ impl Flags {
         self.0 & Self::MASK_RA > 0
     }
 
+    #[must_use]
     pub fn set_recursion_available(self) -> Self {
         Flags(self.0 | Self::MASK_RA)
     }
@@ -334,6 +347,7 @@ impl Flags {
         ResponseCode::try_from((self.0 & Self::MASK_RC) >> Self::OFFSET_RC).unwrap()
     }
 
+    #[must_use]
     pub fn set_response_code(self, code: ResponseCode) -> Self {
         let code = (code as u16) << Self::OFFSET_RC;
         Flags(self.0 | code)
@@ -472,6 +486,7 @@ impl Question {
         self.name.size() + self.qtype.size() + self.qclass.size()
     }
 
+    #[must_use]
     pub fn set_qclass(mut self, qclass: RecordClass) -> Self {
         self.qclass = qclass;
         self
@@ -565,7 +580,7 @@ impl Record {
         // It shouldn't be possible for rdata to overflow u16 so if we do, that's a bug.
         let size = self.rdata.size();
         assert!(
-            size <= usize::from(u16::MAX),
+            u16::try_from(size).is_ok(),
             "rdata length of {} bytes exceeds max of {} bytes",
             size,
             u16::MAX
@@ -575,7 +590,7 @@ impl Record {
         buf.write_u16::<NetworkEndian>(self.rtype.into())?;
         buf.write_u16::<NetworkEndian>(self.rclass.into())?;
         buf.write_u32::<NetworkEndian>(self.ttl)?;
-        buf.write_u16::<NetworkEndian>(size as u16)?;
+        buf.write_u16::<NetworkEndian>(u16::try_from(size).unwrap())?;
         self.rdata.write_network_bytes(&mut buf)
     }
 
@@ -848,7 +863,7 @@ mod test {
                 0, 4,    // extra
             ],
             buf,
-        )
+        );
     }
 
     #[rustfmt::skip]

@@ -1,4 +1,11 @@
-#![allow(clippy::uninlined_format_args)]
+#![warn(clippy::pedantic)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::single_match_else,
+    clippy::uninlined_format_args
+)]
 #![warn(missing_debug_implementations, unreachable_pub)]
 #![deny(unused_must_use)]
 

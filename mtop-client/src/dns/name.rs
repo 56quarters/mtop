@@ -24,7 +24,7 @@ impl Name {
     }
 
     pub fn size(&self) -> usize {
-        self.labels.iter().map(|l| l.len()).sum::<usize>() + self.labels.len() + 1
+        self.labels.iter().map(Vec::len).sum::<usize>() + self.labels.len() + 1
     }
 
     pub fn is_root(&self) -> bool {
@@ -35,11 +35,13 @@ impl Name {
         self.is_fqdn
     }
 
+    #[must_use]
     pub fn to_fqdn(mut self) -> Self {
         self.is_fqdn = true;
         self
     }
 
+    #[must_use]
     pub fn append(mut self, other: Name) -> Self {
         if self.is_fqdn {
             return self;
@@ -63,24 +65,24 @@ impl Name {
         // It shouldn't be possible to create Name instances that exceed the max length
         // so if we're being asked to encode one, it's a bug and we should panic here.
         assert!(
-            self.size() <= Name::MAX_LENGTH,
+            self.size() <= Self::MAX_LENGTH,
             "size {} of domain exceeds maximum of {}",
             self.size(),
-            Name::MAX_LENGTH
+            Self::MAX_LENGTH
         );
 
-        for label in self.labels.iter() {
+        for label in &self.labels {
             // It shouldn't be possible to create Name instances with labels that
             // exceed the max length for an individual label so if we're being asked
             // to encode one, it's a bug and we should panic here.
             assert!(
-                label.len() <= Name::MAX_LABEL_LENGTH,
+                label.len() <= Self::MAX_LABEL_LENGTH,
                 "label length of {} exceeds maximum of {}",
                 label.len(),
-                Name::MAX_LABEL_LENGTH
+                Self::MAX_LABEL_LENGTH
             );
 
-            out.write_u8(label.len() as u8)?;
+            out.write_u8(u8::try_from(label.len()).unwrap())?;
             out.write_all(label)?;
         }
 
@@ -144,10 +146,10 @@ impl Name {
                         inp.seek(SeekFrom::Start(p))?;
                     }
                     return Ok(());
-                } else {
-                    total_len += label.len() + 1;
-                    out.push(label);
                 }
+
+                total_len += label.len() + 1;
+                out.push(label);
             } else {
                 // Binary labels are deprecated (RFC 6891) and there are (currently) no other
                 // types of labels that we should expect. Return an error to make this obvious.
@@ -583,7 +585,7 @@ mod test {
         );
     }
 
-    #[should_panic]
+    #[should_panic = "only fully qualified domains can be encoded"]
     #[test]
     fn test_name_write_network_bytes_not_fqdn() {
         let mut cur = Cursor::new(Vec::new());

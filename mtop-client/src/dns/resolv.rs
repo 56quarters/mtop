@@ -42,12 +42,9 @@ where
         }
 
         let mut parts = line.split_whitespace();
-        let key = match parts.next() {
-            Some(k) => k,
-            None => {
-                tracing::debug!(message = "skipping malformed resolv.conf line", line = line);
-                continue;
-            }
+        let Some(key) = parts.next() else {
+            tracing::debug!(message = "skipping malformed resolv.conf line", line = line);
+            continue;
         };
 
         match Token::get(key) {
@@ -77,7 +74,6 @@ where
                     setting = key,
                     line = line
                 );
-                continue;
             }
         }
     }
@@ -277,7 +273,7 @@ mod test {
 
         let expected = ResolvConf {
             nameservers: vec!["127.0.0.53:53".parse().unwrap()],
-            options: Default::default(),
+            options: ResolvConfOptions::default(),
         };
 
         let res = config(reader).await.unwrap();
@@ -294,7 +290,7 @@ mod test {
 
         let expected = ResolvConf {
             nameservers: vec!["127.0.0.53:53".parse().unwrap()],
-            options: Default::default(),
+            options: ResolvConfOptions::default(),
         };
 
         let res = config(reader).await.unwrap();

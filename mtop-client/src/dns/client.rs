@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadBuf};
 use tokio::net::UdpSocket;
 
-const DEFAULT_NAMESERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
+const DEFAULT_NAMESERVER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53);
 const DEFAULT_MESSAGE_BUFFER: usize = 512;
 
 /// Configuration for creating a new `DnsClient` instance.
@@ -91,7 +91,7 @@ pub struct DefaultDnsClient {
 }
 
 impl DefaultDnsClient {
-    /// Create a new DnsClient that will resolve names using UDP or TCP connections
+    /// Create a new `DnsClient` that will resolve names using UDP or TCP connections
     /// and behavior based on a resolv.conf configuration file.
     pub fn new<U, T>(config: DnsClientConfig, udp_factory: U, tcp_factory: T) -> Self
     where
@@ -255,7 +255,14 @@ impl TcpConnection {
         // with the size of the message.
         self.buffer.clear();
         msg.write_network_bytes(&mut self.buffer)?;
-        self.write.write_u16(self.buffer.len() as u16).await?;
+        assert!(
+            self.buffer.len() < usize::from(u16::MAX),
+            "message size of {} exceeds maximum of {}",
+            self.buffer.len(),
+            u16::MAX
+        );
+
+        self.write.write_u16(u16::try_from(self.buffer.len()).unwrap()).await?;
         self.write.write_all(&self.buffer).await?;
         self.write.flush().await?;
 
@@ -268,14 +275,15 @@ impl TcpConnection {
 
         let mut cur = Cursor::new(&self.buffer);
         let res = Message::read_network_bytes(&mut cur)?;
-        if res.id() != msg.id() {
+
+        if res.id() == msg.id() {
+            Ok(res)
+        } else {
             Err(MtopError::runtime(format!(
                 "unexpected DNS MessageId; expected {}, got {}",
                 msg.id(),
                 res.id()
             )))
-        } else {
-            Ok(res)
         }
     }
 }
@@ -445,7 +453,7 @@ mod test {
             RecordType::A,
             RecordClass::INET,
             300,
-            RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, 1))),
+            RecordData::A(RecordDataA::new(Ipv4Addr::LOCALHOST)),
         );
 
         response.add_answer(answer)

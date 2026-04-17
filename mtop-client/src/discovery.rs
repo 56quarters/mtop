@@ -282,14 +282,14 @@ mod test {
 
     #[test]
     fn test_server_id_from_ipv4_addr() {
-        let addr = SocketAddr::from((Ipv4Addr::new(127, 1, 1, 1), 11211));
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 11211));
         let id = ServerID::from(addr);
-        assert_eq!("127.1.1.1:11211", id.to_string());
+        assert_eq!("127.0.0.1:11211", id.to_string());
     }
 
     #[test]
     fn test_server_id_from_ipv6_addr() {
-        let addr = SocketAddr::from((Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 11211));
+        let addr = SocketAddr::from((Ipv6Addr::LOCALHOST, 11211));
         let id = ServerID::from(addr);
         assert_eq!("[::1]:11211", id.to_string());
     }
@@ -374,7 +374,7 @@ mod test {
                 RecordType::AAAA,
                 RecordClass::INET,
                 300,
-                RecordData::AAAA(RecordDataAAAA::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1))),
+                RecordData::AAAA(RecordDataAAAA::new(Ipv6Addr::LOCALHOST)),
             )],
         );
 

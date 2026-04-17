@@ -4,7 +4,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::error;
 use std::fmt;
 use std::io;
-use std::ops::Deref;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
@@ -222,7 +221,7 @@ impl TryFrom<&HashMap<String, String>> for Slabs {
                 cas_hits: parse_field(&format!("{}:cas_hits", id), value)?,
                 cas_badval: parse_field(&format!("{}:cas_badval", id), value)?,
                 touch_hits: parse_field(&format!("{}:touch_hits", id), value)?,
-            })
+            });
         }
 
         Ok(Self(slabs))
@@ -355,7 +354,7 @@ impl TryFrom<&HashMap<String, String>> for SlabItems {
                 hits_to_warm: parse_field(&format!("items:{}:hits_to_warm", id), value)?,
                 hits_to_cold: parse_field(&format!("items:{}:hits_to_cold", id), value)?,
                 hits_to_temp: parse_field(&format!("items:{}:hits_to_temp", id), value)?,
-            })
+            });
         }
 
         Ok(Self(items))
@@ -546,8 +545,7 @@ impl error::Error for MtopError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match &self.repr {
             ErrorRepr::Message(_) => None,
-            ErrorRepr::Cause(e) => Some(e.as_ref()),
-            ErrorRepr::MessageCause(_, e) => Some(e.as_ref()),
+            ErrorRepr::Cause(e) | ErrorRepr::MessageCause(_, e) => Some(e.as_ref()),
         }
     }
 }
@@ -925,7 +923,7 @@ impl Memcached {
             raw.insert(key.to_owned(), decoded.into_owned());
         }
 
-        Meta::try_from(raw.deref())
+        Meta::try_from(&*raw)
     }
 
     async fn parse_gets_value<R>(line: &str, reader: &mut BufReader<R>) -> Result<Value, MtopError>
@@ -954,9 +952,9 @@ impl Memcached {
 
                 let data = {
                     // Two extra bytes to read the trailing \r\n but then truncate them.
-                    let mut data = Vec::with_capacity(len as usize + 2);
+                    let mut data = Vec::with_capacity(usize::try_from(len).unwrap() + 2);
                     reader.take(len + 2).read_to_end(&mut data).await?;
-                    data.truncate(len as usize);
+                    data.truncate(usize::try_from(len).unwrap());
                     data
                 };
 
@@ -1052,10 +1050,10 @@ impl Key {
         T: Into<String>,
     {
         let val = val.into();
-        if !Self::is_legal_val(&val) {
-            Err(MtopError::runtime(format!("invalid key {}", val)))
-        } else {
+        if Self::is_legal_val(&val) {
             Ok(Key(val))
+        } else {
+            Err(MtopError::runtime(format!("invalid key {}", val)))
         }
     }
 
@@ -1834,7 +1832,7 @@ mod test {
             age_hot: 0,
             age_warm: 7,
             age: 8,
-            mem_requested: 1535788,
+            mem_requested: 1_535_788,
             evicted: 1646,
             evicted_nonzero: 1646,
             evicted_time: 0,
@@ -1894,12 +1892,12 @@ mod test {
         let expected = vec![
             Meta {
                 key: "memcached/murmur3_hash.c".to_string(),
-                expires: 1687216956,
+                expires: 1_687_216_956,
                 size: 2912,
             },
             Meta {
                 key: "memcached/md5.h".to_string(),
-                expires: 1687216956,
+                expires: 1_687_216_956,
                 size: 3593,
             },
         ];

@@ -1,6 +1,6 @@
 use crate::core::MtopError;
 use rustls_pki_types::pem::PemObject;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, TrustAnchor};
 use std::path::PathBuf;
 use tokio::fs;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
@@ -64,12 +64,14 @@ pub(crate) async fn tls_client_config(config: TlsConfig) -> Result<ClientConfig,
 async fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopError> {
     let contents = fs::read(path)
         .await
-        .map_err(|e| MtopError::configuration_cause(format!("unable to load cert {:?}", path), e))?;
+        .map_err(|e| MtopError::configuration_cause(format!("unable to load cert {}", path.display()), e))?;
     let iter = CertificateDer::pem_slice_iter(&contents);
 
     let mut out = Vec::new();
     for res in iter {
-        out.push(res.map_err(|e| MtopError::configuration_cause(format!("unable to parse cert {:?}", path), e))?);
+        out.push(
+            res.map_err(|e| MtopError::configuration_cause(format!("unable to parse cert {}", path.display()), e))?,
+        );
     }
 
     Ok(out)
@@ -78,10 +80,10 @@ async fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopE
 async fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
     let contents = fs::read(path)
         .await
-        .map_err(|e| MtopError::configuration_cause(format!("unable to load key {:?}", path), e))?;
+        .map_err(|e| MtopError::configuration_cause(format!("unable to load key {}", path.display()), e))?;
 
     PrivateKeyDer::from_pem_slice(&contents)
-        .map_err(|e| MtopError::configuration_cause(format!("unable to parse key {:?}", path), e))
+        .map_err(|e| MtopError::configuration_cause(format!("unable to parse key {}", path.display()), e))
 }
 
 fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, MtopError> {
@@ -97,6 +99,6 @@ fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, 
 
 fn default_root_store() -> RootCertStore {
     let mut store = RootCertStore::empty();
-    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(|c| c.to_owned()));
+    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(TrustAnchor::to_owned));
     store
 }

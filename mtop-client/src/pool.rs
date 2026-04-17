@@ -55,7 +55,7 @@ where
         // clients.
         let client = {
             let mut clients = self.clients.lock().await;
-            clients.get_mut(key).and_then(|v| v.pop())
+            clients.get_mut(key).and_then(Vec::pop)
         };
 
         match client {
@@ -93,7 +93,7 @@ where
             .field("config", &self.config)
             .field("clients", &"...")
             .field("factory", &"...")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -154,7 +154,7 @@ mod test {
         }
     }
 
-    fn new_pool(created: Arc<AtomicU64>, dropped: Arc<AtomicU64>) -> ClientPool<String, CountingClient> {
+    fn new_pool(created: &Arc<AtomicU64>, dropped: &Arc<AtomicU64>) -> ClientPool<String, CountingClient> {
         let factory = CountingClientFactory {
             created: created.clone(),
             dropped: dropped.clone(),
@@ -171,7 +171,7 @@ mod test {
     async fn test_client_pool_get_empty_pool() {
         let created = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
-        let pool = new_pool(created.clone(), dropped.clone());
+        let pool = new_pool(&created, &dropped);
 
         let _client = pool.get(&"whatever".to_owned()).await.unwrap();
 
@@ -183,7 +183,7 @@ mod test {
     async fn test_client_pool_get_existing_client() {
         let created = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
-        let pool = new_pool(created.clone(), dropped.clone());
+        let pool = new_pool(&created, &dropped);
 
         let client1 = pool.get(&"whatever".to_owned()).await.unwrap();
         pool.put(client1).await;
@@ -197,7 +197,7 @@ mod test {
     async fn test_client_pool_put_at_max_idle() {
         let created = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
-        let pool = new_pool(created.clone(), dropped.clone());
+        let pool = new_pool(&created, &dropped);
 
         let client1 = pool.get(&"whatever".to_owned()).await.unwrap();
         let client2 = pool.get(&"whatever".to_owned()).await.unwrap();
@@ -212,7 +212,7 @@ mod test {
     async fn test_client_pool_put_zero_max_idle() {
         let created = Arc::new(AtomicU64::new(0));
         let dropped = Arc::new(AtomicU64::new(0));
-        let mut pool = new_pool(created.clone(), dropped.clone());
+        let mut pool = new_pool(&created, &dropped);
         pool.config.max_idle = 0;
 
         let client = pool.get(&"whatever".to_owned()).await.unwrap();

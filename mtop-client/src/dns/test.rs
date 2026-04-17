@@ -44,9 +44,13 @@ impl AsyncRead for TestUdpSocket {
 impl AsyncWrite for TestUdpSocket {
     fn poll_write(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, Error>> {
         let mut cur = Cursor::new(buf);
+
         let start = cur.position();
         let msg = Message::read_network_bytes(&mut cur).unwrap();
-        let read = (cur.position() - start) as usize;
+        let end = cur.position();
+
+        assert!(end > start);
+        let read = usize::try_from(end - start).unwrap();
         assert_eq!(read, msg.size());
 
         Poll::Ready(Ok(read))
@@ -83,7 +87,7 @@ impl AsyncRead for TestTcpSocket {
         let size = msg.size();
 
         let mut bytes = Vec::new();
-        bytes.write_u16::<NetworkEndian>(size as u16).unwrap();
+        bytes.write_u16::<NetworkEndian>(u16::try_from(size).unwrap()).unwrap();
         msg.write_network_bytes(&mut bytes).unwrap();
         assert_eq!(bytes.len(), size + 2);
 
@@ -133,7 +137,7 @@ impl ClientFactory<SocketAddr, UdpConnection> for TestUdpClientFactory {
             .get(key)
             .ok_or_else(|| MtopError::runtime(format!("no messages configured for {}", key)))?;
 
-        let sock = TestUdpSocket::new(messages.to_vec());
+        let sock = TestUdpSocket::new(messages.clone());
         let (read, write) = tokio::io::split(sock);
         Ok(UdpConnection::new(read, write))
     }
@@ -161,7 +165,7 @@ impl ClientFactory<SocketAddr, TcpConnection> for TestTcpClientFactory {
             .get(key)
             .ok_or_else(|| MtopError::runtime(format!("no messages configured for {}", key)))?;
 
-        let sock = TestTcpSocket::new(messages.to_vec());
+        let sock = TestTcpSocket::new(messages.clone());
         let (read, write) = tokio::io::split(sock);
         Ok(TcpConnection::new(read, write))
     }
