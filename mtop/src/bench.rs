@@ -1,5 +1,5 @@
 use mtop_client::{MemcachedClient, MtopError, Timeout};
-use rand::Rng;
+use rand::RngExt;
 use rand_distr::Exp;
 use std::fmt;
 use std::str::FromStr;
