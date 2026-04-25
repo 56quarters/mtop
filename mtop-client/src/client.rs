@@ -209,7 +209,7 @@ macro_rules! spawn_for_host {
 /// Run a method on a connection to a particular server based on the hash of a single key.
 macro_rules! operation_for_key {
     ($self:ident, $method:ident, $key:expr $(, $args:expr)* $(,)?) => {{
-        let key = Key::one($key)?;
+        let key = $key.try_into()?;
         let server = $self.selector.server(&key)?;
 
         run_for_host!($self.pool, &server, $method, &key, $($args,)*)
@@ -399,9 +399,9 @@ impl MemcachedClient {
     pub async fn get<I, K>(&self, keys: I) -> Result<ValuesResponse, MtopError>
     where
         I: IntoIterator<Item = K>,
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
     {
-        let keys = Key::many(keys)?;
+        let keys = Key::parse_all(keys)?;
         if keys.is_empty() {
             return Ok(ValuesResponse::default());
         }
@@ -447,7 +447,7 @@ impl MemcachedClient {
     /// is established.
     pub async fn incr<K>(&self, key: K, delta: u64) -> Result<u64, MtopError>
     where
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
     {
         operation_for_key!(self, incr, key, delta)
     }
@@ -461,7 +461,7 @@ impl MemcachedClient {
     /// is established.
     pub async fn decr<K>(&self, key: K, delta: u64) -> Result<u64, MtopError>
     where
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
     {
         operation_for_key!(self, decr, key, delta)
     }
@@ -473,7 +473,7 @@ impl MemcachedClient {
     /// is established.
     pub async fn set<K, V>(&self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
     where
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
         V: AsRef<[u8]>,
     {
         operation_for_key!(self, set, key, flags, ttl, data)
@@ -486,7 +486,7 @@ impl MemcachedClient {
     /// is established.
     pub async fn add<K, V>(&self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
     where
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
         V: AsRef<[u8]>,
     {
         operation_for_key!(self, add, key, flags, ttl, data)
@@ -499,7 +499,7 @@ impl MemcachedClient {
     /// is established.
     pub async fn replace<K, V>(&self, key: K, flags: u64, ttl: u32, data: V) -> Result<(), MtopError>
     where
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
         V: AsRef<[u8]>,
     {
         operation_for_key!(self, replace, key, flags, ttl, data)
@@ -512,7 +512,7 @@ impl MemcachedClient {
     /// is established.
     pub async fn touch<K>(&self, key: K, ttl: u32) -> Result<(), MtopError>
     where
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
     {
         operation_for_key!(self, touch, key, ttl)
     }
@@ -524,7 +524,7 @@ impl MemcachedClient {
     /// is established.
     pub async fn delete<K>(&self, key: K) -> Result<(), MtopError>
     where
-        K: Into<String>,
+        K: TryInto<Key, Error = MtopError>,
     {
         operation_for_key!(self, delete, key)
     }
@@ -610,7 +610,7 @@ mod test {
 
                 Server::new(id, name)
             };
-            mapping.insert(Key::one($key).unwrap(), server.clone());
+            mapping.insert($key.try_into().unwrap(), server.clone());
             contents.insert(server, $contents.to_vec());
             )*
 

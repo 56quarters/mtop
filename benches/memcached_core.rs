@@ -1,5 +1,5 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use mtop_client::{Key, Memcached};
+use mtop_client::Memcached;
 use std::io::Cursor;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
@@ -42,20 +42,21 @@ fn memcached_read_write(c: &mut Criterion) {
             || Memcached::new(Cursor::new(GETS), Vec::new()),
             |mut conn| {
                 runtime.block_on(async {
-                    let _ = conn.get(
-                        &[
-                            Key::one("foo1").unwrap(),
-                            Key::one("foo2").unwrap(),
-                            Key::one("foo3").unwrap(),
-                            Key::one("foo4").unwrap(),
-                            Key::one("foo5").unwrap(),
-                            Key::one("foo6").unwrap(),
-                            Key::one("foo7").unwrap(),
-                            Key::one("foo8").unwrap(),
-                            Key::one("foo9").unwrap(),
-                            Key::one("foo10").unwrap(),
-                        ]
-                    ).await.unwrap();
+                    let _ = conn
+                        .get(&[
+                            "foo1".try_into().unwrap(),
+                            "foo2".try_into().unwrap(),
+                            "foo3".try_into().unwrap(),
+                            "foo4".try_into().unwrap(),
+                            "foo5".try_into().unwrap(),
+                            "foo6".try_into().unwrap(),
+                            "foo7".try_into().unwrap(),
+                            "foo8".try_into().unwrap(),
+                            "foo9".try_into().unwrap(),
+                            "foo10".try_into().unwrap(),
+                        ])
+                        .await
+                        .unwrap();
                 })
             },
             BatchSize::SmallInput,
