@@ -44,7 +44,7 @@ fuzz_target!(|data: ValuesResponse| -> Corpus {
     // actually affect the data returned and the parsing logic short-circuits and returns
     // an error after the first value it can't parse _but_ this allows us to make sure
     // writing keys to the server works well enough.
-    let keys: Vec<Key> = data.lines.iter().flat_map(|l| Key::one(&l.key)).collect();
+    let keys: Vec<Key> = data.lines.iter().flat_map(|l| (&l.key).try_into()).collect();
 
     let read: Cursor<Vec<u8>> = Cursor::new(data.into());
     let write = Vec::new();

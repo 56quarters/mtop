@@ -1,4 +1,4 @@
-use mtop_client::{Discovery, Key, MemcachedClient, Timeout};
+use mtop_client::{Discovery, MemcachedClient, Timeout};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -58,7 +58,7 @@ impl Checker {
         // when doing the check.
         while !self.stop.load(Ordering::Acquire) && start.elapsed() < time {
             let _ = interval.tick().await;
-            let key = Key::one(KEY).unwrap();
+            let key = KEY.try_into().unwrap();
             let val = VALUE.to_vec();
 
             let dns_start = Instant::now();

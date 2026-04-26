@@ -65,10 +65,9 @@ async fn load_cert(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, MtopE
     let contents = fs::read(path)
         .await
         .map_err(|e| MtopError::configuration_cause(format!("unable to load cert {}", path.display()), e))?;
-    let iter = CertificateDer::pem_slice_iter(&contents);
 
     let mut out = Vec::new();
-    for res in iter {
+    for res in CertificateDer::pem_slice_iter(&contents) {
         out.push(
             res.map_err(|e| MtopError::configuration_cause(format!("unable to parse cert {}", path.display()), e))?,
         );

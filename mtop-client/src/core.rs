@@ -1045,29 +1045,17 @@ pub struct Key(String);
 impl Key {
     const MAX_LENGTH: usize = 250;
 
-    pub fn one<T>(val: T) -> Result<Key, MtopError>
-    where
-        T: Into<String>,
-    {
-        let val = val.into();
-        if Self::is_legal_val(&val) {
-            Ok(Key(val))
-        } else {
-            Err(MtopError::runtime(format!("invalid key {}", val)))
-        }
-    }
-
-    pub fn many<I, T>(vals: I) -> Result<Vec<Key>, MtopError>
+    pub fn parse_all<I, T>(vals: I) -> Result<Vec<Self>, MtopError>
     where
         I: IntoIterator<Item = T>,
-        T: Into<String>,
+        T: TryInto<Key, Error = MtopError>,
     {
         let iter = vals.into_iter();
         let (sz, _) = iter.size_hint();
         let mut out = Vec::with_capacity(sz);
 
         for val in iter {
-            out.push(Self::one(val)?);
+            out.push(val.try_into()?);
         }
 
         Ok(out)
@@ -1079,6 +1067,18 @@ impl Key {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    fn parse<T>(val: T) -> Result<Self, MtopError>
+    where
+        T: Into<String>,
+    {
+        let val = val.into();
+        if Self::is_legal_val(&val) {
+            Ok(Key(val))
+        } else {
+            Err(MtopError::runtime(format!("invalid key {}", val)))
+        }
     }
 
     fn is_legal_val(val: &str) -> bool {
@@ -1114,6 +1114,30 @@ impl Borrow<str> for Key {
     }
 }
 
+impl TryFrom<String> for Key {
+    type Error = MtopError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Key::parse(value)
+    }
+}
+
+impl TryFrom<&String> for Key {
+    type Error = MtopError;
+
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
+        Key::parse(value)
+    }
+}
+
+impl TryFrom<&str> for Key {
+    type Error = MtopError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Key::parse(value)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::{ErrorKind, Key, Memcached, Meta, Slab, SlabItem, SlabItems};
@@ -1129,38 +1153,63 @@ mod test {
     /////////
 
     #[test]
-    fn test_key_one_length() {
+    fn test_key_parse_length() {
         let val = "abc".repeat(Key::MAX_LENGTH);
-        let res = Key::one(val);
+        let res = Key::parse(val);
         assert!(res.is_err());
     }
 
     #[test]
-    fn test_key_one_non_ascii() {
+    fn test_key_parse_non_ascii() {
         let val = "🤦";
-        let res = Key::one(val);
+        let res = Key::parse(val);
         assert!(res.is_err());
     }
 
     #[test]
-    fn test_key_one_whitespace() {
+    fn test_key_parse_whitespace() {
         let val = "some thing";
-        let res = Key::one(val);
+        let res = Key::parse(val);
         assert!(res.is_err());
     }
 
     #[test]
-    fn test_key_one_control_char() {
+    fn test_key_parse_control_char() {
         let val = "\x7F";
-        let res = Key::one(val);
+        let res = Key::parse(val);
         assert!(res.is_err());
     }
 
     #[test]
-    fn test_key_one_success() {
+    fn test_key_parse_success() {
         let val = "a-reasonable-key";
-        let res = Key::one(val);
-        assert!(res.is_ok());
+        let key = Key::parse(val).unwrap();
+
+        assert_eq!(Key("a-reasonable-key".to_owned()), key);
+    }
+
+    #[test]
+    fn test_key_parse_all_string() {
+        let vals = vec![String::from("foo"), String::from("bar")];
+        let keys = Key::parse_all(vals).unwrap();
+
+        assert_eq!(vec![Key("foo".to_owned()), Key("bar".to_owned())], keys,);
+    }
+
+    #[test]
+    fn test_key_parse_all_string_borrowed() {
+        let vals = vec![String::from("foo"), String::from("bar")];
+        let keys = Key::parse_all(&vals).unwrap();
+
+        assert_eq!(vec![Key("foo".to_owned()), Key("bar".to_owned())], keys,);
+    }
+
+    #[test]
+    fn test_key_parse_all_str() {
+        let vals = ["foo", "bar"];
+        let keys = Key::parse_all(vals).unwrap();
+
+        assert_eq!(vec![Key("foo".to_owned()), Key("bar".to_owned())], keys,);
     }
 
     struct WriteAdapter {
@@ -1208,7 +1257,7 @@ mod test {
     async fn test_memcached_get_no_key() {
         let (_rx, mut client) = client!();
         let vals: Vec<String> = vec![];
-        let keys = Key::many(vals).unwrap();
+        let keys = Key::parse_all(vals).unwrap();
         let res = client.get(&keys).await.unwrap();
 
         assert!(res.is_empty());
@@ -1217,7 +1266,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_get_error() {
         let (_rx, mut client) = client!("SERVER_ERROR backend failure\r\n");
-        let keys = Key::many(vec!["foo", "baz"]).unwrap();
+        let keys = Key::parse_all(vec!["foo", "baz"]).unwrap();
         let res = client.get(&keys).await;
 
         assert!(res.is_err());
@@ -1228,7 +1277,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_get_miss() {
         let (_rx, mut client) = client!("END\r\n");
-        let keys = Key::many(vec!["foo", "baz"]).unwrap();
+        let keys = Key::parse_all(vec!["foo", "baz"]).unwrap();
         let res = client.get(&keys).await.unwrap();
 
         assert!(res.is_empty());
@@ -1243,7 +1292,7 @@ mod test {
             "qux\r\n",
             "END\r\n",
         );
-        let keys = Key::many(vec!["foo", "baz"]).unwrap();
+        let keys = Key::parse_all(vec!["foo", "baz"]).unwrap();
         let res = client.get(&keys).await.unwrap();
 
         let val1 = res.get("foo").unwrap();
@@ -1266,7 +1315,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_incr_bad_val() {
         let (mut rx, mut client) = client!("CLIENT_ERROR cannot increment or decrement non-numeric value\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.incr(&key, 2).await;
 
         assert!(res.is_err());
@@ -1281,7 +1330,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_incr_success() {
         let (mut rx, mut client) = client!("3\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.incr(&key, 2).await.unwrap();
 
         assert_eq!(3, res);
@@ -1297,7 +1346,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_decr_bad_val() {
         let (mut rx, mut client) = client!("CLIENT_ERROR cannot increment or decrement non-numeric value\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.decr(&key, 1).await;
 
         assert!(res.is_err());
@@ -1312,7 +1361,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_decr_success() {
         let (mut rx, mut client) = client!("3\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.decr(&key, 1).await.unwrap();
 
         assert_eq!(3, res);
@@ -1352,7 +1401,7 @@ mod test {
     macro_rules! test_store_command_success {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("STORED\r\n");
-            let res = client.$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes()).await;
+            let res = client.$method(&Key::parse("test").unwrap(), 0, 300, "val".as_bytes()).await;
 
             assert!(res.is_ok());
             let bytes = rx.recv().await.unwrap();
@@ -1364,7 +1413,7 @@ mod test {
     macro_rules! test_store_command_error {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("NOT_STORED\r\n");
-            let res = client.$method(&Key::one("test").unwrap(), 0, 300, "val".as_bytes()).await;
+            let res = client.$method(&Key::parse("test").unwrap(), 0, 300, "val".as_bytes()).await;
 
             assert!(res.is_err());
             let err = res.unwrap_err();
@@ -1425,7 +1474,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_touch_success() {
         let (mut rx, mut client) = client!("TOUCHED\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.touch(&key, 300).await;
 
         assert!(res.is_ok());
@@ -1437,7 +1486,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_touch_error() {
         let (mut rx, mut client) = client!("NOT_FOUND\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.touch(&key, 300).await;
 
         assert!(res.is_err());
@@ -1456,7 +1505,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_delete_success() {
         let (mut rx, mut client) = client!("DELETED\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.delete(&key).await;
 
         assert!(res.is_ok());
@@ -1468,7 +1517,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_delete_error() {
         let (mut rx, mut client) = client!("NOT_FOUND\r\n");
-        let key = Key::one("test").unwrap();
+        let key = Key::parse("test").unwrap();
         let res = client.delete(&key).await;
 
         assert!(res.is_err());
