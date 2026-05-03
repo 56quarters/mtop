@@ -1,7 +1,7 @@
 use crate::core::MtopError;
 use crate::dns::core::{RecordClass, RecordType};
 use crate::dns::message::{Flags, Message, MessageId, Question, ResponseCode};
-use crate::dns::name::Name;
+use crate::dns::name::{Name, NamesDisplay};
 use crate::net::tcp_connect;
 use crate::pool::{ClientFactory, ClientPool, ClientPoolConfig};
 use crate::timeout::Timeout;
@@ -63,13 +63,25 @@ impl Default for DnsClientConfig {
 /// trait exists to make testing consumers easier.
 #[async_trait]
 pub trait DnsClient {
+    /// Resolve a single domain name of the provided type, ensuring it is
+    /// fully qualified before making the query.
     async fn resolve(
         &self,
         id: MessageId,
         name: Name,
         rtype: RecordType,
         rclass: RecordClass,
-    ) -> Result<Message, MtopError>;
+    ) -> Result<Message, MtopError> {
+        let full = name.to_fqdn();
+        let flags = Flags::default().set_recursion_desired();
+        let question = Question::new(full, rtype).set_qclass(rclass);
+        let message = Message::new(id, flags).add_question(question);
+        self.resolve_msg(message).await
+    }
+
+    /// Resolve a message potentially containing multiple queries. Each name
+    /// must already be fully qualified.
+    async fn resolve_msg(&self, message: Message) -> Result<Message, MtopError>;
 }
 
 /// Implementation of a `DnsClient` that uses UDP with TCP fallback.
@@ -172,17 +184,7 @@ impl DefaultDnsClient {
 
 #[async_trait]
 impl DnsClient for DefaultDnsClient {
-    async fn resolve(
-        &self,
-        id: MessageId,
-        name: Name,
-        rtype: RecordType,
-        rclass: RecordClass,
-    ) -> Result<Message, MtopError> {
-        let full = name.to_fqdn();
-        let flags = Flags::default().set_recursion_desired();
-        let question = Question::new(full.clone(), rtype).set_qclass(rclass);
-        let message = Message::new(id, flags).add_question(question);
+    async fn resolve_msg(&self, message: Message) -> Result<Message, MtopError> {
         let start = self.starting_idx();
 
         let mut errors = Vec::new();
@@ -217,11 +219,10 @@ impl DnsClient for DefaultDnsClient {
             }
         }
 
+        let names: Vec<&Name> = message.questions().iter().map(Question::name).collect();
         Err(MtopError::runtime(format!(
-            "no nameservers returned suitable responses for name {} type {} class {}: {}",
-            full,
-            rtype,
-            rclass,
+            "no nameservers returned suitable responses for names {}: {}",
+            NamesDisplay::new(&names),
             errors.join("; ")
         )))
     }

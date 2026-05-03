@@ -20,13 +20,18 @@ struct MockDnsClient {
 
 #[async_trait]
 impl DnsClient for MockDnsClient {
-    async fn resolve(
+    async fn resolve_msg(
         &self,
-        id: MessageId,
-        name: Name,
-        rtype: RecordType,
-        rclass: RecordClass,
+        message: Message,
     ) -> Result<Message, MtopError> {
+        let questions = message.questions();
+        assert_eq!(1, questions.len());
+
+        let id = message.id();
+        let name = questions[0].name().clone();
+        let rtype = questions[0].qtype();
+        let rclass = questions[0].qclass();
+        
         match self.responses.get(&(name, rtype, rclass)) {
             Some(v) => Ok(v.clone().set_id(id)),
             None => Err(MtopError::runtime("no message available")),
@@ -40,7 +45,7 @@ fn new_response_srv() -> Message {
         .set_recursion_desired()
         .set_recursion_available();
 
-    let name = Name::from_str("_memcached._tcp.example.com").unwrap();
+    let name = Name::from_str("_memcached._tcp.example.com").unwrap().to_fqdn();
 
     let mut message =
         Message::new(MessageId::random(), flags).add_question(Question::new(name.clone(), RecordType::SRV));
@@ -70,13 +75,13 @@ fn new_response_a() -> Message {
         .set_recursion_available();
 
     let mut message = Message::new(MessageId::random(), flags).add_question(Question::new(
-        Name::from_str("cache.example.com").unwrap(),
+        Name::from_str("cache.example.com").unwrap().to_fqdn(),
         RecordType::A,
     ));
 
     for i in 0..15 {
         message = message.add_answer(Record::new(
-            Name::from_str(&format!("cache{:0>2}.example.com", i)).unwrap(),
+            Name::from_str(&format!("cache{:0>2}.example.com", i)).unwrap().to_fqdn(),
             RecordType::A,
             RecordClass::INET,
             300,
@@ -95,7 +100,7 @@ fn new_response_aaaa() -> Message {
 
     // Stop trying to make ~fetch~ IPv6 happen.
     Message::new(MessageId::random(), flags).add_question(Question::new(
-        Name::from_str("cache.example.com").unwrap(),
+        Name::from_str("cache.example.com").unwrap().to_fqdn(),
         RecordType::AAAA,
     ))
 }
@@ -109,7 +114,7 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
                 let mut client = MockDnsClient::default();
                 client.responses.insert(
                     (
-                        Name::from_str("_memcached._tcp.example.com").unwrap(),
+                        Name::from_str("_memcached._tcp.example.com").unwrap().to_fqdn(),
                         RecordType::SRV,
                         RecordClass::INET,
                     ),
@@ -135,7 +140,7 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
                 let mut client = MockDnsClient::default();
                 client.responses.insert(
                     (
-                        Name::from_str("cache.example.com").unwrap(),
+                        Name::from_str("cache.example.com").unwrap().to_fqdn(),
                         RecordType::A,
                         RecordClass::INET,
                     ),
@@ -143,7 +148,7 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
                 );
                 client.responses.insert(
                     (
-                        Name::from_str("cache.example.com").unwrap(),
+                        Name::from_str("cache.example.com").unwrap().to_fqdn(),
                         RecordType::AAAA,
                         RecordClass::INET,
                     ),

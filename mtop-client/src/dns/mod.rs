@@ -12,7 +12,7 @@ pub use crate::dns::client::{
 };
 pub use crate::dns::core::{RecordClass, RecordType};
 pub use crate::dns::message::{Flags, Message, MessageId, Operation, Question, Record, ResponseCode};
-pub use crate::dns::name::Name;
+pub use crate::dns::name::{Name, NamesDisplay};
 pub use crate::dns::rdata::{
     RecordData, RecordDataA, RecordDataAAAA, RecordDataCNAME, RecordDataNS, RecordDataOpt, RecordDataSOA,
     RecordDataSRV, RecordDataTXT, RecordDataUnknown,
