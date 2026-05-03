@@ -3,7 +3,9 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::ping::{Bundle, DnsPinger};
 use mtop::{profile, sig};
-use mtop_client::dns::{DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
+use mtop_client::dns::{
+    DnsClient, Flags, Message, MessageId, Name, NamesDisplay, Question, Record, RecordClass, RecordType,
+};
 use std::fmt::Write;
 use std::io::Cursor;
 use std::net::SocketAddr;
@@ -127,9 +129,9 @@ struct QueryCommand {
     #[arg(long, default_value_t = DEFAULT_RECORD_CLASS)]
     rclass: RecordClass,
 
-    /// Domain name to lookup.
+    /// Domain names to lookup.
     #[arg(required = true)]
-    name: Name,
+    names: Vec<Name>,
 }
 
 /// Read a binary format DNS message from standard input and display it as dig-like text output.
@@ -147,9 +149,9 @@ struct WriteCommand {
     #[arg(long, default_value_t = DEFAULT_RECORD_CLASS)]
     rclass: RecordClass,
 
-    /// Domain name to lookup.
+    /// Domain names to lookup.
     #[arg(required = true)]
-    name: Name,
+    names: Vec<Name>,
 }
 
 #[tokio::main]
@@ -203,14 +205,19 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
     .instrument(tracing::span!(Level::INFO, "dns::new_client"))
     .await;
 
+    let mut msg = Message::new(MessageId::random(), Flags::default().set_recursion_desired());
+    for n in &cmd.names {
+        msg = msg.add_question(Question::new(n.clone().to_fqdn(), cmd.rtype).set_qclass(cmd.rclass))
+    }
+
     let response = match client
-        .resolve(MessageId::random(), cmd.name.clone(), cmd.rtype, cmd.rclass)
+        .resolve_msg(msg)
         .instrument(tracing::span!(Level::INFO, "dns_client.resolve"))
         .await
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(message = "unable to perform DNS query", name = %cmd.name, err = %e);
+            tracing::error!(message = "unable to perform DNS query", names = %NamesDisplay::new(&cmd.names), err = %e);
             return ExitCode::FAILURE;
         }
     };
@@ -248,10 +255,10 @@ async fn run_read(_: &ReadCommand) -> ExitCode {
 }
 
 async fn run_write(cmd: &WriteCommand) -> ExitCode {
-    let id = MessageId::random();
-    let name = cmd.name.clone().to_fqdn();
-    let msg = Message::new(id, Flags::default().set_query().set_recursion_desired())
-        .add_question(Question::new(name, cmd.rtype).set_qclass(cmd.rclass));
+    let mut msg = Message::new(MessageId::random(), Flags::default().set_recursion_desired());
+    for n in &cmd.names {
+        msg = msg.add_question(Question::new(n.clone().to_fqdn(), cmd.rtype).set_qclass(cmd.rclass))
+    }
 
     write_binary_message(&msg).await
 }

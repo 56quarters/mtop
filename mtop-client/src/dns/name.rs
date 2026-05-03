@@ -1,6 +1,7 @@
 use crate::core::MtopError;
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use std::fmt;
+use std::fmt::{Formatter, Write};
 use std::io::{Read, Seek, SeekFrom};
 use std::str::FromStr;
 
@@ -312,6 +313,35 @@ impl FromStr for Name {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_bytes(s.as_bytes())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NamesDisplay<'a, D>(&'a Vec<D>);
+
+impl<'a, D> NamesDisplay<'a, D>
+where
+    D: fmt::Display,
+{
+    pub fn new(names: &'a Vec<D>) -> Self {
+        Self(names)
+    }
+}
+
+impl<D> fmt::Display for NamesDisplay<'_, D>
+where
+    D: fmt::Display,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_char('[')?;
+        for (i, d) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+
+            d.fmt(f)?;
+        }
+        f.write_char(']')
     }
 }
 
