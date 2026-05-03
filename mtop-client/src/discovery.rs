@@ -329,7 +329,13 @@ mod test {
 
     #[async_trait]
     impl DnsClient for MockDnsClient {
-        async fn resolve_msg(&self, _message: Message) -> Result<Message, MtopError> {
+        async fn resolve(
+            &self,
+            _id: MessageId,
+            _name: Name,
+            _rtype: RecordType,
+            _rclass: RecordClass,
+        ) -> Result<Message, MtopError> {
             let mut responses = self.responses.lock().await;
             let res = responses.pop().unwrap();
             Ok(res)

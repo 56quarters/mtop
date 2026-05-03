@@ -20,18 +20,14 @@ struct MockDnsClient {
 
 #[async_trait]
 impl DnsClient for MockDnsClient {
-    async fn resolve_msg(
+    async fn resolve(
         &self,
-        message: Message,
+        id: MessageId,
+        name: Name,
+        rtype: RecordType,
+        rclass: RecordClass,
     ) -> Result<Message, MtopError> {
-        let questions = message.questions();
-        assert_eq!(1, questions.len());
-
-        let id = message.id();
-        let name = questions[0].name().clone();
-        let rtype = questions[0].qtype();
-        let rclass = questions[0].qclass();
-        
+        let name = name.to_fqdn();
         match self.responses.get(&(name, rtype, rclass)) {
             Some(v) => Ok(v.clone().set_id(id)),
             None => Err(MtopError::runtime("no message available")),
