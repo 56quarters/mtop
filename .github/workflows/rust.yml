@@ -45,6 +45,7 @@ jobs:
         - fuzz_target: fuzz_target_memcached_get
         - fuzz_target: fuzz_target_memcached_metas
         - fuzz_target: fuzz_target_memcached_stats
+        - fuzz_target: fuzz_target_mtop_duration
     steps:
     - uses: actions/checkout@v4
     - name: Rustup
