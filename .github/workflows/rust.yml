@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_FUZZ_VERSION: 0.12.0
+  CARGO_FUZZ_VERSION: 0.13.2
   FUZZ_TIME: 60
 
 jobs:
@@ -49,6 +49,8 @@ jobs:
     - uses: actions/checkout@v4
     - name: Rustup
       run: rustup update nightly && rustup default nightly
+    - name: Versions
+      run: cargo --version && rustc --version
     - uses: actions/cache@v4
       with:
         path: ${{ runner.tool_cache }}/cargo-fuzz
@@ -57,8 +59,6 @@ jobs:
       run: echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> $GITHUB_PATH
     - name: Cargo fuzz
       run: cargo install --root "${{ runner.tool_cache }}/cargo-fuzz" --version ${{ env.CARGO_FUZZ_VERSION }} cargo-fuzz --locked
-    - name: Versions
-      run: cargo --version && rustc --version && cargo fuzz --version
     - name: Fuzz build
       run: cd fuzz && cargo fuzz build ${{ matrix.fuzz_target }}
     - name: Fuzz run
