@@ -39,8 +39,8 @@ pub struct DnsClientConfig {
     /// the nameservers are tried in-order for each resolution.
     pub rotate: bool,
 
-    /// Max number of open sockets or connections to each nameserver. Default is to keep one
-    /// open socket or connection per nameserver. Set to 0 to disable this behavior.
+    /// Max number of open sockets or connections to each nameserver. Default is not to keep
+    /// any open socket or connections open.
     pub pool_max_idle: u64,
 }
 
@@ -52,7 +52,7 @@ impl Default for DnsClientConfig {
             timeout: Duration::from_secs(5),
             attempts: 2,
             rotate: false,
-            pool_max_idle: 1,
+            pool_max_idle: 0,
         }
     }
 }
@@ -426,7 +426,10 @@ mod test {
     use crate::dns::message::{Flags, Message, MessageId, Question, Record, ResponseCode};
     use crate::dns::name::Name;
     use crate::dns::rdata::{RecordData, RecordDataA};
-    use crate::dns::test::{TestTcpClientFactory, TestTcpSocket, TestUdpClientFactory, TestUdpSocket};
+    use crate::dns::test::{
+        TestPooledTcpClientFactory, TestPooledUdpClientFactory, TestTcpSocket, TestUdpSocket,
+        TestUnpooledTcpClientFactory, TestUnpooledUdpClientFactory,
+    };
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::net::{Ipv4Addr, SocketAddr};
@@ -589,8 +592,8 @@ mod test {
 
         let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
         udp_mapping.entry(server).or_default().push(udp_response);
-        let udp_factory = TestUdpClientFactory::new(udp_mapping);
-        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+        let udp_factory = TestUnpooledUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestUnpooledTcpClientFactory::new(HashMap::new());
 
         let cfg = DnsClientConfig::default();
         let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
@@ -609,8 +612,8 @@ mod test {
         let udp_response = new_response(id);
         let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
         udp_mapping.entry(server).or_default().push(udp_response.clone());
-        let udp_factory = TestUdpClientFactory::new(udp_mapping);
-        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+        let udp_factory = TestUnpooledUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestUnpooledTcpClientFactory::new(HashMap::new());
 
         let cfg = DnsClientConfig::default();
         let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
@@ -635,8 +638,8 @@ mod test {
         entry.push(udp_response2.clone());
         entry.push(udp_response1);
 
-        let udp_factory = TestUdpClientFactory::new(udp_mapping);
-        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+        let udp_factory = TestUnpooledUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestUnpooledTcpClientFactory::new(HashMap::new());
 
         let cfg = DnsClientConfig::default();
         let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
@@ -664,8 +667,8 @@ mod test {
         entry.push(udp_response2.clone());
         entry.push(udp_response1);
 
-        let udp_factory = TestUdpClientFactory::new(udp_mapping);
-        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+        let udp_factory = TestUnpooledUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestUnpooledTcpClientFactory::new(HashMap::new());
 
         let cfg = DnsClientConfig::default();
         let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
@@ -690,8 +693,8 @@ mod test {
         udp_mapping.entry(server1).or_default().push(udp_response1);
         udp_mapping.entry(server2).or_default().push(udp_response2.clone());
 
-        let udp_factory = TestUdpClientFactory::new(udp_mapping);
-        let tcp_factory = TestTcpClientFactory::new(HashMap::new());
+        let udp_factory = TestUnpooledUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestUnpooledTcpClientFactory::new(HashMap::new());
 
         let cfg = DnsClientConfig {
             nameservers: vec![server1, server2],
@@ -720,13 +723,53 @@ mod test {
         let mut tcp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
         tcp_mapping.entry(server).or_default().push(tcp_response.clone());
 
-        let udp_factory = TestUdpClientFactory::new(udp_mapping);
-        let tcp_factory = TestTcpClientFactory::new(tcp_mapping);
+        let udp_factory = TestUnpooledUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestUnpooledTcpClientFactory::new(tcp_mapping);
 
         let cfg = DnsClientConfig::default();
         let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
         let result = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
 
         assert_eq!(tcp_response, result);
+    }
+
+    #[tokio::test]
+    async fn test_default_dns_client_resolve_tcp_reuse() {
+        let id = MessageId::from(123);
+        let name = Name::from_str("example.com.").unwrap();
+        let server = "127.0.0.1:53".parse().unwrap();
+
+        let udp_response = new_empty_response(id);
+        let flags = udp_response.flags().set_truncated();
+        let udp_response = udp_response.set_flags(flags);
+        let tcp_response = new_response(id);
+
+        let mut udp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        let udp_entry = udp_mapping.entry(server).or_default();
+        udp_entry.push(udp_response.clone());
+        udp_entry.push(udp_response.clone());
+
+        let mut tcp_mapping: HashMap<SocketAddr, Vec<Message>> = HashMap::new();
+        let tcp_entry = tcp_mapping.entry(server).or_default();
+        tcp_entry.push(tcp_response.clone());
+        tcp_entry.push(tcp_response.clone());
+
+        let udp_factory = TestPooledUdpClientFactory::new(udp_mapping);
+        let tcp_factory = TestPooledTcpClientFactory::new(tcp_mapping);
+
+        let cfg = DnsClientConfig {
+            pool_max_idle: 1,
+            ..Default::default()
+        };
+        let client = DefaultDnsClient::new(cfg, udp_factory, tcp_factory);
+
+        let result1 = client
+            .resolve(id, name.clone(), RecordType::A, RecordClass::INET)
+            .await
+            .unwrap();
+        assert_eq!(tcp_response, result1);
+
+        let result2 = client.resolve(id, name, RecordType::A, RecordClass::INET).await.unwrap();
+        assert_eq!(tcp_response, result2);
     }
 }

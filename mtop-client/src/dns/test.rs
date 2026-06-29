@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::Mutex;
 
 /// Test implementation of `AsyncRead` and `AsyncWrite` that reads and writes
 /// UDP format DNS bytes based on provided `Message` objects. The expected size
@@ -116,28 +117,60 @@ impl AsyncWrite for TestTcpSocket {
 }
 
 /// Test implementation of `ClientFactory` for creating `UdpConnection` instances that
-/// read provided `Message` objects.
+/// read multiple provided `Message` objects.
 #[derive(Debug)]
-pub(crate) struct TestUdpClientFactory {
-    messages: HashMap<SocketAddr, Vec<Message>>,
+pub(crate) struct TestPooledUdpClientFactory {
+    messages: Mutex<HashMap<SocketAddr, Vec<Message>>>,
 }
 
-impl TestUdpClientFactory {
+impl TestPooledUdpClientFactory {
     #[allow(dead_code)]
     pub(crate) fn new(messages: HashMap<SocketAddr, Vec<Message>>) -> Self {
-        Self { messages }
+        Self {
+            messages: Mutex::new(messages),
+        }
     }
 }
 
 #[async_trait]
-impl ClientFactory<SocketAddr, UdpConnection> for TestUdpClientFactory {
+impl ClientFactory<SocketAddr, UdpConnection> for TestPooledUdpClientFactory {
     async fn make(&self, key: &SocketAddr) -> Result<UdpConnection, MtopError> {
-        let messages = self
-            .messages
-            .get(key)
-            .ok_or_else(|| MtopError::runtime(format!("no messages configured for {}", key)))?;
+        let mut messages = self.messages.lock().await;
+        let sock_messages = messages.remove(key).unwrap();
 
-        let sock = TestUdpSocket::new(messages.clone());
+        let sock = TestUdpSocket::new(sock_messages);
+        let (read, write) = tokio::io::split(sock);
+        Ok(UdpConnection::new(read, write))
+    }
+}
+
+/// Test implementation of `ClientFactory` for creating `UdpConnection` instances that
+/// read a single provided `Message` object at time.
+#[derive(Debug)]
+pub(crate) struct TestUnpooledUdpClientFactory {
+    messages: Mutex<HashMap<SocketAddr, Vec<Message>>>,
+}
+
+impl TestUnpooledUdpClientFactory {
+    #[allow(dead_code)]
+    pub(crate) fn new(messages: HashMap<SocketAddr, Vec<Message>>) -> Self {
+        Self {
+            messages: Mutex::new(messages),
+        }
+    }
+}
+
+#[async_trait]
+impl ClientFactory<SocketAddr, UdpConnection> for TestUnpooledUdpClientFactory {
+    async fn make(&self, key: &SocketAddr) -> Result<UdpConnection, MtopError> {
+        let mut messages = self.messages.lock().await;
+        let sock_message = messages
+            .get_mut(key)
+            .ok_or_else(|| MtopError::runtime(format!("no messages configured for {}", key)))?
+            .pop()
+            .unwrap();
+
+        let sock = TestUdpSocket::new(vec![sock_message]);
         let (read, write) = tokio::io::split(sock);
         Ok(UdpConnection::new(read, write))
     }
@@ -146,26 +179,58 @@ impl ClientFactory<SocketAddr, UdpConnection> for TestUdpClientFactory {
 /// Test implementation of `ClientFactory` for creating `TcpConnection` instances that
 /// read provided `Message` objects.
 #[derive(Debug)]
-pub(crate) struct TestTcpClientFactory {
-    messages: HashMap<SocketAddr, Vec<Message>>,
+pub(crate) struct TestPooledTcpClientFactory {
+    messages: Mutex<HashMap<SocketAddr, Vec<Message>>>,
 }
 
-impl TestTcpClientFactory {
+impl TestPooledTcpClientFactory {
     #[allow(dead_code)]
     pub(crate) fn new(messages: HashMap<SocketAddr, Vec<Message>>) -> Self {
-        Self { messages }
+        Self {
+            messages: Mutex::new(messages),
+        }
     }
 }
 
 #[async_trait]
-impl ClientFactory<SocketAddr, TcpConnection> for TestTcpClientFactory {
+impl ClientFactory<SocketAddr, TcpConnection> for TestPooledTcpClientFactory {
     async fn make(&self, key: &SocketAddr) -> Result<TcpConnection, MtopError> {
-        let messages = self
-            .messages
-            .get(key)
-            .ok_or_else(|| MtopError::runtime(format!("no messages configured for {}", key)))?;
+        let mut messages = self.messages.lock().await;
+        let sock_messages = messages.remove(key).unwrap();
 
-        let sock = TestTcpSocket::new(messages.clone());
+        let sock = TestTcpSocket::new(sock_messages);
+        let (read, write) = tokio::io::split(sock);
+        Ok(TcpConnection::new(read, write))
+    }
+}
+
+/// Test implementation of `ClientFactory` for creating `TcpConnection` instances that
+/// read a single provided `Message` object at a time.
+#[derive(Debug)]
+pub(crate) struct TestUnpooledTcpClientFactory {
+    messages: Mutex<HashMap<SocketAddr, Vec<Message>>>,
+}
+
+impl TestUnpooledTcpClientFactory {
+    #[allow(dead_code)]
+    pub(crate) fn new(messages: HashMap<SocketAddr, Vec<Message>>) -> Self {
+        Self {
+            messages: Mutex::new(messages),
+        }
+    }
+}
+
+#[async_trait]
+impl ClientFactory<SocketAddr, TcpConnection> for TestUnpooledTcpClientFactory {
+    async fn make(&self, key: &SocketAddr) -> Result<TcpConnection, MtopError> {
+        let mut messages = self.messages.lock().await;
+        let sock_message = messages
+            .get_mut(key)
+            .ok_or_else(|| MtopError::runtime(format!("no messages configured for {}", key)))?
+            .pop()
+            .unwrap();
+
+        let sock = TestTcpSocket::new(vec![sock_message]);
         let (read, write) = tokio::io::split(sock);
         Ok(TcpConnection::new(read, write))
     }
