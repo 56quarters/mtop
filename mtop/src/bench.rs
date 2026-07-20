@@ -18,7 +18,7 @@ const GET_BATCH_SIZE: usize = 100;
 pub struct Percent(f64);
 
 impl Percent {
-    pub fn unchecked(v: f64) -> Self {
+    pub fn must(v: f64) -> Self {
         assert!(v >= 0.0, "percent must be >= 0.0");
         assert!(v <= 1.0, "percent must be <= 1.0");
         Self(v)

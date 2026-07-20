@@ -12,6 +12,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = { version = "0.4.0", features = ["arbitrary-derive"] }
+mtop = { path = "../mtop" }
 mtop-client = { path = "../mtop-client" }
 tokio = { version = "1.14.0", features = ["full"] }
 urlencoding = "2.1.2"
@@ -47,6 +48,13 @@ bench = false
 [[bin]]
 name = "fuzz_target_memcached_stats"
 path = "fuzz_targets/memcached_stats.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_mtop_duration"
+path = "fuzz_targets/mtop_duration.rs"
 test = false
 doc = false
 bench = false

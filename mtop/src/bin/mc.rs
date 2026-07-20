@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Bundle, Checker};
+use mtop::duration::DurationString;
 use mtop::profile;
 use mtop_client::{Discovery, MemcachedClient, Meta, MtopError, Timeout, TlsConfig, Value};
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
@@ -37,6 +38,10 @@ struct McConfig {
     /// Timeout for Memcached network operations, in seconds.
     #[arg(long, env = "MC_TIMEOUT_SECS", default_value_t = NonZeroU64::new(30).unwrap())]
     timeout_secs: NonZeroU64,
+
+    /// Timeout for Memcached network operations, in duration string format (value followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
+    #[arg(long, env = "MC_TIMEOUT", default_value_t = DurationString::must("30s"))]
+    timeout: DurationString,
 
     /// Maximum number of idle connections to maintain per host.
     #[arg(long, env = "MC_CONNECTIONS", default_value_t = NonZeroU64::new(4).unwrap())]
@@ -141,16 +146,17 @@ struct AddCommand {
 /// hundred bytes and 64KB.
 #[derive(Debug, Args)]
 struct BenchCommand {
-    /// How long to run the benchmark for in seconds.
-    #[arg(long, env = "MC_BENCH_TIME_SECS", default_value_t = NonZeroU64::new(60).unwrap())]
-    time_secs: NonZeroU64,
+    /// How long to run the benchmark for, in duration string format (value followed by units:
+    /// 'h', 'm', 's', 'ms', 'us', 'ns').
+    #[arg(long, env = "MC_BENCH_TIME", default_value_t = DurationString::must("60s"))]
+    time: DurationString,
 
     /// How many writes to the cache as a percentage of reads from the cache, 0 to 1.
     ///
     /// A value of `1.0` means that for 100 gets, there will be 100 sets. A value of `0.5`
     /// means that for 100 gets, there will be 50 sets. Default is to perform many more gets
     /// than sets since cache workloads tend to have more reads than writes.
-    #[arg(long, env = "MC_BENCH_WRITE_PERCENT", default_value_t = Percent::unchecked(0.05))]
+    #[arg(long, env = "MC_BENCH_WRITE_PERCENT", default_value_t = Percent::must(0.05))]
     write_percent: Percent,
 
     /// How many workers to run at once, performing gets and sets against the cache.
@@ -159,35 +165,39 @@ struct BenchCommand {
     #[arg(long, env = "MC_BENCH_CONCURRENCY", default_value_t = NonZeroUsize::new(1).unwrap())]
     concurrency: NonZeroUsize,
 
-    /// How long to wait between each batch of gets and sets performed against the cache.
+    /// How long to wait between each batch of gets and sets performed against the cache,
+    /// in duration string format (value followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
     ///
     /// Each batch is 1000 gets and 50 sets by default. With a delay of 100ms this means
     /// there will be 10,000 gets and 500 sets per second. To increase the number of gets
     /// and sets performed by a worker, reduce this number. To decrease the number of gets
     /// and sets performed by a worker, increase this number.
-    #[arg(long, env = "MC_BENCH_DELAY_MILLIS", default_value_t = NonZeroU64::new(100).unwrap())]
-    delay_millis: NonZeroU64,
+    #[arg(long, env = "MC_BENCH_DELAY", default_value_t = DurationString::must("100ms"))]
+    delay: DurationString,
 
-    /// TTL to use for test values stored in the cache in seconds.
-    #[arg(long, env = "MC_BENCH_TTL_SECS", default_value_t = 300)]
-    ttl_secs: u32,
+    /// TTL to use for test values stored in the cache, in duration string format (value
+    /// followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
+    #[arg(long, env = "MC_BENCH_TTL", default_value_t = DurationString::must("5m"))]
+    ttl: DurationString,
 }
 
 /// Run health checks against the cache.
 ///
-/// Checks will be run repeatedly with `delay-millis` in between each iteration until
-/// `time-secs` has elapsed. Time taken to do DNS resolution, connect, set a value in
-/// the cache, and get a value from the cache will be recorded and emitted as key-value
-/// pairs at the end of the test.
+/// Checks will be run repeatedly with `delay` in between each iteration until `time`
+/// has elapsed. Time taken to do DNS resolution, connect, set a value in the cache,
+/// and get a value from the cache will be recorded and emitted as key-value pairs at
+/// the end of the test.
 #[derive(Debug, Args)]
 struct CheckCommand {
-    /// How long to run the checks for in seconds.
-    #[arg(long, env = "MC_CHECK_TIME_SECS", default_value_t = NonZeroU64::new(60).unwrap())]
-    time_secs: NonZeroU64,
+    /// How long to run the checks for, in duration string format (value followed by units:
+    /// 'h', 'm', 's', 'ms', 'us', 'ns').
+    #[arg(long, env = "MC_CHECK_TIME", default_value_t = DurationString::must("60s"))]
+    time: DurationString,
 
-    /// How long to wait between each health check in milliseconds.
-    #[arg(long, env = "MC_CHECK_DELAY_MILLIS", default_value_t = NonZeroU64::new(100).unwrap())]
-    delay_millis: NonZeroU64,
+    /// How long to wait between each health check, in duration string format (value followed
+    /// by units: 'h', 'm', 's', 'ms', 'us', 'ns').
+    #[arg(long, env = "MC_CHECK_DELAY", default_value_t = DurationString::must("100ms"))]
+    delay: DurationString,
 }
 
 /// Decrement the value of an item in the cache.
@@ -215,12 +225,13 @@ struct DeleteCommand {
 /// Flush all entries from the cache, optionally after a delay.
 #[derive(Debug, Args)]
 struct FlushAllCommand {
-    /// How long to wait between flushing each server if there are multiple servers, in seconds.
-    /// If specified, each consecutive server will be scheduled to flush all entries this amount
-    /// of time after the previous server. For example, server S1 will flush at T = 0, S2 will flush
-    /// at T = wait_secs, S3 will flush at T = wait_secs * 2, S4 will flush at T = wait_secs * 3, etc.
-    #[arg(long, env = "MC_FLUSH_ALL_WAIT_SECS")]
-    wait_secs: Option<NonZeroU64>,
+    /// How long to wait between flushing each server if there are multiple servers, in duration
+    /// string format (value followed by units: 'h', 'm', 's', 'ms', 'us', 'ns'). If specified,
+    /// each consecutive server will be scheduled to flush all entries this amount of time after
+    /// the previous server. For example, server S1 will flush at T = 0, S2 will flush at T = wait,
+    /// S3 will flush at T = wait * 2, S4 will flush at T = wait * 3, etc.
+    #[arg(long, env = "MC_FLUSH_ALL_WAIT", default_value_t = DurationString::must("0s"))]
+    wait: DurationString,
 }
 
 /// Get the value of an item in the cache.
@@ -314,7 +325,7 @@ async fn main() -> ExitCode {
 
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let discovery = Discovery::new(dns_client);
-    let timeout = Duration::from_secs(opts.timeout_secs.get());
+    let timeout = opts.timeout.as_duration();
     let servers = match mtop::discovery::resolve_single(&opts.host, &discovery, timeout).await {
         Ok(v) => v,
         Err(e) => {
@@ -402,15 +413,15 @@ async fn run_bench(opts: &McConfig, cmd: &BenchCommand, client: MemcachedClient)
     let bencher = Bencher::new(
         client,
         Handle::current(),
-        Duration::from_millis(cmd.delay_millis.get()),
-        Duration::from_secs(opts.timeout_secs.get()),
-        Duration::from_secs(cmd.ttl_secs as u64),
+        cmd.delay.as_duration(),
+        opts.timeout.as_duration(),
+        cmd.ttl.as_duration(),
         cmd.write_percent,
         cmd.concurrency.get(),
         stop.clone(),
     );
 
-    let measurements = bencher.run(Duration::from_secs(cmd.time_secs.into())).await;
+    let measurements = bencher.run(cmd.time.as_duration()).await;
     print_bench_results(&measurements);
 
     ExitCode::SUCCESS
@@ -423,11 +434,11 @@ async fn run_check(opts: &McConfig, cmd: &CheckCommand, client: MemcachedClient,
     let checker = Checker::new(
         client,
         resolver,
-        Duration::from_millis(cmd.delay_millis.get()),
-        Duration::from_secs(opts.timeout_secs.get()),
+        cmd.delay.as_duration(),
+        opts.timeout.as_duration(),
         stop.clone(),
     );
-    let results = checker.run(&opts.host, Duration::from_secs(cmd.time_secs.get())).await;
+    let results = checker.run(&opts.host, cmd.time.as_duration()).await;
     print_check_results(&results);
 
     if results.failures.total > 0 {
@@ -466,9 +477,8 @@ async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClie
 }
 
 async fn run_flush_all(opts: &McConfig, cmd: &FlushAllCommand, client: &MemcachedClient) -> ExitCode {
-    let wait = cmd.wait_secs.map(|d| Duration::from_secs(d.get()));
     let response = match client
-        .flush_all(wait)
+        .flush_all(cmd.wait.as_duration())
         .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.flush_all")
         .instrument(tracing::span!(Level::INFO, "client.flush_all"))
         .await

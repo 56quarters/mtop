@@ -371,7 +371,7 @@ impl MemcachedClient {
     /// A future is spawned for each server with results and any errors indexed by server. A
     /// pooled connection to each server is used if available, otherwise new connections are
     /// established.
-    pub async fn flush_all(&self, wait: Option<Duration>) -> Result<ServersResponse<()>, MtopError> {
+    pub async fn flush_all(&self, wait: Duration) -> Result<ServersResponse<()>, MtopError> {
         // Note that we aren't using operation_for_all! here because we want to pass a
         // different delay argument to each server. This allows callers to flush the cache
         // in one server after another, with a delay between each for safety.
@@ -381,7 +381,7 @@ impl MemcachedClient {
             .into_iter()
             .enumerate()
             .map(|(i, server)| {
-                let delay = wait.map(|d| d * u32::try_from(i).unwrap());
+                let delay = wait * u32::try_from(i).unwrap();
                 (server.id().clone(), spawn_for_host!(self, &server, flush_all, delay))
             })
             .collect::<Vec<_>>();
@@ -785,7 +785,7 @@ mod test {
             "cache02.example.com:11211" => "unused2" => "OK\r\n".as_bytes(),
         );
 
-        let res = client.flush_all(None).await;
+        let res = client.flush_all(Duration::ZERO).await;
         let response = res.unwrap();
 
         assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
@@ -799,7 +799,7 @@ mod test {
             "cache02.example.com:11211" => "unused2" => "ERROR\r\n".as_bytes(),
         );
 
-        let res = client.flush_all(None).await;
+        let res = client.flush_all(Duration::ZERO).await;
         let response = res.unwrap();
 
         assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
@@ -813,7 +813,7 @@ mod test {
             "cache02.example.com:11211" => "unused2" => "OK\r\n".as_bytes(),
         );
 
-        let res = client.flush_all(Some(Duration::from_secs(5))).await;
+        let res = client.flush_all(Duration::from_secs(5)).await;
         let response = res.unwrap();
 
         assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
@@ -827,7 +827,7 @@ mod test {
             "cache02.example.com:11211" => "unused2" => "ERROR\r\n".as_bytes(),
         );
 
-        let res = client.flush_all(Some(Duration::from_secs(5))).await;
+        let res = client.flush_all(Duration::from_secs(5)).await;
         let response = res.unwrap();
 
         assert!(response.values.contains_key(&ServerID::from(("cache01.example.com", 11211))));
