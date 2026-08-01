@@ -10,6 +10,7 @@
 #![deny(unused_must_use)]
 
 mod client;
+mod codec;
 mod core;
 mod discovery;
 pub mod dns;
@@ -23,6 +24,7 @@ pub use crate::client::{
     MemcachedClient, MemcachedClientConfig, RendezvousSelector, Selector, ServersResponse, TcpClientFactory,
     TlsTcpClientFactory, ValuesResponse,
 };
+pub use crate::codec::url_decode;
 pub use crate::core::{
     ErrorKind, Key, Memcached, Meta, MtopError, ProtocolError, ProtocolErrorKind, Slab, SlabItem, SlabItems, Slabs,
     Stats, Value,

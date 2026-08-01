@@ -910,9 +910,8 @@ impl Memcached {
                 continue;
             }
 
-            let decoded = urlencoding::decode(val)
-                .map_err(|e| MtopError::runtime_cause(format!("unexpected metadump encoding '{}'", line), e))?;
-            raw.insert(key.to_owned(), decoded.into_owned());
+            let decoded = crate::codec::url_decode(val)?;
+            raw.insert(key.to_owned(), decoded);
         }
 
         Meta::try_from(&*raw)
