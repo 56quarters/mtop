@@ -46,6 +46,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_target_memcached_codec"
+path = "fuzz_targets/memcached_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_target_memcached_stats"
 path = "fuzz_targets/memcached_stats.rs"
 test = false

@@ -571,7 +571,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
- "urlencoding",
  "webpki-roots",
 ]
 

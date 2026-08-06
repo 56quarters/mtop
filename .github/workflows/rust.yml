@@ -42,6 +42,7 @@ jobs:
         include:
         - fuzz_target: fuzz_target_dns_message
         - fuzz_target: fuzz_target_dns_name
+        - fuzz_target: fuzz_target_memcached_codec
         - fuzz_target: fuzz_target_memcached_get
         - fuzz_target: fuzz_target_memcached_metas
         - fuzz_target: fuzz_target_memcached_stats

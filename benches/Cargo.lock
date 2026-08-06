@@ -84,6 +84,7 @@ dependencies = [
  "criterion",
  "mtop-client",
  "tokio",
+ "urlencoding",
 ]
 
 [[package]]
@@ -476,7 +477,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
- "urlencoding",
  "webpki-roots",
 ]
 

@@ -21,6 +21,10 @@ cargo fuzz run fuzz_target_dns_name
 ```
 
 ```
+cargo fuzz run fuzz_target_memcached_codec
+```
+
+```
 cargo fuzz run fuzz_target_memcached_get
 ```
 
