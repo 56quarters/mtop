@@ -27,7 +27,7 @@ impl From<MetasResponse> for Vec<u8> {
 
         for line in value.lines {
             for pair in line.pairs {
-                write!(&mut out, "{}={} ", pair.0, urlencoding::encode(&pair.1)).unwrap();
+                write!(&mut out, "{}={} ", mtop_client::url_encode(&pair.0), mtop_client::url_encode(&pair.1)).unwrap();
             }
 
             out.extend_from_slice(b"\r\n");

@@ -42,11 +42,12 @@ jobs:
         include:
         - fuzz_target: fuzz_target_dns_message
         - fuzz_target: fuzz_target_dns_name
-        - fuzz_target: fuzz_target_memcached_codec
         - fuzz_target: fuzz_target_memcached_get
         - fuzz_target: fuzz_target_memcached_metas
         - fuzz_target: fuzz_target_memcached_stats
         - fuzz_target: fuzz_target_mtop_duration
+        - fuzz_target: fuzz_target_url_decode
+        - fuzz_target: fuzz_target_url_encode
     steps:
     - uses: actions/checkout@v4
     - name: Rustup
