@@ -1,9 +1,9 @@
 use crate::core::MtopError;
+use crate::dns::bytes::{read_be_u16, write_be_u16};
 use crate::dns::client::{TcpConnection, UdpConnection};
 use crate::dns::message::Message;
 use crate::pool::ClientFactory;
 use async_trait::async_trait;
-use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 use std::io::{Cursor, Error};
 use std::net::SocketAddr;
@@ -88,7 +88,8 @@ impl AsyncRead for TestTcpSocket {
         let size = msg.size();
 
         let mut bytes = Vec::new();
-        bytes.write_u16::<NetworkEndian>(u16::try_from(size).unwrap()).unwrap();
+
+        write_be_u16(&mut bytes, u16::try_from(size).unwrap()).unwrap();
         msg.write_network_bytes(&mut bytes).unwrap();
         assert_eq!(bytes.len(), size + 2);
 
@@ -100,7 +101,7 @@ impl AsyncRead for TestTcpSocket {
 impl AsyncWrite for TestTcpSocket {
     fn poll_write(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, Error>> {
         let mut cur = Cursor::new(buf);
-        let size = usize::from(cur.read_u16::<NetworkEndian>().unwrap());
+        let size = usize::from(read_be_u16(&mut cur).unwrap());
         let msg = Message::read_network_bytes(cur).unwrap();
         assert_eq!(size, msg.size());
 

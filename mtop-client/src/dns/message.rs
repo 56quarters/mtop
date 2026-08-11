@@ -1,10 +1,10 @@
 use crate::core::MtopError;
+use crate::dns::bytes::{read_be_u16, read_be_u32, write_be_u16, write_be_u32};
 use crate::dns::core::{RecordClass, RecordType};
 use crate::dns::name::Name;
 use crate::dns::rdata::RecordData;
-use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use std::fmt;
-use std::io::Seek;
+use std::io::{Read, Seek, Write};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
@@ -148,7 +148,7 @@ impl Message {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         let header = self.header();
         header.write_network_bytes(&mut buf)?;
@@ -174,7 +174,7 @@ impl Message {
 
     pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let header = Header::read_network_bytes(&mut buf)?;
 
@@ -222,26 +222,26 @@ struct Header {
 impl Header {
     fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
-        buf.write_u16::<NetworkEndian>(self.id.into())?;
-        buf.write_u16::<NetworkEndian>(self.flags.as_u16())?;
-        buf.write_u16::<NetworkEndian>(self.num_questions)?;
-        buf.write_u16::<NetworkEndian>(self.num_answers)?;
-        buf.write_u16::<NetworkEndian>(self.num_authority)?;
-        Ok(buf.write_u16::<NetworkEndian>(self.num_extra)?)
+        write_be_u16(&mut buf, self.id.into())?;
+        write_be_u16(&mut buf, self.flags.as_u16())?;
+        write_be_u16(&mut buf, self.num_questions)?;
+        write_be_u16(&mut buf, self.num_answers)?;
+        write_be_u16(&mut buf, self.num_authority)?;
+        write_be_u16(&mut buf, self.num_extra)
     }
 
     fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt,
+        T: Read,
     {
-        let id = MessageId::from(buf.read_u16::<NetworkEndian>()?);
-        let flags = Flags::try_from(buf.read_u16::<NetworkEndian>()?)?;
-        let num_questions = buf.read_u16::<NetworkEndian>()?;
-        let num_answers = buf.read_u16::<NetworkEndian>()?;
-        let num_authority = buf.read_u16::<NetworkEndian>()?;
-        let num_extra = buf.read_u16::<NetworkEndian>()?;
+        let id = MessageId::from(read_be_u16(&mut buf)?);
+        let flags = Flags::try_from(read_be_u16(&mut buf)?)?;
+        let num_questions = read_be_u16(&mut buf)?;
+        let num_answers = read_be_u16(&mut buf)?;
+        let num_authority = read_be_u16(&mut buf)?;
+        let num_extra = read_be_u16(&mut buf)?;
 
         Ok(Header {
             id,
@@ -506,20 +506,20 @@ impl Question {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         self.name.write_network_bytes(&mut buf)?;
-        buf.write_u16::<NetworkEndian>(self.qtype.into())?;
-        Ok(buf.write_u16::<NetworkEndian>(self.qclass.into())?)
+        write_be_u16(&mut buf, self.qtype.into())?;
+        write_be_u16(&mut buf, self.qclass.into())
     }
 
     pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let name = Name::read_network_bytes(&mut buf)?;
-        let qtype = RecordType::from(buf.read_u16::<NetworkEndian>()?);
-        let qclass = RecordClass::from(buf.read_u16::<NetworkEndian>()?);
+        let qtype = RecordType::from(read_be_u16(&mut buf)?);
+        let qclass = RecordClass::from(read_be_u16(&mut buf)?);
         Ok(Self { name, qtype, qclass })
     }
 }
@@ -575,7 +575,7 @@ impl Record {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         // It shouldn't be possible for rdata to overflow u16 so if we do, that's a bug.
         let size = self.rdata.size();
@@ -587,22 +587,22 @@ impl Record {
         );
 
         self.name.write_network_bytes(&mut buf)?;
-        buf.write_u16::<NetworkEndian>(self.rtype.into())?;
-        buf.write_u16::<NetworkEndian>(self.rclass.into())?;
-        buf.write_u32::<NetworkEndian>(self.ttl)?;
-        buf.write_u16::<NetworkEndian>(u16::try_from(size).unwrap())?;
+        write_be_u16(&mut buf, self.rtype.into())?;
+        write_be_u16(&mut buf, self.rclass.into())?;
+        write_be_u32(&mut buf, self.ttl)?;
+        write_be_u16(&mut buf, u16::try_from(size).unwrap())?;
         self.rdata.write_network_bytes(&mut buf)
     }
 
     pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let name = Name::read_network_bytes(&mut buf)?;
-        let rtype = RecordType::from(buf.read_u16::<NetworkEndian>()?);
-        let rclass = RecordClass::from(buf.read_u16::<NetworkEndian>()?);
-        let ttl = buf.read_u32::<NetworkEndian>()?;
-        let rdata_len = buf.read_u16::<NetworkEndian>()?;
+        let rtype = RecordType::from(read_be_u16(&mut buf)?);
+        let rclass = RecordClass::from(read_be_u16(&mut buf)?);
+        let ttl = read_be_u32(&mut buf)?;
+        let rdata_len = read_be_u16(&mut buf)?;
         let rdata = RecordData::read_network_bytes(rtype, rdata_len, &mut buf)?;
 
         Ok(Self {

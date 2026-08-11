@@ -12,7 +12,6 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
-byteorder = "1.5.0"
 pin-project-lite = "0.2.16"
 rand = "0.10.1"
 rustls-pki-types = {  version = "1.14.0", features = ["std"]}
