@@ -2,7 +2,7 @@
 
 use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::ping::{Bundle, DnsPinger};
-use mtop::{profile, sig};
+use mtop::sig;
 use mtop_client::dns::{DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use std::fmt::Write;
 use std::io::Cursor;
@@ -160,19 +160,12 @@ async fn main() -> ExitCode {
         mtop::tracing::console_subscriber(opts.log_level).expect("failed to setup console logging");
     tracing::subscriber::set_global_default(console_subscriber).expect("failed to initialize console logging");
 
-    let profiling = profile::Writer::default();
-    let code = match &opts.mode {
+    match &opts.mode {
         Action::Ping(cmd) => run_ping(cmd).await,
         Action::Query(cmd) => run_query(cmd).await,
         Action::Read(cmd) => run_read(cmd).await,
         Action::Write(cmd) => run_write(cmd).await,
-    };
-
-    if let Some(p) = opts.profile_output {
-        profiling.finish(p);
     }
-
-    code
 }
 
 async fn run_ping(cmd: &PingCommand) -> ExitCode {

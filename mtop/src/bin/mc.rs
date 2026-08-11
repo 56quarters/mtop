@@ -2,7 +2,6 @@ use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Bundle, Checker};
 use mtop::duration::DurationString;
-use mtop::profile;
 use mtop_client::{Discovery, MemcachedClient, Meta, MtopError, Timeout, TlsConfig, Value};
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::num::{NonZeroU64, NonZeroUsize};
@@ -46,11 +45,6 @@ struct McConfig {
     /// Maximum number of idle connections to maintain per host.
     #[arg(long, env = "MC_CONNECTIONS", default_value_t = NonZeroU64::new(4).unwrap())]
     connections: NonZeroU64,
-
-    /// Output pprof protobuf profile data to this file if profiling support was enabled
-    /// at build time.
-    #[arg(long, env = "MC_PROFILE_OUTPUT", value_hint = ValueHint::FilePath)]
-    profile_output: Option<PathBuf>,
 
     /// Enable TLS connections to the Memcached server.
     #[arg(long, env = "MC_TLS_ENABLED")]
@@ -347,8 +341,7 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let profiling = profile::Writer::default();
-    let code = match &opts.mode {
+    match &opts.mode {
         Action::Add(cmd) => run_add(&opts, cmd, &client).await,
         Action::Bench(cmd) => run_bench(&opts, cmd, client).await,
         Action::Check(cmd) => run_check(&opts, cmd, client, discovery).await,
@@ -361,13 +354,7 @@ async fn main() -> ExitCode {
         Action::Replace(cmd) => run_replace(&opts, cmd, &client).await,
         Action::Set(cmd) => run_set(&opts, cmd, &client).await,
         Action::Touch(cmd) => run_touch(&opts, cmd, &client).await,
-    };
-
-    if let Some(p) = opts.profile_output {
-        profiling.finish(p);
     }
-
-    code
 }
 
 async fn connect(client: &MemcachedClient, timeout: Duration) -> Result<(), MtopError> {

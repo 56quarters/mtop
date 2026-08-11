@@ -8,7 +8,6 @@ pub mod discovery;
 pub mod dns;
 pub mod duration;
 pub mod ping;
-pub mod profile;
 pub mod queue;
 pub mod sig;
 pub mod tracing;
