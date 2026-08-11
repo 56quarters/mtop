@@ -15,7 +15,6 @@ libfuzzer-sys = { version = "0.4.0", features = ["arbitrary-derive"] }
 mtop = { path = "../mtop" }
 mtop-client = { path = "../mtop-client" }
 tokio = { version = "1.14.0", features = ["full"] }
-urlencoding = "2.1.2"
 
 [[bin]]
 name = "fuzz_target_dns_name"
@@ -46,8 +45,15 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_target_memcached_codec"
-path = "fuzz_targets/memcached_codec.rs"
+name = "fuzz_target_url_decode"
+path = "fuzz_targets/url_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_url_encode"
+path = "fuzz_targets/url_encode.rs"
 test = false
 doc = false
 bench = false

@@ -24,7 +24,11 @@ pub use crate::client::{
     MemcachedClient, MemcachedClientConfig, RendezvousSelector, Selector, ServersResponse, TcpClientFactory,
     TlsTcpClientFactory, ValuesResponse,
 };
-pub use crate::codec::url_decode;
+
+// Exported so we can benchmark and fuzz them but they aren't needed for the API.
+#[doc(hidden)]
+pub use crate::codec::{url_decode, url_encode};
+
 pub use crate::core::{
     ErrorKind, Key, Memcached, Meta, MtopError, ProtocolError, ProtocolErrorKind, Slab, SlabItem, SlabItems, Slabs,
     Stats, Value,
