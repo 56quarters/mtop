@@ -1,7 +1,7 @@
 use crate::core::MtopError;
-use byteorder::{ReadBytesExt, WriteBytesExt};
+use crate::dns::bytes::{read_be_u8, write_be_u8};
 use std::fmt;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -56,7 +56,7 @@ impl Name {
 
     pub fn write_network_bytes<T>(&self, mut out: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         // We convert all incoming Names to fully qualified names. If we missed doing
         // that, it's a bug and we should panic here. Encoded names all end with the
@@ -82,16 +82,16 @@ impl Name {
                 Self::MAX_LABEL_LENGTH
             );
 
-            out.write_u8(u8::try_from(label.len()).unwrap())?;
+            write_be_u8(&mut out, u8::try_from(label.len()).unwrap())?;
             out.write_all(label)?;
         }
 
-        Ok(out.write_u8(0)?)
+        write_be_u8(&mut out, 0)
     }
 
     pub fn read_network_bytes<T>(mut inp: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let mut labels = Vec::with_capacity(Self::NUM_LABELS_HINT);
         Self::read_inner(&mut inp, &mut labels)?;
@@ -104,7 +104,7 @@ impl Name {
     /// of each label is written into a `Vec<u8>`.
     fn read_inner<T>(inp: &mut T, out: &mut Vec<Vec<u8>>) -> Result<(), MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let mut total_len = 0;
         let mut pointers = 0;
@@ -120,13 +120,13 @@ impl Name {
                 )));
             }
 
-            let len = inp.read_u8()?;
+            let len = read_be_u8(inp)?;
             // If the length isn't a length but actually a pointer to another name
             // or label within the message, seek to that position within the message
             // and read the name from there. After resolving all pointers and reading
             // labels, reset the stream back to immediately after the first pointer.
             if Self::is_compressed_label(len) {
-                let offset = Self::get_offset(len, inp.read_u8()?);
+                let offset = Self::get_offset(len, read_be_u8(inp)?);
                 if position.is_none() {
                     position = Some(inp.stream_position()?);
                 }
@@ -162,7 +162,7 @@ impl Name {
     /// `out` and return false, true if next label was the root.
     fn read_label_into<T>(inp: &mut T, total_len: usize, len: u8, out: &mut Vec<u8>) -> Result<bool, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         if len == 0 {
             return Ok(true);

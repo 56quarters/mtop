@@ -1,9 +1,9 @@
 use crate::core::MtopError;
+use crate::dns::bytes::{read_be_u8, read_be_u16, read_be_u32, write_be_u8, write_be_u16, write_be_u32};
 use crate::dns::core::RecordType;
 use crate::dns::name::Name;
-use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use std::fmt::{self, Display};
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -36,7 +36,7 @@ impl RecordData {
 
     pub fn write_network_bytes<T>(&self, buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         match self {
             Self::A(rd) => rd.write_network_bytes(buf),
@@ -53,7 +53,7 @@ impl RecordData {
 
     pub fn read_network_bytes<T>(rtype: RecordType, rdata_len: u16, buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         match rtype {
             RecordType::A => Ok(RecordData::A(RecordDataA::read_network_bytes(buf)?)),
@@ -105,14 +105,14 @@ impl RecordDataA {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         Ok(buf.write_all(&self.0.octets())?)
     }
 
     pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let mut bytes = [0_u8; 4];
         buf.read_exact(&mut bytes)?;
@@ -144,14 +144,14 @@ impl RecordDataNS {
 
     pub fn write_network_bytes<T>(&self, buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         self.0.write_network_bytes(buf)
     }
 
     pub fn read_network_bytes<T>(buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         Ok(Self::new(Name::read_network_bytes(buf)?))
     }
@@ -181,14 +181,14 @@ impl RecordDataCNAME {
 
     pub fn write_network_bytes<T>(&self, buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         self.0.write_network_bytes(buf)
     }
 
     pub fn read_network_bytes<T>(buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         Ok(Self::new(Name::read_network_bytes(buf)?))
     }
@@ -257,29 +257,29 @@ impl RecordDataSOA {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         self.mname.write_network_bytes(&mut buf)?;
         self.rname.write_network_bytes(&mut buf)?;
-        buf.write_u32::<NetworkEndian>(self.serial)?;
-        buf.write_u32::<NetworkEndian>(self.refresh)?;
-        buf.write_u32::<NetworkEndian>(self.retry)?;
-        buf.write_u32::<NetworkEndian>(self.expire)?;
-        buf.write_u32::<NetworkEndian>(self.minimum)?;
+        write_be_u32(&mut buf, self.serial)?;
+        write_be_u32(&mut buf, self.refresh)?;
+        write_be_u32(&mut buf, self.retry)?;
+        write_be_u32(&mut buf, self.expire)?;
+        write_be_u32(&mut buf, self.minimum)?;
         Ok(())
     }
 
     pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let mname = Name::read_network_bytes(&mut buf)?;
         let rname = Name::read_network_bytes(&mut buf)?;
-        let serial = buf.read_u32::<NetworkEndian>()?;
-        let refresh = buf.read_u32::<NetworkEndian>()?;
-        let retry = buf.read_u32::<NetworkEndian>()?;
-        let expire = buf.read_u32::<NetworkEndian>()?;
-        let minimum = buf.read_u32::<NetworkEndian>()?;
+        let serial = read_be_u32(&mut buf)?;
+        let refresh = read_be_u32(&mut buf)?;
+        let retry = read_be_u32(&mut buf)?;
+        let expire = read_be_u32(&mut buf)?;
+        let minimum = read_be_u32(&mut buf)?;
 
         Ok(Self::new(mname, rname, serial, refresh, retry, expire, minimum))
     }
@@ -350,7 +350,7 @@ impl RecordDataTXT {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         for txt in &self.0 {
             assert!(
@@ -360,7 +360,7 @@ impl RecordDataTXT {
                 Self::MAX_SEGMENT_LENGTH,
             );
 
-            buf.write_u8(u8::try_from(txt.len()).unwrap())?;
+            write_be_u8(&mut buf, u8::try_from(txt.len()).unwrap())?;
             buf.write_all(txt)?;
         }
 
@@ -369,14 +369,14 @@ impl RecordDataTXT {
 
     pub fn read_network_bytes<T>(rdata_len: u16, mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let rdata_len = usize::from(rdata_len);
         let mut all = Vec::new();
         let mut consumed = 0;
 
         while consumed < rdata_len {
-            let len = buf.read_u8()?;
+            let len = read_be_u8(&mut buf)?;
             if usize::from(len) + consumed > rdata_len {
                 return Err(MtopError::runtime(format!(
                     "text for RecordDataTXT exceeds rdata size; len: {}, consumed: {}, rdata: {}",
@@ -435,14 +435,14 @@ impl RecordDataAAAA {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         Ok(buf.write_all(&self.0.octets())?)
     }
 
     pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let mut bytes = [0_u8; 16];
         buf.read_exact(&mut bytes)?;
@@ -496,21 +496,21 @@ impl RecordDataSRV {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
-        buf.write_u16::<NetworkEndian>(self.priority)?;
-        buf.write_u16::<NetworkEndian>(self.weight)?;
-        buf.write_u16::<NetworkEndian>(self.port)?;
+        write_be_u16(&mut buf, self.priority)?;
+        write_be_u16(&mut buf, self.weight)?;
+        write_be_u16(&mut buf, self.port)?;
         self.target.write_network_bytes(buf)
     }
 
     pub fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
-        let priority = buf.read_u16::<NetworkEndian>()?;
-        let weight = buf.read_u16::<NetworkEndian>()?;
-        let port = buf.read_u16::<NetworkEndian>()?;
+        let priority = read_be_u16(&mut buf)?;
+        let weight = read_be_u16(&mut buf)?;
+        let port = read_be_u16(&mut buf)?;
         let target = Name::read_network_bytes(buf)?;
 
         Ok(Self::new(priority, weight, port, target))
@@ -558,7 +558,7 @@ impl RecordDataOptPair {
 
     fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         assert!(
             self.data.len() <= Self::MAX_DATA_LENGTH,
@@ -567,17 +567,17 @@ impl RecordDataOptPair {
             Self::MAX_DATA_LENGTH,
         );
 
-        buf.write_u16::<NetworkEndian>(self.code)?;
-        buf.write_u16::<NetworkEndian>(u16::try_from(self.data.len()).unwrap())?;
+        write_be_u16(&mut buf, self.code)?;
+        write_be_u16(&mut buf, u16::try_from(self.data.len()).unwrap())?;
         Ok(buf.write_all(&self.data)?)
     }
 
     fn read_network_bytes<T>(mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
-        let code = buf.read_u16::<NetworkEndian>()?;
-        let data_len = buf.read_u16::<NetworkEndian>()?;
+        let code = read_be_u16(&mut buf)?;
+        let data_len = read_be_u16(&mut buf)?;
         let mut data = Vec::with_capacity(usize::from(data_len));
         buf.take(u64::from(data_len)).read_to_end(&mut data)?;
         Ok(Self { code, data })
@@ -625,7 +625,7 @@ impl RecordDataOpt {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         for opt in &self.options {
             opt.write_network_bytes(&mut buf)?;
@@ -636,7 +636,7 @@ impl RecordDataOpt {
 
     pub fn read_network_bytes<T>(rdata_len: u16, mut buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let rdata_len = usize::from(rdata_len);
         let mut options = Vec::new();
@@ -686,7 +686,7 @@ impl RecordDataUnknown {
 
     pub fn write_network_bytes<T>(&self, mut buf: T) -> Result<(), MtopError>
     where
-        T: WriteBytesExt,
+        T: Write,
     {
         buf.write_all(&self.0)?;
         Ok(())
@@ -694,7 +694,7 @@ impl RecordDataUnknown {
 
     pub fn read_network_bytes<T>(rdata_len: u16, buf: T) -> Result<Self, MtopError>
     where
-        T: ReadBytesExt + Seek,
+        T: Read + Seek,
     {
         let mut bytes = Vec::with_capacity(usize::from(rdata_len));
         let n = buf.take(u64::from(rdata_len)).read_to_end(&mut bytes)?;

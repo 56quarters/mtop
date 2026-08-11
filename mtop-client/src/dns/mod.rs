@@ -1,3 +1,4 @@
+mod bytes;
 mod client;
 mod core;
 mod message;
