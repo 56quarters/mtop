@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.0 - 2026-08-12
+
+- Change all time-related CLI flags to use 'duration strings' instead of including
+  the unit in the name of the CLI flag. This means that any time-related CLI flag or
+  environment variable has been renamed. For example, `--timeout-secs 5` becomes
+  `--timeout 5s`. The units hours (`h`), minutes (`m`), seconds (`s`), milliseconds (`ms`),
+  microseconds (`us`), and nanoseconds (`ns`) are supported.
+- Change connections and sockets to DNS servers to not be pooled by default. This should
+  have no impact on the way DNS is used in `mtop`.
+- Assorted performance improvements in DNS and cache operations.
+
 ## v0.16.2 - 2026-01-08
 
 - Add support for connecting to Memcached servers over UNIX sockets. #233 #234 #236 #237

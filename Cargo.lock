@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "mtop"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -451,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "mtop-client"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "pin-project-lite",
