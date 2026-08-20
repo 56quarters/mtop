@@ -34,10 +34,6 @@ struct McConfig {
     #[arg(long, env = "MC_HOST", default_value = "localhost:11211", value_hint = ValueHint::Hostname)]
     host: String,
 
-    /// Timeout for Memcached network operations, in seconds.
-    #[arg(long, env = "MC_TIMEOUT_SECS", default_value_t = NonZeroU64::new(30).unwrap())]
-    timeout_secs: NonZeroU64,
-
     /// Timeout for Memcached network operations, in duration string format (value followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
     #[arg(long, env = "MC_TIMEOUT", default_value_t = DurationString::must("30s"))]
     timeout: DurationString,
@@ -382,7 +378,7 @@ async fn run_add(opts: &McConfig, cmd: &AddCommand, client: &MemcachedClient) ->
 
     if let Err(e) = client
         .add(&cmd.key, 0, cmd.ttl_secs, &buf)
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.add")
+        .timeout(opts.timeout.as_duration(), "client.add")
         .instrument(tracing::span!(Level::INFO, "client.add"))
         .await
     {
@@ -438,7 +434,7 @@ async fn run_check(opts: &McConfig, cmd: &CheckCommand, client: MemcachedClient,
 async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .decr(&cmd.key, cmd.delta)
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.decr")
+        .timeout(opts.timeout.as_duration(), "client.decr")
         .instrument(tracing::span!(Level::INFO, "client.decr"))
         .await
     {
@@ -452,7 +448,7 @@ async fn run_decr(opts: &McConfig, cmd: &DecrCommand, client: &MemcachedClient) 
 async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .delete(&cmd.key)
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.delete")
+        .timeout(opts.timeout.as_duration(), "client.delete")
         .instrument(tracing::span!(Level::INFO, "client.delete"))
         .await
     {
@@ -466,7 +462,7 @@ async fn run_delete(opts: &McConfig, cmd: &DeleteCommand, client: &MemcachedClie
 async fn run_flush_all(opts: &McConfig, cmd: &FlushAllCommand, client: &MemcachedClient) -> ExitCode {
     let response = match client
         .flush_all(cmd.wait.as_duration())
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.flush_all")
+        .timeout(opts.timeout.as_duration(), "client.flush_all")
         .instrument(tracing::span!(Level::INFO, "client.flush_all"))
         .await
     {
@@ -503,7 +499,7 @@ async fn run_flush_all(opts: &McConfig, cmd: &FlushAllCommand, client: &Memcache
 async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) -> ExitCode {
     let response = match client
         .get(slice::from_ref(&cmd.key))
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.get")
+        .timeout(opts.timeout.as_duration(), "client.get")
         .instrument(tracing::span!(Level::INFO, "client.get"))
         .await
     {
@@ -534,7 +530,7 @@ async fn run_get(opts: &McConfig, cmd: &GetCommand, client: &MemcachedClient) ->
 async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .incr(&cmd.key, cmd.delta)
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.incr")
+        .timeout(opts.timeout.as_duration(), "client.incr")
         .instrument(tracing::span!(Level::INFO, "client.incr"))
         .await
     {
@@ -548,7 +544,7 @@ async fn run_incr(opts: &McConfig, cmd: &IncrCommand, client: &MemcachedClient) 
 async fn run_keys(opts: &McConfig, cmd: &KeysCommand, client: &MemcachedClient) -> ExitCode {
     let response = match client
         .metas()
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.metas")
+        .timeout(opts.timeout.as_duration(), "client.metas")
         .instrument(tracing::span!(Level::INFO, "client.metas"))
         .await
     {
@@ -589,7 +585,7 @@ async fn run_replace(opts: &McConfig, cmd: &ReplaceCommand, client: &MemcachedCl
 
     if let Err(e) = client
         .replace(&cmd.key, 0, cmd.ttl_secs, &buf)
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.replace")
+        .timeout(opts.timeout.as_duration(), "client.replace")
         .instrument(tracing::span!(Level::INFO, "client.replace"))
         .await
     {
@@ -611,7 +607,7 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) ->
 
     if let Err(e) = client
         .set(&cmd.key, 0, cmd.ttl_secs, &buf)
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.set")
+        .timeout(opts.timeout.as_duration(), "client.set")
         .instrument(tracing::span!(Level::INFO, "client.set"))
         .await
     {
@@ -625,7 +621,7 @@ async fn run_set(opts: &McConfig, cmd: &SetCommand, client: &MemcachedClient) ->
 async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient) -> ExitCode {
     if let Err(e) = client
         .touch(&cmd.key, cmd.ttl_secs)
-        .timeout(Duration::from_secs(opts.timeout_secs.get()), "client.touch")
+        .timeout(opts.timeout.as_duration(), "client.touch")
         .instrument(tracing::span!(Level::INFO, "client.touch"))
         .await
     {

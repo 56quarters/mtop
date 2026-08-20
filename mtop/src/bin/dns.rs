@@ -1,13 +1,13 @@
 #![allow(clippy::uninlined_format_args)]
 
 use clap::{Args, Parser, Subcommand, ValueHint};
+use mtop::duration::DurationString;
 use mtop::ping::{Bundle, DnsPinger};
 use mtop::sig;
 use mtop_client::dns::{DnsClient, Flags, Message, MessageId, Name, Question, Record, RecordClass, RecordType};
 use std::fmt::Write;
 use std::io::Cursor;
 use std::net::SocketAddr;
-use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use tracing::{Instrument, Level};
 const DEFAULT_RECORD_TYPE: RecordType = RecordType::A;
 const DEFAULT_RECORD_CLASS: RecordClass = RecordClass::INET;
 const DEFAULT_RESOLV_CONF: &str = "/etc/resolv.conf";
-const MIN_PING_INTERVAL_SECS: f64 = 0.1;
+const MIN_PING_INTERVAL: Duration = Duration::from_millis(100);
 
 /// dns: Make DNS queries or read/write binary format DNS messages
 #[derive(Debug, Parser)]
@@ -51,9 +51,10 @@ enum Action {
 /// Repeatedly perform a DNS query and display the time taken as ping-like text output.
 #[derive(Debug, Args)]
 struct PingCommand {
-    /// How often to run queries, in seconds. Fractional seconds are allowed.
-    #[arg(long, value_parser = parse_interval, default_value_t = 1.0)]
-    interval_secs: f64,
+    /// How often to run queries, in duration string format (value followed by units: 'h',
+    /// 'm', 's', 'ms', 'us', 'ns').
+    #[arg(long, value_parser = parse_interval, default_value_t = DurationString::must("1s"))]
+    interval: DurationString,
 
     /// Stop after performing `count` queries. Default is to run until interrupted.
     #[arg(long, default_value_t = 0)]
@@ -69,10 +70,11 @@ struct PingCommand {
     #[arg(long, value_hint = ValueHint::Hostname)]
     nameserver: Option<SocketAddr>,
 
-    /// Timeout for DNS network operations in seconds, overriding whatever timeout is
-    /// configured in resolv.conf.
-    #[arg(long)]
-    nameserver_timeout_secs: Option<NonZeroU64>,
+    /// Timeout for DNS network operations, in duration string format (value followed by
+    /// units: 'h', 'm', 's', 'ms', 'us', 'ns'), overriding whatever timeout is configured
+    /// in resolv.conf.
+    #[arg(long, value_parser = parse_timeout)]
+    nameserver_timeout: Option<DurationString>,
 
     /// Type of record to request. Supported: A, AAAA, CNAME, NS, SOA, SRV, TXT.
     #[arg(long, default_value_t = DEFAULT_RECORD_TYPE)]
@@ -87,10 +89,18 @@ struct PingCommand {
     name: Name,
 }
 
-fn parse_interval(s: &str) -> Result<f64, String> {
-    match s.parse() {
-        Ok(v) if v >= MIN_PING_INTERVAL_SECS => Ok(v),
-        Ok(_) => Err(format!("must be at least {}", MIN_PING_INTERVAL_SECS)),
+fn parse_timeout(s: &str) -> Result<DurationString, String> {
+    match s.parse::<DurationString>() {
+        Ok(v) if v.as_duration() > Duration::ZERO => Ok(v),
+        Ok(_) => Err("must be greater than 0".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn parse_interval(s: &str) -> Result<DurationString, String> {
+    match s.parse::<DurationString>() {
+        Ok(v) if v.as_duration() >= MIN_PING_INTERVAL => Ok(v),
+        Ok(_) => Err(format!("must be at least {}ms", MIN_PING_INTERVAL.as_millis())),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -108,10 +118,11 @@ struct QueryCommand {
     #[arg(long, value_hint = ValueHint::Hostname)]
     nameserver: Option<SocketAddr>,
 
-    /// Timeout for DNS network operations in seconds, overriding whatever timeout is
-    /// configured in resolv.conf.
-    #[arg(long)]
-    nameserver_timeout_secs: Option<NonZeroU64>,
+    /// Timeout for DNS network operations, in duration string format (value followed by
+    /// units: 'h', 'm', 's', 'ms', 'us', 'ns'), overriding whatever timeout is configured
+    /// in resolv.conf.
+    #[arg(long, value_parser = parse_timeout)]
+    nameserver_timeout: Option<DurationString>,
 
     /// Output query results in raw binary format instead of human-readable
     /// text. NOTE, this may break your terminal and so should probably be piped
@@ -172,7 +183,7 @@ async fn run_ping(cmd: &PingCommand) -> ExitCode {
     let client = mtop::dns::new_client(
         &cmd.resolv_conf,
         cmd.nameserver,
-        cmd.nameserver_timeout_secs.map(|v| Duration::from_secs(v.get())),
+        cmd.nameserver_timeout.clone().map(|ds| ds.as_duration()),
     )
     .instrument(tracing::span!(Level::INFO, "dns::new_client"))
     .await;
@@ -180,7 +191,7 @@ async fn run_ping(cmd: &PingCommand) -> ExitCode {
     let stop = Arc::new(AtomicBool::new(false));
     sig::wait_for_interrupt(Handle::current(), stop.clone()).await;
 
-    let ping = DnsPinger::new(client, Duration::from_secs_f64(cmd.interval_secs), stop.clone());
+    let ping = DnsPinger::new(client, cmd.interval.as_duration(), stop.clone());
     let result = ping.run(cmd.name.clone(), cmd.rtype, cmd.rclass, cmd.count).await;
     print_ping_results(&result);
 
@@ -191,7 +202,7 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
     let client = mtop::dns::new_client(
         &cmd.resolv_conf,
         cmd.nameserver,
-        cmd.nameserver_timeout_secs.map(|v| Duration::from_secs(v.get())),
+        cmd.nameserver_timeout.clone().map(|ds| ds.as_duration()),
     )
     .instrument(tracing::span!(Level::INFO, "dns::new_client"))
     .await;
