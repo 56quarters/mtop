@@ -144,6 +144,9 @@ struct QueryCommand {
 }
 
 /// Read a binary format DNS message from standard input and display it as dig-like text output.
+///
+/// Only a maximum of 64KB are read since this is the max size of a DNS message. Additional bytes
+/// are ignored.
 #[derive(Debug, Args)]
 struct ReadCommand {}
 
@@ -228,7 +231,7 @@ async fn run_query(cmd: &QueryCommand) -> ExitCode {
 
 async fn run_read(_: &ReadCommand) -> ExitCode {
     let mut buf = Vec::new();
-    let mut input = tokio::io::stdin();
+    let mut input = tokio::io::stdin().take(u16::MAX.into());
 
     let n = match input.read_to_end(&mut buf).await {
         Ok(n) => n,

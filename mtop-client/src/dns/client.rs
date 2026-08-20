@@ -263,6 +263,7 @@ impl TcpConnection {
             u16::MAX
         );
 
+        // .write_u16() and .read_u16() are from Tokio and always big endian.
         self.write.write_u16(u16::try_from(self.buffer.len()).unwrap()).await?;
         self.write.write_all(&self.buffer).await?;
         self.write.flush().await?;
