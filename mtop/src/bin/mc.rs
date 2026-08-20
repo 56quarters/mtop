@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueHint};
 use mtop::bench::{Bencher, Percent, Summary};
 use mtop::check::{Bundle, Checker};
 use mtop::duration::DurationString;
-use mtop_client::{Discovery, MemcachedClient, Meta, MtopError, Timeout, TlsConfig, Value};
+use mtop_client::{Discovery, Memcached, MemcachedClient, Meta, MtopError, Timeout, TlsConfig, Value};
 use rustls_pki_types::{InvalidDnsNameError, ServerName};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
@@ -110,7 +110,7 @@ enum Action {
 /// Add a value to the cache only if it does not already exist.
 ///
 /// The value will be read from standard input. You can use shell pipes or redirects to set
-/// the contents of files as values.
+/// the contents of files as values. Up to 1GB will be read, any bytes after this are ignored.
 #[derive(Debug, Args)]
 struct AddCommand {
     /// Key of the item to add the value for.
@@ -259,7 +259,7 @@ struct KeysCommand {
 /// Replace a value in the cache only if it already exists.
 ///
 /// The value will be read from standard input. You can use shell pipes or redirects to set
-/// the contents of files as values.
+/// the contents of files as values. Up to 1GB will be read, any bytes after this are ignored.
 #[derive(Debug, Args)]
 struct ReplaceCommand {
     /// Key of the item to replace the value for.
@@ -276,7 +276,7 @@ struct ReplaceCommand {
 /// Set a value in the cache.
 ///
 /// The value will be read from standard input. You can use shell pipes or redirects to set
-/// the contents of files as values.
+/// the contents of files as values. Up to 1GB will be read, any bytes after this are ignored.
 #[derive(Debug, Args)]
 struct SetCommand {
     /// Key of the item to set the value for.
@@ -634,7 +634,7 @@ async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient
 
 async fn read_input() -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
-    let mut input = BufReader::new(tokio::io::stdin());
+    let mut input = BufReader::new(tokio::io::stdin()).take(Memcached::MAX_PAYLOAD_SIZE);
     input.read_to_end(&mut buf).await?;
     Ok(buf)
 }
