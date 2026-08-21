@@ -17,15 +17,22 @@ mtop-client = { path = "../mtop-client" }
 tokio = { version = "1.14.0", features = ["full"] }
 
 [[bin]]
-name = "fuzz_target_dns_name"
-path = "fuzz_targets/dns_name.rs"
+name = "fuzz_target_dns_message"
+path = "fuzz_targets/dns_message.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_target_dns_message"
-path = "fuzz_targets/dns_message.rs"
+name = "fuzz_target_dns_name_bytes"
+path = "fuzz_targets/dns_name_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_target_dns_name_str"
+path = "fuzz_targets/dns_name_str.rs"
 test = false
 doc = false
 bench = false
