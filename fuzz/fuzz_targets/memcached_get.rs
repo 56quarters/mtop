@@ -32,6 +32,7 @@ impl From<ValuesResponse> for Vec<u8> {
         for val in v.lines {
             write!(&mut out, "VALUE {} {} {} {}\r\n", val.key, val.flags, val.len, val.cas).unwrap();
             out.extend_from_slice(&val.data);
+            out.extend_from_slice(b"\r\n");
         }
 
         out.extend_from_slice(b"END\r\n");
