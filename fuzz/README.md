@@ -17,11 +17,11 @@ cargo fuzz run fuzz_target_dns_message
 ```
 
 ```
-cargo fuzz run fuzz_target_dns_name
+cargo fuzz run fuzz_target_dns_name_bytes
 ```
 
 ```
-cargo fuzz run fuzz_target_memcached_codec
+cargo fuzz run fuzz_target_dns_name_str
 ```
 
 ```
@@ -38,6 +38,14 @@ cargo fuzz run fuzz_target_memcached_stats
 
 ```
 cargo fuzz run fuzz_target_mtop_duration
+```
+
+```
+cargo fuzz run fuzz_target_url_decode
+```
+
+```
+cargo fuzz run fuzz_target_url_encode
 ```
 
 Each of these commands will run until it encounters a panic or crash.
