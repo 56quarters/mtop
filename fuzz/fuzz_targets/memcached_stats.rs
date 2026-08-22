@@ -1,13 +1,10 @@
 #![no_main]
 
 use libfuzzer_sys::{Corpus, arbitrary, fuzz_target};
-use mtop_client::{Memcached, Timeout};
+use mtop_client::Memcached;
 use std::io::{Cursor, Write};
 use std::sync::OnceLock;
-use std::time::Duration;
 use tokio::runtime::Runtime;
-
-const TIMEOUT: Duration = Duration::from_millis(10);
 
 static RT: OnceLock<Runtime> = OnceLock::new();
 
@@ -35,7 +32,7 @@ fuzz_target!(|data: StatsResponse| -> Corpus {
     let mut conn = Memcached::new(read, write);
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
-    match runtime.block_on(async { conn.stats().timeout(TIMEOUT, "fuzz").await }) {
+    match runtime.block_on(async { conn.stats().await }) {
         Ok(_v) => Corpus::Keep,
         Err(_e) => Corpus::Reject,
     }
