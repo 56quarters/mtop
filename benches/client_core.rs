@@ -9,7 +9,7 @@ static RT: OnceLock<Runtime> = OnceLock::new();
 fn memcached_stats(c: &mut Criterion) {
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
-    c.bench_function("Memcached::stats", |b| {
+    c.bench_function("Memcached::stats()", |b| {
         b.iter_batched(
             || Memcached::new(Cursor::new(STATS), Vec::new()),
             |mut conn| {
@@ -21,7 +21,7 @@ fn memcached_stats(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("Memcached::metas", |b| {
+    c.bench_function("Memcached::metas()", |b| {
         b.iter_batched(
             || Memcached::new(Cursor::new(METAS), Vec::new()),
             |mut conn| {
@@ -37,7 +37,7 @@ fn memcached_stats(c: &mut Criterion) {
 fn memcached_read_write(c: &mut Criterion) {
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
-    c.bench_function("Memcached::get", |b| {
+    c.bench_function("Memcached::get()", |b| {
         b.iter_batched(
             || Memcached::new(Cursor::new(GETS), Vec::new()),
             |mut conn| {

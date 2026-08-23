@@ -19,7 +19,7 @@ fn memcached_url_decode(c: &mut Criterion) {
     });
 }
 
-fn memcached_url_enecode(c: &mut Criterion) {
+fn memcached_url_encode(c: &mut Criterion) {
     c.bench_function("mtop_client::url_encode(short)", |b| {
         b.iter(|| {
             let _ = mtop_client::url_encode(SHORT_PLAIN);
@@ -33,5 +33,5 @@ fn memcached_url_enecode(c: &mut Criterion) {
     });
 }
 
-criterion_group!(memcached_codec, memcached_url_decode, memcached_url_enecode);
+criterion_group!(memcached_codec, memcached_url_decode, memcached_url_encode);
 criterion_main!(memcached_codec);
