@@ -104,7 +104,7 @@ fn new_response_aaaa() -> Message {
 fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
-    c.bench_function("Discovery::resolve_by_proto:srv", |b| {
+    c.bench_function("Discovery::resolve_by_proto(srv)", |b| {
         b.iter_batched(
             || {
                 let mut client = MockDnsClient::default();
@@ -130,7 +130,7 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("Discovery::resolve_by_proto:a_aaaa", |b| {
+    c.bench_function("Discovery::resolve_by_proto(a_aaaa)", |b| {
         b.iter_batched(
             || {
                 let mut client = MockDnsClient::default();
@@ -162,7 +162,7 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("Discovery::resolve_by_proto:socket_addr", |b| {
+    c.bench_function("Discovery::resolve_by_proto(socket_addr)", |b| {
         b.iter_batched(
             || Discovery::new(MockDnsClient::default()),
             |discovery| {

@@ -19,18 +19,18 @@ path = "dns_name.rs"
 harness = false
 
 [[bench]]
-name = "memcached_core"
-path = "memcached_core.rs"
+name = "client_core"
+path = "client_core.rs"
 harness = false
 
 [[bench]]
-name = "memcached_discovery"
-path = "memcached_discovery.rs"
+name = "client_discovery"
+path = "client_discovery.rs"
 harness = false
 
 [[bench]]
-name = "memcached_codec"
-path = "memcached_codec.rs"
+name = "client_codec"
+path = "client_codec.rs"
 harness = false
 
 [profile.release]
