@@ -3,7 +3,7 @@ use mtop_client::dns::Name;
 use std::io::Cursor;
 use std::str::FromStr;
 
-fn dns_name_constructors(c: &mut Criterion) {
+fn bench_dns_name_constructors(c: &mut Criterion) {
     c.bench_function("Name::from_str()", |b| {
         b.iter(|| {
             let _ = Name::from_str("dev.www.example.com.").unwrap();
@@ -33,7 +33,7 @@ fn dns_name_constructors(c: &mut Criterion) {
     });
 }
 
-fn dns_name_methods(c: &mut Criterion) {
+fn bench_dns_name_methods(c: &mut Criterion) {
     c.bench_function("Name::to_string()", |b| {
         let name = Name::from_str("www.example.com.").unwrap();
         b.iter(|| {
@@ -42,5 +42,5 @@ fn dns_name_methods(c: &mut Criterion) {
     });
 }
 
-criterion_group!(dns_name_group, dns_name_constructors, dns_name_methods);
-criterion_main!(dns_name_group);
+criterion_group!(dns_name, bench_dns_name_constructors, bench_dns_name_methods);
+criterion_main!(dns_name);

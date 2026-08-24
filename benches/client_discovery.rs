@@ -82,7 +82,7 @@ fn new_response_a() -> Message {
             RecordClass::INET,
             300,
             RecordData::A(RecordDataA::new(Ipv4Addr::new(127, 0, 0, i))),
-        ))
+        ));
     }
 
     message
@@ -101,7 +101,7 @@ fn new_response_aaaa() -> Message {
     ))
 }
 
-fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
+fn bench_discovery_resolve_by_proto(c: &mut Criterion) {
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
     c.bench_function("Discovery::resolve_by_proto(srv)", |b| {
@@ -124,10 +124,10 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
                         .resolve_by_proto("dnssrv+_memcached._tcp.example.com:11211")
                         .await
                         .unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 
     c.bench_function("Discovery::resolve_by_proto(a_aaaa)", |b| {
@@ -156,10 +156,10 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
             |discovery| {
                 runtime.block_on(async {
                     let _ = discovery.resolve_by_proto("dns+cache.example.com:11211").await.unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 
     c.bench_function("Discovery::resolve_by_proto(socket_addr)", |b| {
@@ -168,12 +168,12 @@ fn memcached_discovery_resolve_by_proto(c: &mut Criterion) {
             |discovery| {
                 runtime.block_on(async {
                     let _ = discovery.resolve_by_proto("127.0.0.1:11211").await.unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
-criterion_group!(memcached_discovery, memcached_discovery_resolve_by_proto);
-criterion_main!(memcached_discovery);
+criterion_group!(client_discovery, bench_discovery_resolve_by_proto);
+criterion_main!(client_discovery);

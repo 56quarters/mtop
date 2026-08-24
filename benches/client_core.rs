@@ -6,7 +6,7 @@ use tokio::runtime::Runtime;
 
 static RT: OnceLock<Runtime> = OnceLock::new();
 
-fn memcached_stats(c: &mut Criterion) {
+fn bench_memcached_stats(c: &mut Criterion) {
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
     c.bench_function("Memcached::stats()", |b| {
@@ -15,10 +15,10 @@ fn memcached_stats(c: &mut Criterion) {
             |mut conn| {
                 runtime.block_on(async {
                     let _ = conn.stats().await.unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 
     c.bench_function("Memcached::metas()", |b| {
@@ -27,14 +27,14 @@ fn memcached_stats(c: &mut Criterion) {
             |mut conn| {
                 runtime.block_on(async {
                     let _ = conn.metas().await.unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
-fn memcached_read_write(c: &mut Criterion) {
+fn bench_memcached_read_write(c: &mut Criterion) {
     let runtime = RT.get_or_init(|| Runtime::new().unwrap());
 
     c.bench_function("Memcached::get()", |b| {
@@ -57,15 +57,15 @@ fn memcached_read_write(c: &mut Criterion) {
                         ])
                         .await
                         .unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
-criterion_group!(memcached_core, memcached_stats, memcached_read_write);
-criterion_main!(memcached_core);
+criterion_group!(client_core, bench_memcached_stats, bench_memcached_read_write);
+criterion_main!(client_core);
 
 const STATS: &str = concat!(
     "STAT pid 1525\r\n",
