@@ -5,7 +5,7 @@ const LONG_ENCODED: &str = "a%20long%20sentence%20that%20will%20require%20a%20fa
 const SHORT_PLAIN: &str = "a short sentence;";
 const LONG_PLAIN: &str = "a long sentence that will require a fair bit of time to decode, on a relative scale; & it should be a decent test of the # of nano-seconds it takes for something like this%";
 
-fn memcached_url_decode(c: &mut Criterion) {
+fn bench_url_decode(c: &mut Criterion) {
     c.bench_function("mtop_client::url_decode(short)", |b| {
         b.iter(|| {
             let _ = mtop_client::url_decode(SHORT_ENCODED).unwrap();
@@ -15,11 +15,11 @@ fn memcached_url_decode(c: &mut Criterion) {
     c.bench_function("mtop_client::url_decode(long)", |b| {
         b.iter(|| {
             let _ = mtop_client::url_decode(LONG_ENCODED).unwrap();
-        })
+        });
     });
 }
 
-fn memcached_url_encode(c: &mut Criterion) {
+fn bench_url_encode(c: &mut Criterion) {
     c.bench_function("mtop_client::url_encode(short)", |b| {
         b.iter(|| {
             let _ = mtop_client::url_encode(SHORT_PLAIN);
@@ -29,9 +29,9 @@ fn memcached_url_encode(c: &mut Criterion) {
     c.bench_function("mtop_client::url_encode(long)", |b| {
         b.iter(|| {
             let _ = mtop_client::url_encode(LONG_PLAIN);
-        })
+        });
     });
 }
 
-criterion_group!(memcached_codec, memcached_url_decode, memcached_url_encode);
-criterion_main!(memcached_codec);
+criterion_group!(client_codec, bench_url_decode, bench_url_encode);
+criterion_main!(client_codec);
