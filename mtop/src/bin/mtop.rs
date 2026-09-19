@@ -1,4 +1,5 @@
 use clap::{Parser, ValueHint};
+use mtop::duration::DurationString;
 use mtop::queue::{BlockingStatsQueue, Host, StatsQueue};
 use mtop::ui::{TAILWIND, Theme};
 use mtop_client::{Discovery, MemcachedClient, MtopError, Server, Timeout, TlsConfig};
@@ -33,9 +34,9 @@ struct MtopConfig {
     #[arg(long, env = "MTOP_RESOLV_CONF", default_value = "/etc/resolv.conf", value_hint = ValueHint::FilePath)]
     resolv_conf: PathBuf,
 
-    /// Timeout for connecting to Memcached and fetching statistics, in seconds.
-    #[arg(long, env = "MTOP_TIMEOUT_SECS", default_value_t = NonZeroU64::new(5).unwrap())]
-    timeout_secs: NonZeroU64,
+    /// Timeout for Memcached network operations, in duration string format (value followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
+    #[arg(long, env = "MTOP_TIMEOUT", default_value_t = DurationString::must("5s"))]
+    timeout: DurationString,
 
     /// Maximum number of idle connections to maintain per host.
     #[arg(long, env = "MTOP_CONNECTIONS", default_value_t = NonZeroU64::new(2).unwrap())]
@@ -131,10 +132,10 @@ async fn main() -> ExitCode {
         }
     };
 
-    let timeout = Duration::from_secs(opts.timeout_secs.get());
     let measurements = Arc::new(StatsQueue::new(NUM_MEASUREMENTS));
     let dns_client = mtop::dns::new_client(&opts.resolv_conf, None, None).await;
     let discovery = Discovery::new(dns_client);
+    let timeout = opts.timeout.as_duration();
 
     let servers = match mtop::discovery::resolve(&opts.hosts, &discovery, timeout).await {
         Ok(v) => v,
