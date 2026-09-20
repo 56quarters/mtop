@@ -12,7 +12,6 @@ pub enum RecordType {
     TXT,
     AAAA,
     SRV,
-    OPT,
     Unknown(u16),
 }
 
@@ -32,7 +31,6 @@ impl From<u16> for RecordType {
             16 => Self::TXT,
             28 => Self::AAAA,
             33 => Self::SRV,
-            41 => Self::OPT,
             v => Self::Unknown(v),
         }
     }
@@ -48,7 +46,6 @@ impl From<RecordType> for u16 {
             RecordType::TXT => 16,
             RecordType::AAAA => 28,
             RecordType::SRV => 33,
-            RecordType::OPT => 41,
             RecordType::Unknown(c) => c,
         }
     }
@@ -64,7 +61,6 @@ impl Display for RecordType {
             RecordType::TXT => write!(f, "TXT"),
             RecordType::AAAA => write!(f, "AAAA"),
             RecordType::SRV => write!(f, "SRV"),
-            RecordType::OPT => write!(f, "OPT"),
             RecordType::Unknown(t) => write!(f, "Unknown({})", t),
         }
     }
@@ -83,7 +79,6 @@ impl FromStr for RecordType {
             "TXT" => Ok(RecordType::TXT),
             "AAAA" => Ok(RecordType::AAAA),
             "SRV" => Ok(RecordType::SRV),
-            "OPT" => Ok(RecordType::OPT),
             v => Err(MtopError::configuration(format!("unknown record type '{}'", v))),
         }
     }
@@ -175,7 +170,6 @@ mod test {
         assert_eq!(RecordType::TXT, RecordType::from(16));
         assert_eq!(RecordType::AAAA, RecordType::from(28));
         assert_eq!(RecordType::SRV, RecordType::from(33));
-        assert_eq!(RecordType::OPT, RecordType::from(41));
         assert_eq!(RecordType::Unknown(999), RecordType::from(999));
     }
 
@@ -188,7 +182,6 @@ mod test {
         assert_eq!(16_u16, RecordType::TXT.into());
         assert_eq!(28_u16, RecordType::AAAA.into());
         assert_eq!(33_u16, RecordType::SRV.into());
-        assert_eq!(41_u16, RecordType::OPT.into());
         assert_eq!(999_u16, RecordType::Unknown(999).into());
     }
 
@@ -201,7 +194,6 @@ mod test {
         assert_eq!("TXT", RecordType::TXT.to_string());
         assert_eq!("AAAA", RecordType::AAAA.to_string());
         assert_eq!("SRV", RecordType::SRV.to_string());
-        assert_eq!("OPT", RecordType::OPT.to_string());
         assert_eq!("Unknown(999)", RecordType::Unknown(999).to_string());
     }
 
@@ -214,7 +206,6 @@ mod test {
         assert_eq!(RecordType::TXT, RecordType::from_str("TXT").unwrap());
         assert_eq!(RecordType::AAAA, RecordType::from_str("AAAA").unwrap());
         assert_eq!(RecordType::SRV, RecordType::from_str("SRV").unwrap());
-        assert_eq!(RecordType::OPT, RecordType::from_str("OPT").unwrap());
         assert!(RecordType::from_str("BOGUS").is_err());
     }
 
