@@ -273,6 +273,14 @@ impl Name {
 
         let mut labels = Vec::with_capacity(Self::NUM_LABELS_HINT);
         for label in bytes.split(|&b| b == b'.') {
+            // Names like 'example..com.' end up with an empty label because we split
+            // by '.' above.
+            if label.is_empty() {
+                return Err(MtopError::configuration(
+                    "Name may not contain empty an label".to_owned(),
+                ));
+            }
+
             if label.len() > Self::MAX_LABEL_LENGTH {
                 return Err(MtopError::configuration(format!(
                     "label too long; max {} bytes, got {}",
@@ -384,6 +392,12 @@ mod test {
     #[test]
     fn test_name_from_str_error_bad_label_char() {
         let res = Name::from_str("exa%mple.com.");
+        assert!(res.is_err(), "expected an error, got {:?}", res);
+    }
+
+    #[test]
+    fn test_name_from_str_error_empty_label() {
+        let res = Name::from_str("example..com.");
         assert!(res.is_err(), "expected an error, got {:?}", res);
     }
 
