@@ -2,6 +2,15 @@ use crate::core::MtopError;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+pub(crate) fn must_u16<T>(val: T, name: &str) -> u16
+where
+    T: TryInto<u16>,
+    T: Display + Copy,
+{
+    val.try_into()
+        .unwrap_or_else(|_e| panic!("{} of {} exceeds maximum of {}", name, val, u16::MAX))
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(u16)]
 pub enum RecordType {
