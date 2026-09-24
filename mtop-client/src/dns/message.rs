@@ -1,6 +1,6 @@
 use crate::core::MtopError;
 use crate::dns::bytes::{read_be_u16, read_be_u32, write_be_u16, write_be_u32};
-use crate::dns::core::{RecordClass, RecordType};
+use crate::dns::core::{RecordClass, RecordType, must_u16};
 use crate::dns::name::Name;
 use crate::dns::rdata::RecordData;
 use std::fmt;
@@ -130,19 +130,19 @@ impl Message {
         self
     }
 
-    fn header(&self) -> Header {
-        assert!(self.questions.len() < usize::from(u16::MAX));
-        assert!(self.answers.len() < usize::from(u16::MAX));
-        assert!(self.authority.len() < usize::from(u16::MAX));
-        assert!(self.extra.len() < usize::from(u16::MAX));
+    fn create_header(&self) -> Header {
+        let num_questions = must_u16(self.questions.len(), "questions length");
+        let num_answers = must_u16(self.answers.len(), "answers length");
+        let num_authority = must_u16(self.authority.len(), "authority length");
+        let num_extra = must_u16(self.extra.len(), "extra length");
 
         Header {
             id: self.id,
             flags: self.flags,
-            num_questions: u16::try_from(self.questions.len()).unwrap(),
-            num_answers: u16::try_from(self.answers.len()).unwrap(),
-            num_authority: u16::try_from(self.authority.len()).unwrap(),
-            num_extra: u16::try_from(self.extra.len()).unwrap(),
+            num_questions,
+            num_answers,
+            num_authority,
+            num_extra,
         }
     }
 
@@ -150,7 +150,7 @@ impl Message {
     where
         T: Write,
     {
-        let header = self.header();
+        let header = self.create_header();
         header.write_network_bytes(&mut buf)?;
 
         for q in &self.questions {

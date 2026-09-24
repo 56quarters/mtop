@@ -1,5 +1,5 @@
 use crate::core::MtopError;
-use crate::dns::core::{RecordClass, RecordType};
+use crate::dns::core::{RecordClass, RecordType, must_u16};
 use crate::dns::message::{Flags, Message, MessageId, Question, ResponseCode};
 use crate::dns::name::Name;
 use crate::net::tcp_connect;
@@ -256,15 +256,10 @@ impl TcpConnection {
         // with the size of the message.
         self.buffer.clear();
         msg.write_network_bytes(&mut self.buffer)?;
-        assert!(
-            self.buffer.len() < usize::from(u16::MAX),
-            "message size of {} exceeds maximum of {}",
-            self.buffer.len(),
-            u16::MAX
-        );
+        let buffer_len = must_u16(self.buffer.len(), "message size");
 
         // .write_u16() and .read_u16() are from Tokio and always big endian.
-        self.write.write_u16(u16::try_from(self.buffer.len()).unwrap()).await?;
+        self.write.write_u16(buffer_len).await?;
         self.write.write_all(&self.buffer).await?;
         self.write.flush().await?;
 
