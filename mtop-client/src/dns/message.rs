@@ -280,7 +280,7 @@ impl Flags {
     }
 
     pub fn is_query(&self) -> bool {
-        !(self.0 & Self::MASK_QR) > 0
+        self.0 & Self::MASK_QR == 0
     }
 
     #[must_use]
@@ -891,9 +891,11 @@ mod test {
     fn test_flags() {
         let f = Flags::default().set_query();
         assert!(f.is_query());
+        assert!(!f.is_response());
 
         let f = Flags::default().set_response();
         assert!(f.is_response());
+        assert!(!f.is_query());
 
         let f = Flags::default().set_op_code(Operation::Notify);
         assert_eq!(Operation::Notify, f.get_op_code());
