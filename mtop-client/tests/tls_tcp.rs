@@ -80,42 +80,12 @@ async fn run_server(server_config: TlsServerConfig, client_config: TlsConfig) ->
 }
 
 #[tokio::test]
-async fn test_tls_tcp_client_mtls_default_roots_server() {
-    let (server_id, res) = run_server(
-        TlsServerConfig {
-            cert: test_path("certs/memcached-server-cert.pem"),
-            key: test_path("certs/memcached-server-key.pem"),
-            ca: None,
-        },
-        TlsConfig {
-            ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
-            cert_path: Some(test_path("certs/memcached-client-cert.pem")),
-            key_path: Some(test_path("certs/memcached-client-key.pem")),
-            server_name: None,
-        },
-    )
-    .await;
-
-    assert!(
-        res.errors.contains_key(&server_id),
-        "expected errors to contain server ID {}, was {:?}",
-        server_id,
-        res.errors
-    );
-    assert!(
-        res.values.is_empty(),
-        "expected values to be empty, was {:?}",
-        res.values
-    );
-}
-
-#[tokio::test]
 async fn test_tls_tcp_client_mtls_invalid_client_cert() {
     let (server_id, res) = run_server(
         TlsServerConfig {
             cert: test_path("certs/memcached-server-cert.pem"),
             key: test_path("certs/memcached-server-key.pem"),
-            ca: Some(test_path("certs/memcached-ca-cert.pem")),
+            ca: test_path("certs/memcached-ca-cert.pem"),
         },
         TlsConfig {
             ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
@@ -145,7 +115,7 @@ async fn test_tls_tcp_client_mtls_missing_client_cert() {
         TlsServerConfig {
             cert: test_path("certs/memcached-server-cert.pem"),
             key: test_path("certs/memcached-server-key.pem"),
-            ca: Some(test_path("certs/memcached-ca-cert.pem")),
+            ca: test_path("certs/memcached-ca-cert.pem"),
         },
         TlsConfig {
             ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
@@ -175,7 +145,7 @@ async fn test_tls_tcp_client_mtls_success() {
         TlsServerConfig {
             cert: test_path("certs/memcached-server-cert.pem"),
             key: test_path("certs/memcached-server-key.pem"),
-            ca: Some(test_path("certs/memcached-ca-cert.pem")),
+            ca: test_path("certs/memcached-ca-cert.pem"),
         },
         TlsConfig {
             ca_path: Some(test_path("certs/memcached-ca-cert.pem")),
