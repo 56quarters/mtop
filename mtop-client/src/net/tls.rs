@@ -1,9 +1,11 @@
 use crate::core::MtopError;
 use rustls_pki_types::pem::PemObject;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, TrustAnchor};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls_platform_verifier::BuilderVerifierExt;
 use std::path::PathBuf;
 use tokio::fs;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::client::WantsClientCert;
+use tokio_rustls::rustls::{ClientConfig, ConfigBuilder, RootCertStore};
 
 /// Configuration for establishing a TLS connection to server with optional mTLS.
 #[derive(Debug, Clone, Default)]
@@ -38,22 +40,23 @@ pub(crate) async fn tls_client_config(config: TlsConfig) -> Result<ClientConfig,
         None
     };
 
-    let root = if let Some(p) = &config.ca_path {
-        custom_root_store(load_cert(p).await?)?
+    let builder = if let Some(p) = &config.ca_path {
+        tracing::debug!(message = "using custom TLS CA for server certificate verification", cert = ?p);
+        builder_for_custom_root_store(p).await?
     } else {
-        default_root_store()
+        tracing::debug!(message = "using platform TLS CA for server certificate verification");
+        builder_for_platform_roots()?
     };
 
-    let builder = ClientConfig::builder().with_root_certificates(root);
     let client_config = match (client_cert, client_key, config.cert_path, config.key_path) {
         (Some(cert), Some(key), Some(cert_path), Some(key_path)) => {
-            tracing::debug!(message = "using key and cert for client authentication", key = ?key_path, cert = ?cert_path);
+            tracing::debug!(message = "using TLS key and cert for client authentication", key = ?key_path, cert = ?cert_path);
             builder
                 .with_client_auth_cert(cert, key)
                 .map_err(|e| MtopError::configuration_cause("unable to use client cert or key", e))?
         }
         _ => {
-            tracing::debug!(message = "not using any client authentication");
+            tracing::debug!(message = "not using any TLS client authentication");
             builder.with_no_client_auth()
         }
     };
@@ -85,19 +88,22 @@ async fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, MtopError> {
         .map_err(|e| MtopError::configuration_cause(format!("unable to parse key {}", path.display()), e))
 }
 
-fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> Result<RootCertStore, MtopError> {
+async fn builder_for_custom_root_store(
+    path: &PathBuf,
+) -> Result<ConfigBuilder<ClientConfig, WantsClientCert>, MtopError> {
+    let ca_certs = load_cert(path).await?;
     let mut store = RootCertStore::empty();
-    for cert in ca {
+    for cert in ca_certs {
         store
             .add(cert)
-            .map_err(|e| MtopError::configuration_cause("unable to parse CA cert", e))?;
+            .map_err(|e| MtopError::configuration_cause("unable to parse TLS CA cert", e))?;
     }
 
-    Ok(store)
+    Ok(ClientConfig::builder().with_root_certificates(store))
 }
 
-fn default_root_store() -> RootCertStore {
-    let mut store = RootCertStore::empty();
-    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(TrustAnchor::to_owned));
-    store
+fn builder_for_platform_roots() -> Result<ConfigBuilder<ClientConfig, WantsClientCert>, MtopError> {
+    ClientConfig::builder()
+        .with_platform_verifier()
+        .map_err(|e| MtopError::configuration_cause("unable to load platform TLS CA certs", e))
 }

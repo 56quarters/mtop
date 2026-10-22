@@ -58,20 +58,16 @@ where
 pub struct TlsServerConfig {
     pub cert: PathBuf,
     pub key: PathBuf,
-    pub ca: Option<PathBuf>,
+    pub ca: PathBuf,
 }
 
 pub async fn tls_server_config(config: TlsServerConfig, handle: Handle) -> Arc<ServerConfig> {
     fn server_config(tls: TlsServerConfig) -> Arc<ServerConfig> {
         let cert = load_cert(&tls.cert);
         let key = load_key(&tls.key);
-        let root = Arc::new(if let Some(p) = &tls.ca {
-            custom_root_store(load_cert(p))
-        } else {
-            default_root_store()
-        });
+        let root = custom_root_store(load_cert(&tls.ca));
+        let client_verifier = WebPkiClientVerifier::builder(Arc::new(root.clone())).build().unwrap();
 
-        let client_verifier = WebPkiClientVerifier::builder(root.clone()).build().unwrap();
         Arc::new(
             ServerConfig::builder()
                 .with_client_cert_verifier(client_verifier.clone())
@@ -97,11 +93,5 @@ fn custom_root_store(ca: Vec<CertificateDer<'static>>) -> RootCertStore {
         store.add(cert).unwrap()
     }
 
-    store
-}
-
-fn default_root_store() -> RootCertStore {
-    let mut store = RootCertStore::empty();
-    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(|c| c.to_owned()));
     store
 }
