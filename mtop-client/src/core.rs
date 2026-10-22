@@ -1076,13 +1076,8 @@ impl Key {
             return false;
         }
 
-        for c in val.chars() {
-            if !c.is_ascii() || c.is_ascii_whitespace() || c.is_ascii_control() {
-                return false;
-            }
-        }
-
-        true
+        val.chars()
+            .all(|c| c.is_ascii() && !c.is_ascii_whitespace() && !c.is_ascii_control())
     }
 }
 
