@@ -372,10 +372,12 @@ impl RecordDataTXT {
 
         while consumed < rdata_len {
             let len = read_be_u8(&mut buf)?;
-            if usize::from(len) + consumed > rdata_len {
+            if 1 /* length of current segment */ + usize::from(len) + consumed > rdata_len {
                 return Err(MtopError::runtime(format!(
                     "text for RecordDataTXT exceeds rdata size; len: {}, consumed: {}, rdata: {}",
-                    len, consumed, rdata_len
+                    1 + usize::from(len),
+                    consumed,
+                    rdata_len
                 )));
             }
 
@@ -779,6 +781,15 @@ mod test {
         let txt = RecordDataTXT::new(data).unwrap();
 
         assert_eq!(65280, txt.size());
+    }
+
+    #[test]
+    fn test_record_data_txt_read_network_bytes_exceeds_rdata_len() {
+        let data: Vec<u8> = vec![5, b'h', b'e', b'l', b'l', b'o'];
+        let mut cur = Cursor::new(data);
+        let res = RecordDataTXT::read_network_bytes(5, &mut cur);
+
+        assert!(res.is_err());
     }
 
     #[test]
