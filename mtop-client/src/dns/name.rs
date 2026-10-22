@@ -41,19 +41,6 @@ impl Name {
         self
     }
 
-    #[must_use]
-    pub fn append(mut self, other: Name) -> Self {
-        if self.is_fqdn {
-            return self;
-        }
-
-        self.labels.extend(other.labels);
-        Self {
-            labels: self.labels,
-            is_fqdn: other.is_fqdn,
-        }
-    }
-
     pub fn write_network_bytes<T>(&self, mut out: T) -> Result<(), MtopError>
     where
         T: Write,
@@ -466,56 +453,6 @@ mod test {
 
         let fqdn = name.to_fqdn();
         assert!(fqdn.is_fqdn());
-    }
-
-    #[test]
-    fn test_name_append_already_fqdn() {
-        let name1 = Name::from_str("example.com.").unwrap();
-        let name2 = Name::from_str("example.net.").unwrap();
-        let combined = name1.clone().append(name2);
-
-        assert_eq!(name1, combined);
-        assert!(combined.is_fqdn());
-    }
-
-    #[test]
-    fn test_name_append_with_non_fqdn() {
-        let name1 = Name::from_str("www").unwrap();
-        let name2 = Name::from_str("example").unwrap();
-        let combined = name1.clone().append(name2);
-
-        assert_eq!(Name::from_str("www.example").unwrap(), combined);
-        assert!(!combined.is_fqdn());
-    }
-
-    #[test]
-    fn test_name_append_with_fqdn() {
-        let name1 = Name::from_str("www").unwrap();
-        let name2 = Name::from_str("example.net.").unwrap();
-        let combined = name1.clone().append(name2);
-
-        assert_eq!(Name::from_str("www.example.net.").unwrap(), combined);
-        assert!(combined.is_fqdn());
-    }
-
-    #[test]
-    fn test_name_append_with_root() {
-        let name = Name::from_str("example.com").unwrap();
-        let combined = name.clone().append(Name::root());
-
-        assert_eq!(Name::from_str("example.com.").unwrap(), combined);
-        assert!(combined.is_fqdn());
-    }
-
-    #[test]
-    fn test_name_append_multiple() {
-        let name1 = Name::from_str("dev").unwrap();
-        let name2 = Name::from_str("www").unwrap();
-        let name3 = Name::from_str("example.com").unwrap();
-
-        let combined = name1.append(name2).append(name3).append(Name::root());
-        assert_eq!(Name::from_str("dev.www.example.com.").unwrap(), combined);
-        assert!(combined.is_fqdn());
     }
 
     #[test]
