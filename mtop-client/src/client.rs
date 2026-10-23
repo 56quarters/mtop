@@ -697,7 +697,7 @@ mod test {
     #[tokio::test]
     async fn test_memcached_client_get_invalid_keys() {
         let client = new_client!();
-        let res = client.get(vec!["invalid key"]).await;
+        let res = client.get(vec![""]).await;
         let err = res.unwrap_err();
 
         assert_eq!(ErrorKind::Runtime, err.kind());

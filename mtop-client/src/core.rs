@@ -1084,7 +1084,7 @@ impl Key {
     }
 
     fn is_legal_val(val: &str) -> bool {
-        if val.len() > Self::MAX_LENGTH {
+        if val.len() > Self::MAX_LENGTH || val.is_empty() {
             return false;
         }
 
@@ -1153,28 +1153,34 @@ mod test {
     fn test_key_parse_length() {
         let val = "abc".repeat(Key::MAX_LENGTH);
         let res = Key::parse(val);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
+    }
+
+    #[test]
+    fn test_key_parse_empty_string() {
+        let res = Key::parse("");
+        assert!(res.is_err(), "expected error, got {:?}", res);
     }
 
     #[test]
     fn test_key_parse_non_ascii() {
         let val = "🤦";
         let res = Key::parse(val);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
     }
 
     #[test]
     fn test_key_parse_whitespace() {
         let val = "some thing";
         let res = Key::parse(val);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
     }
 
     #[test]
     fn test_key_parse_control_char() {
         let val = "\x7F";
         let res = Key::parse(val);
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
     }
 
     #[test]
