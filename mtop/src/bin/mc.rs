@@ -35,7 +35,7 @@ struct McConfig {
     host: String,
 
     /// Timeout for Memcached network operations, in duration string format (value followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
-    #[arg(long, env = "MC_TIMEOUT", default_value_t = DurationString::must("30s"))]
+    #[arg(long, env = "MC_TIMEOUT", value_parser = DurationString::non_zero, default_value_t = DurationString::must("30s"))]
     timeout: DurationString,
 
     /// Maximum number of idle connections to maintain per host.
@@ -138,7 +138,7 @@ struct AddCommand {
 struct BenchCommand {
     /// How long to run the benchmark for, in duration string format (value followed by units:
     /// 'h', 'm', 's', 'ms', 'us', 'ns').
-    #[arg(long, env = "MC_BENCH_TIME", default_value_t = DurationString::must("60s"))]
+    #[arg(long, env = "MC_BENCH_TIME", value_parser = DurationString::non_zero, default_value_t = DurationString::must("60s"))]
     time: DurationString,
 
     /// How many writes to the cache as a percentage of reads from the cache, 0 to 1.
@@ -162,12 +162,12 @@ struct BenchCommand {
     /// there will be 10,000 gets and 500 sets per second. To increase the number of gets
     /// and sets performed by a worker, reduce this number. To decrease the number of gets
     /// and sets performed by a worker, increase this number.
-    #[arg(long, env = "MC_BENCH_DELAY", default_value_t = DurationString::must("100ms"))]
+    #[arg(long, env = "MC_BENCH_DELAY", value_parser = DurationString::non_zero, default_value_t = DurationString::must("100ms"))]
     delay: DurationString,
 
     /// TTL to use for test values stored in the cache, in duration string format (value
     /// followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
-    #[arg(long, env = "MC_BENCH_TTL", default_value_t = DurationString::must("5m"))]
+    #[arg(long, env = "MC_BENCH_TTL", value_parser = DurationString::non_zero, default_value_t = DurationString::must("5m"))]
     ttl: DurationString,
 }
 
@@ -181,12 +181,12 @@ struct BenchCommand {
 struct CheckCommand {
     /// How long to run the checks for, in duration string format (value followed by units:
     /// 'h', 'm', 's', 'ms', 'us', 'ns').
-    #[arg(long, env = "MC_CHECK_TIME", default_value_t = DurationString::must("60s"))]
+    #[arg(long, env = "MC_CHECK_TIME", value_parser = DurationString::non_zero, default_value_t = DurationString::must("60s"))]
     time: DurationString,
 
     /// How long to wait between each health check, in duration string format (value followed
     /// by units: 'h', 'm', 's', 'ms', 'us', 'ns').
-    #[arg(long, env = "MC_CHECK_DELAY", default_value_t = DurationString::must("100ms"))]
+    #[arg(long, env = "MC_CHECK_DELAY", value_parser = DurationString::non_zero, default_value_t = DurationString::must("100ms"))]
     delay: DurationString,
 }
 
