@@ -735,7 +735,11 @@ impl Memcached {
         self.buf_line.clear();
         self.buf_pairs.clear();
 
-        while self.read.read_line(&mut self.buf_line).await? != 0 {
+        loop {
+            if self.read.read_line(&mut self.buf_line).await? == 0 {
+                return Err(MtopError::runtime("unexpected EOF while reading results"));
+            }
+
             let line = self.buf_line.trim_end();
             if line == "END" {
                 break;
@@ -779,7 +783,11 @@ impl Memcached {
         let mut out = HashMap::with_capacity(keys.len());
         self.buf_line.clear();
 
-        while self.read.read_line(&mut self.buf_line).await? != 0 {
+        loop {
+            if self.read.read_line(&mut self.buf_line).await? == 0 {
+                return Err(MtopError::runtime("unexpected EOF while reading results"));
+            }
+
             let line = self.buf_line.trim_end();
             if line == "END" {
                 break;
@@ -866,7 +874,11 @@ impl Memcached {
         self.buf_pairs.clear();
         self.buf_line.clear();
 
-        while self.read.read_line(&mut self.buf_line).await? != 0 {
+        loop {
+            if self.read.read_line(&mut self.buf_line).await? == 0 {
+                return Err(MtopError::runtime("unexpected EOF while reading results"));
+            }
+
             let line = self.buf_line.trim_end();
             if line == "END" {
                 break;
@@ -1240,12 +1252,14 @@ mod test {
 
     #[tokio::test]
     async fn test_memcached_get_no_key() {
-        let (_rx, mut client) = client!();
+        let (_rx, mut client) = client!("ERROR\r\n");
         let vals: Vec<String> = vec![];
         let keys = Key::parse_all(vals).unwrap();
-        let res = client.get(&keys).await.unwrap();
+        let res = client.get(&keys).await;
 
-        assert!(res.is_empty());
+        assert!(res.is_err(), "expected error, got {:?}", res);
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Protocol, err.kind());
     }
 
     #[tokio::test]
@@ -1254,7 +1268,7 @@ mod test {
         let keys = Key::parse_all(vec!["foo", "baz"]).unwrap();
         let res = client.get(&keys).await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
     }
@@ -1303,7 +1317,7 @@ mod test {
         let key = Key::parse("test").unwrap();
         let res = client.incr(&key, 2).await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
 
@@ -1334,7 +1348,7 @@ mod test {
         let key = Key::parse("test").unwrap();
         let res = client.decr(&key, 1).await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
 
@@ -1364,7 +1378,7 @@ mod test {
         let (mut rx, mut client) = client!("220 localhost ESMTP Postfix\r\n");
         let res = client.ping().await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Runtime, err.kind());
 
@@ -1400,7 +1414,7 @@ mod test {
             let (mut rx, mut client) = client!("NOT_STORED\r\n");
             let res = client.$method(&Key::parse("test").unwrap(), 0, 300, "val".as_bytes()).await;
 
-            assert!(res.is_err());
+            assert!(res.is_err(), "expected error, got {:?}", res);
             let err = res.unwrap_err();
             assert_eq!(ErrorKind::Protocol, err.kind());
 
@@ -1474,7 +1488,7 @@ mod test {
         let key = Key::parse("test").unwrap();
         let res = client.touch(&key, 300).await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
 
@@ -1505,7 +1519,7 @@ mod test {
         let key = Key::parse("test").unwrap();
         let res = client.delete(&key).await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
 
@@ -1534,7 +1548,7 @@ mod test {
         let (mut rx, mut client) = client!("ERROR\r\n");
         let res = client.flush_all(Duration::from_secs(25)).await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
 
@@ -1559,7 +1573,7 @@ mod test {
         let (mut rx, mut client) = client!("ERROR\r\n");
         let res = client.flush_all(Duration::ZERO).await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
 
@@ -1577,7 +1591,7 @@ mod test {
         let (_rx, mut client) = client!("END\r\n");
         let res = client.stats().await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Runtime, err.kind());
     }
@@ -1587,7 +1601,7 @@ mod test {
         let (_rx, mut client) = client!("SERVER_ERROR backend failure\r\n");
         let res = client.stats().await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
     }
@@ -1714,7 +1728,7 @@ mod test {
         let (_rx, mut client) = client!("ERROR Too many open connections\r\n");
         let res = client.slabs().await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
     }
@@ -1804,7 +1818,7 @@ mod test {
 
     #[tokio::test]
     async fn test_memcached_items_empty() {
-        let (_rx, mut client) = client!();
+        let (_rx, mut client) = client!("END\r\n");
         let res = client.items().await.unwrap();
 
         assert!(res.is_empty());
@@ -1815,7 +1829,7 @@ mod test {
         let (_rx, mut client) = client!("ERROR Too many open connections\r\n");
         let res = client.items().await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
     }
@@ -1896,7 +1910,7 @@ mod test {
 
     #[tokio::test]
     async fn test_memcached_metas_empty() {
-        let (_rx, mut client) = client!();
+        let (_rx, mut client) = client!("END\r\n");
         let res = client.metas().await.unwrap();
 
         assert!(res.is_empty());
@@ -1907,7 +1921,7 @@ mod test {
         let (_rx, mut client) = client!("BUSY crawler is busy\r\n",);
         let res = client.metas().await;
 
-        assert!(res.is_err());
+        assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
     }
