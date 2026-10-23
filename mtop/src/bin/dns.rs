@@ -73,7 +73,7 @@ struct PingCommand {
     /// Timeout for DNS network operations, in duration string format (value followed by
     /// units: 'h', 'm', 's', 'ms', 'us', 'ns'), overriding whatever timeout is configured
     /// in resolv.conf.
-    #[arg(long, value_parser = parse_timeout)]
+    #[arg(long, value_parser = DurationString::non_zero)]
     nameserver_timeout: Option<DurationString>,
 
     /// Type of record to request. Supported: A, AAAA, CNAME, NS, SOA, SRV, TXT.
@@ -87,14 +87,6 @@ struct PingCommand {
     /// Domain name to lookup.
     #[arg(required = true)]
     name: Name,
-}
-
-fn parse_timeout(s: &str) -> Result<DurationString, String> {
-    match s.parse::<DurationString>() {
-        Ok(v) if v.as_duration() > Duration::ZERO => Ok(v),
-        Ok(_) => Err("must be greater than 0".to_string()),
-        Err(e) => Err(e.to_string()),
-    }
 }
 
 fn parse_interval(s: &str) -> Result<DurationString, String> {
@@ -121,7 +113,7 @@ struct QueryCommand {
     /// Timeout for DNS network operations, in duration string format (value followed by
     /// units: 'h', 'm', 's', 'ms', 'us', 'ns'), overriding whatever timeout is configured
     /// in resolv.conf.
-    #[arg(long, value_parser = parse_timeout)]
+    #[arg(long, value_parser = DurationString::non_zero)]
     nameserver_timeout: Option<DurationString>,
 
     /// Output query results in raw binary format instead of human-readable

@@ -35,7 +35,7 @@ struct MtopConfig {
     resolv_conf: PathBuf,
 
     /// Timeout for Memcached network operations, in duration string format (value followed by units: 'h', 'm', 's', 'ms', 'us', 'ns').
-    #[arg(long, env = "MTOP_TIMEOUT", default_value_t = DurationString::must("5s"))]
+    #[arg(long, env = "MTOP_TIMEOUT", value_parser = DurationString::non_zero, default_value_t = DurationString::must("5s"))]
     timeout: DurationString,
 
     /// Maximum number of idle connections to maintain per host.

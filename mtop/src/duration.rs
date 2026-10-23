@@ -10,6 +10,14 @@ pub struct DurationString {
 }
 
 impl DurationString {
+    pub fn non_zero(s: &str) -> Result<Self, MtopError> {
+        match s.parse::<Self>() {
+            Ok(v) if v.as_duration() > Duration::ZERO => Ok(v),
+            Ok(_) => Err(MtopError::configuration("must be greater than zero")),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn must(s: &str) -> Self {
         s.parse().unwrap()
     }
@@ -154,7 +162,33 @@ mod test {
     }
 
     #[test]
-    fn test_try_from_string_single_values() {
+    fn test_duration_string_non_zero_invalid() {
+        let res = DurationString::non_zero("0ms");
+        assert!(res.is_err(), "expected error for 0ms, got {:?}", res);
+    }
+
+    #[test]
+    fn test_duration_string_non_zero() {
+        assert_eq!(
+            Duration::from_millis(5),
+            DurationString::non_zero("5ms").unwrap().as_duration()
+        );
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_duration_string_must_invalid() {
+        DurationString::must("bogus");
+    }
+
+    #[test]
+    fn test_duration_string_must() {
+        assert_eq!(Duration::from_secs(30), DurationString::must("30s").as_duration());
+    }
+
+    #[test]
+    fn test_duration_string_try_from_string_single_values() {
+        assert_eq!(Duration::from_secs(0), parse_to_duration("0s").unwrap());
         assert_eq!(Duration::from_nanos(5_000), parse_to_duration("5000ns").unwrap());
         assert_eq!(Duration::from_micros(100), parse_to_duration("100us").unwrap());
         assert_eq!(Duration::from_millis(200), parse_to_duration("200ms").unwrap());
@@ -164,7 +198,7 @@ mod test {
     }
 
     #[test]
-    fn test_try_from_string_multiple_values() {
+    fn test_duration_string_try_from_string_multiple_values() {
         assert_eq!(Duration::from_nanos(1_005_000), parse_to_duration("1ms5000ns").unwrap());
         assert_eq!(Duration::from_micros(1_200), parse_to_duration("1ms200us").unwrap());
         assert_eq!(Duration::from_millis(1500), parse_to_duration("1s500ms").unwrap());
@@ -173,7 +207,7 @@ mod test {
     }
 
     #[test]
-    fn test_try_from_string_invalid_values() {
+    fn test_duration_string_try_from_string_invalid_values() {
         assert!(parse_to_duration("-12").is_err());
         assert!(parse_to_duration("-3h").is_err());
         assert!(parse_to_duration("asdf").is_err());
