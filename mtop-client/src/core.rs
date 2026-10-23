@@ -687,6 +687,7 @@ pub struct Memcached {
 
 impl Memcached {
     pub const MAX_PAYLOAD_SIZE: u64 = 1024 * 1024 * 1024;
+    pub const MAX_BUFFER_SIZE: usize = 16 * 1024;
 
     pub fn new<R, W>(read: R, write: W) -> Self
     where
@@ -944,7 +945,7 @@ impl Memcached {
                 // The default max size of an object in Memcached is 1MB and the max-max size is
                 // 1024MB. Place a 1024MB limit on the size that we'll accept here to avoid a denial
                 // of service from bad lengths.
-                if len >= Self::MAX_PAYLOAD_SIZE {
+                if len > Self::MAX_PAYLOAD_SIZE {
                     return Err(MtopError::runtime(format!(
                         "server response of length {} exceeds client max of {}",
                         len,
@@ -953,10 +954,25 @@ impl Memcached {
                 }
 
                 let data = {
+                    let len_usize = usize::try_from(len).unwrap();
+                    // Don't allocate the entire buffer for the payload up front if the expected
+                    // size of the payload is over ~16KB. Let the buffer grow as we read more data
+                    // off the wire. This avoids wasting memory from bad lengths.
+                    let data_capacity = Self::MAX_BUFFER_SIZE.min(len_usize + 2);
+                    let mut data = Vec::with_capacity(data_capacity);
                     // Two extra bytes to read the trailing \r\n but then truncate them.
-                    let mut data = Vec::with_capacity(usize::try_from(len).unwrap() + 2);
-                    reader.take(len + 2).read_to_end(&mut data).await?;
-                    data.truncate(usize::try_from(len).unwrap());
+                    let n = reader.take(len + 2).read_to_end(&mut data).await?;
+                    if n != len_usize + 2 {
+                        return Err(MtopError::runtime(format!(
+                            "server responded with {} bytes instead of expected {}",
+                            n,
+                            len + 2,
+                        )));
+                    }
+                    if !data.ends_with(b"\r\n") {
+                        return Err(MtopError::runtime("payload does not end with expected CRLF"));
+                    }
+                    data.truncate(len_usize);
                     data
                 };
 
@@ -1277,6 +1293,33 @@ mod test {
         assert!(res.is_err(), "expected error, got {:?}", res);
         let err = res.unwrap_err();
         assert_eq!(ErrorKind::Protocol, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_memcached_get_bad_value_length_no_crlf() {
+        // Incorrect length of 5 means that we read `bar\r\nEN` which does not
+        // end with \r\n, triggering an error.
+        let (_rx, mut client) = client!("VALUE foo 0 5 1\r\n", "bar\r\n", "END\r\n",);
+
+        let keys = Key::parse_all(vec!["foo"]).unwrap();
+        let res = client.get(&keys).await;
+
+        assert!(res.is_err(), "expected error, got {:?}", res);
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Runtime, err.kind());
+    }
+
+    #[tokio::test]
+    async fn test_memcached_get_bad_value_length_eof() {
+        // Incorrect length of 10 means that we try to read past the end of the response.
+        let (_rx, mut client) = client!("VALUE foo 0 10 1\r\n", "bar\r\n", "END\r\n",);
+
+        let keys = Key::parse_all(vec!["foo"]).unwrap();
+        let res = client.get(&keys).await;
+
+        assert!(res.is_err(), "expected error, got {:?}", res);
+        let err = res.unwrap_err();
+        assert_eq!(ErrorKind::Runtime, err.kind());
     }
 
     #[tokio::test]
