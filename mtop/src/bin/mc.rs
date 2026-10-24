@@ -634,7 +634,7 @@ async fn run_touch(opts: &McConfig, cmd: &TouchCommand, client: &MemcachedClient
 
 async fn read_input() -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
-    let mut input = BufReader::new(tokio::io::stdin()).take(Memcached::MAX_PAYLOAD_SIZE);
+    let mut input = BufReader::new(tokio::io::stdin()).take(u64::try_from(Memcached::MAX_PAYLOAD_SIZE).unwrap());
     input.read_to_end(&mut buf).await?;
     Ok(buf)
 }
