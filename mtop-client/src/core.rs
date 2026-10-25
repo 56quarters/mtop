@@ -403,7 +403,7 @@ impl Ord for Meta {
 pub struct Value {
     pub key: String,
     pub cas: u64,
-    pub flags: u16,
+    pub flags: u64,
     pub data: Vec<u8>,
 }
 
@@ -939,10 +939,10 @@ impl Memcached {
         match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("VALUE"), Some(k), Some(flags), Some(len), Some(cas)) => {
                 // Types (roughly) correspond to what Memcached uses for its `item` type:
-                // * uint16_t for flags
+                // * uint64_t for flags when built with LARGE_CLIENT_FLAGS
                 // * int for length
                 // * uint64_t for cas
-                let flags: u16 = parse_value(flags, line)?;
+                let flags: u64 = parse_value(flags, line)?;
                 let len: usize = parse_value(len, line)?;
                 let cas: u64 = parse_value(cas, line)?;
 
@@ -1337,9 +1337,9 @@ mod test {
     #[tokio::test]
     async fn test_memcached_get_hit() {
         let (_rx, mut client) = client!(
-            "VALUE foo 32 3 1\r\n",
+            "VALUE foo 18446744073709551615 3 1\r\n",
             "bar\r\n",
-            "VALUE baz 64 3 2\r\n",
+            "VALUE baz 18446744073709551615 3 2\r\n",
             "qux\r\n",
             "END\r\n",
         );
@@ -1349,13 +1349,13 @@ mod test {
         let val1 = res.get("foo").unwrap();
         assert_eq!("foo", val1.key);
         assert_eq!("bar".as_bytes(), val1.data);
-        assert_eq!(32, val1.flags);
+        assert_eq!(u64::MAX, val1.flags);
         assert_eq!(1, val1.cas);
 
         let val2 = res.get("baz").unwrap();
         assert_eq!("baz", val2.key);
         assert_eq!("qux".as_bytes(), val2.data);
-        assert_eq!(64, val2.flags);
+        assert_eq!(u64::MAX, val2.flags);
         assert_eq!(2, val2.cas);
     }
 
@@ -1452,19 +1452,26 @@ mod test {
     macro_rules! test_store_command_success {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("STORED\r\n");
-            let res = client.$method(&Key::parse("test").unwrap(), 0, 300, "val".as_bytes()).await;
+            let res = client
+                .$method(&Key::parse("test").unwrap(), u64::MAX, 300, "val".as_bytes())
+                .await;
 
             assert!(res.is_ok());
             let bytes = rx.recv().await.unwrap();
             let command = String::from_utf8(bytes).unwrap();
-            assert_eq!(concat!($verb, " test 0 300 3\r\nval\r\n"), command);
+            assert_eq!(
+                concat!($verb, " test 18446744073709551615 300 3\r\nval\r\n"),
+                command
+            );
         };
     }
 
     macro_rules! test_store_command_error {
         ($method:ident, $verb:expr) => {
             let (mut rx, mut client) = client!("NOT_STORED\r\n");
-            let res = client.$method(&Key::parse("test").unwrap(), 0, 300, "val".as_bytes()).await;
+            let res = client
+                .$method(&Key::parse("test").unwrap(), u64::MAX, 300, "val".as_bytes())
+                .await;
 
             assert!(res.is_err(), "expected error, got {:?}", res);
             let err = res.unwrap_err();
@@ -1472,7 +1479,10 @@ mod test {
 
             let bytes = rx.recv().await.unwrap();
             let command = String::from_utf8(bytes).unwrap();
-            assert_eq!(concat!($verb, " test 0 300 3\r\nval\r\n"), command);
+            assert_eq!(
+                concat!($verb, " test 18446744073709551615 300 3\r\nval\r\n"),
+                command
+            );
         };
     }
 
