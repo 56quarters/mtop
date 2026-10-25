@@ -403,7 +403,7 @@ impl Ord for Meta {
 pub struct Value {
     pub key: String,
     pub cas: u64,
-    pub flags: u64,
+    pub flags: u16,
     pub data: Vec<u8>,
 }
 
@@ -686,7 +686,7 @@ pub struct Memcached {
 }
 
 impl Memcached {
-    pub const MAX_PAYLOAD_SIZE: u64 = 1024 * 1024 * 1024;
+    pub const MAX_PAYLOAD_SIZE: usize = 1024 * 1024 * 1024;
     pub const MAX_BUFFER_SIZE: usize = 16 * 1024;
 
     pub fn new<R, W>(read: R, write: W) -> Self
@@ -938,8 +938,12 @@ impl Memcached {
 
         match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("VALUE"), Some(k), Some(flags), Some(len), Some(cas)) => {
-                let flags: u64 = parse_value(flags, line)?;
-                let len: u64 = parse_value(len, line)?;
+                // Types (roughly) correspond to what Memcached uses for its `item` type:
+                // * uint16_t for flags
+                // * int for length
+                // * uint64_t for cas
+                let flags: u16 = parse_value(flags, line)?;
+                let len: usize = parse_value(len, line)?;
                 let cas: u64 = parse_value(cas, line)?;
 
                 // The default max size of an object in Memcached is 1MB and the max-max size is
@@ -954,15 +958,14 @@ impl Memcached {
                 }
 
                 let data = {
-                    let len_usize = usize::try_from(len).unwrap();
                     // Don't allocate the entire buffer for the payload up front if the expected
                     // size of the payload is over ~16KB. Let the buffer grow as we read more data
                     // off the wire. This avoids wasting memory from bad lengths.
-                    let data_capacity = Self::MAX_BUFFER_SIZE.min(len_usize + 2);
+                    let data_capacity = Self::MAX_BUFFER_SIZE.min(len + 2);
                     let mut data = Vec::with_capacity(data_capacity);
                     // Two extra bytes to read the trailing \r\n but then truncate them.
-                    let n = reader.take(len + 2).read_to_end(&mut data).await?;
-                    if n != len_usize + 2 {
+                    let n = reader.take(u64::try_from(len).unwrap() + 2).read_to_end(&mut data).await?;
+                    if n != len + 2 {
                         return Err(MtopError::runtime(format!(
                             "server responded with {} bytes instead of expected {}",
                             n,
@@ -972,7 +975,7 @@ impl Memcached {
                     if !data.ends_with(b"\r\n") {
                         return Err(MtopError::runtime("payload does not end with expected CRLF"));
                     }
-                    data.truncate(len_usize);
+                    data.truncate(len);
                     data
                 };
 
