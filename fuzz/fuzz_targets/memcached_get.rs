@@ -17,7 +17,7 @@ struct ValuesResponse {
 struct ValueLine {
     key: String,
     flags: u64,
-    len: u64,
+    len: usize,
     cas: u64,
     data: Vec<u8>,
 }
