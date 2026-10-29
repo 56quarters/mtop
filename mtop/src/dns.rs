@@ -32,7 +32,7 @@ where
             cfg
         })
         .unwrap_or_else(|e| {
-            tracing::warn!(message = "unable to load resolv.conf", path = ?resolv, err = %e);
+            tracing::warn!(message = "unable to load resolv.conf, default configuration values will be used instead", path = ?resolv, err = %e);
             DnsClientConfig::default()
         });
 

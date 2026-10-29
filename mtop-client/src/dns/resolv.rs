@@ -1,6 +1,7 @@
 use crate::core::MtopError;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
+use std::range::RangeInclusive;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -23,7 +24,7 @@ pub struct ResolvConf {
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct ResolvConfOptions {
     pub timeout: Option<Duration>,
-    pub attempts: Option<u8>,
+    pub attempts: Option<u64>,
     pub rotate: Option<bool>,
 }
 
@@ -32,10 +33,16 @@ pub async fn config<R>(read: R) -> Result<ResolvConf, MtopError>
 where
     R: AsyncRead + Send + Sync + Unpin + 'static,
 {
-    let mut lines = BufReader::new(read).lines();
+    let mut reader = BufReader::new(read);
     let mut conf = ResolvConf::default();
+    let mut line = String::new();
 
-    while let Some(line) = lines.next_line().await? {
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).await? == 0 {
+            break;
+        }
+
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -54,16 +61,23 @@ where
                 }
             }
             Some(Token::Options) => {
-                for opt in parse_options(parts) {
+                for opt in parse_options(parts)? {
                     match opt {
                         OptionsToken::Timeout(t) => {
-                            conf.options.timeout = Some(Duration::from_secs(u64::from(t)));
+                            conf.options.timeout = Some(Duration::from_secs(t));
                         }
                         OptionsToken::Attempts(n) => {
                             conf.options.attempts = Some(n);
                         }
                         OptionsToken::Rotate => {
                             conf.options.rotate = Some(true);
+                        }
+                        OptionsToken::Unknown(name) => {
+                            tracing::debug!(
+                                message = "skipping unknown resolv.conf option",
+                                option = name,
+                                line = line
+                            );
                         }
                     }
                 }
@@ -96,23 +110,16 @@ fn parse_nameserver<'a>(line: &str, mut parts: impl Iterator<Item = &'a str>) ->
     }
 }
 
-/// Parse one or more options from an `option` line in a resolv.conf file, ignoring any
-/// malformed or unsupported options.
-fn parse_options<'a>(parts: impl Iterator<Item = &'a str>) -> Vec<OptionsToken> {
+/// Parse one or more options from an `option` line in a resolv.conf file, ignoring
+/// unsupported options but aborting on supported but malformed options.
+fn parse_options<'a>(parts: impl Iterator<Item = &'a str>) -> Result<Vec<OptionsToken>, MtopError> {
     let mut out = Vec::new();
 
     for part in parts {
-        let opt = match part.parse() {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::debug!(message = "skipping unknown resolv.conf option", option = part, err = %e);
-                continue;
-            }
-        };
-
-        out.push(opt);
+        out.push(part.parse()?);
     }
-    out
+
+    Ok(out)
 }
 
 /// Top-level configuration setting in a resolv.conf file.
@@ -137,23 +144,33 @@ impl Token {
 /// Keyword or key-value pair associated with an option token.
 ///
 /// Note that only a subset of all possible options are supported.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 enum OptionsToken {
-    Timeout(u8),
-    Attempts(u8),
+    Timeout(u64),
+    Attempts(u64),
     Rotate,
+    Unknown(String),
 }
 
 impl OptionsToken {
-    const MAX_TIMEOUT: u8 = 30;
-    const MAX_ATTEMPTS: u8 = 5;
+    const TIMEOUT_RANGE: RangeInclusive<u64> = RangeInclusive { start: 1, last: 30 };
+    const ATTEMPTS_RANGE: RangeInclusive<u64> = RangeInclusive { start: 1, last: 5 };
 
-    fn parse(line: &str, val: &str, max: u8) -> Result<u8, MtopError> {
-        let n: u8 = val
+    fn parse_range(key: &str, val: &str, rng: RangeInclusive<u64>) -> Result<u64, MtopError> {
+        let n: u64 = val
             .parse()
-            .map_err(|e| MtopError::configuration_cause(format!("unable to parse {} value '{}'", line, val), e))?;
+            .map_err(|e| MtopError::configuration_cause(format!("unable to parse {} value '{}'", key, val), e))?;
 
-        Ok(n.min(max))
+        if n > rng.last {
+            Ok(rng.last)
+        } else if n < rng.start {
+            Err(MtopError::configuration(format!(
+                "out of bounds {} value '{}': minimum is {}",
+                key, val, rng.start
+            )))
+        } else {
+            Ok(n)
+        }
     }
 }
 
@@ -165,9 +182,9 @@ impl FromStr for OptionsToken {
             Ok(Self::Rotate)
         } else {
             match s.split_once(':') {
-                Some(("timeout", v)) => Ok(Self::Timeout(Self::parse(s, v, Self::MAX_TIMEOUT)?)),
-                Some(("attempts", v)) => Ok(Self::Attempts(Self::parse(s, v, Self::MAX_ATTEMPTS)?)),
-                _ => Err(MtopError::configuration(format!("unknown option {}", s))),
+                Some((k @ "timeout", v)) => Ok(Self::Timeout(Self::parse_range(k, v, Self::TIMEOUT_RANGE)?)),
+                Some((k @ "attempts", v)) => Ok(Self::Attempts(Self::parse_range(k, v, Self::ATTEMPTS_RANGE)?)),
+                _ => Ok(Self::Unknown(s.to_owned())),
             }
         }
     }
@@ -210,9 +227,16 @@ mod test {
 
     #[test]
     fn test_configuration_option_error() {
-        assert!(OptionsToken::from_str("ndots:bad").is_err());
         assert!(OptionsToken::from_str("timeout:bad").is_err());
         assert!(OptionsToken::from_str("attempts:-5").is_err());
+    }
+
+    #[test]
+    fn test_configuration_option_unknown() {
+        assert_eq!(
+            OptionsToken::Unknown("ndots:3".to_owned()),
+            OptionsToken::from_str("ndots:3").unwrap()
+        );
     }
 
     #[tokio::test]
@@ -291,6 +315,41 @@ mod test {
         let expected = ResolvConf {
             nameservers: vec!["127.0.0.53:53".parse().unwrap()],
             options: ResolvConfOptions::default(),
+        };
+
+        let res = config(reader).await.unwrap();
+        assert_eq!(expected, res);
+    }
+
+    #[tokio::test]
+    async fn test_config_nameservers_out_of_range_low() {
+        #[rustfmt::skip]
+        let reader = Cursor::new(concat!(
+            "# this is a comment\n",
+            "nameserver 127.0.0.53\n",
+            "options ndots:3 attempts:0 edns0\n",
+        ));
+
+        let res = config(reader).await;
+        assert!(res.is_err(), "expected error, got {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn test_config_nameservers_out_of_range_high() {
+        #[rustfmt::skip]
+        let reader = Cursor::new(concat!(
+            "# this is a comment\n",
+            "nameserver 127.0.0.53\n",
+            "options ndots:3 attempts:1000 timeout:60 edns0\n",
+        ));
+
+        let expected = ResolvConf {
+            nameservers: vec!["127.0.0.53:53".parse().unwrap()],
+            options: ResolvConfOptions {
+                timeout: Some(Duration::from_secs(30)),
+                attempts: Some(5),
+                rotate: None,
+            },
         };
 
         let res = config(reader).await.unwrap();
