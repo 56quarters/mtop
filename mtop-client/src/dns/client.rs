@@ -33,7 +33,7 @@ pub struct DnsClientConfig {
     /// Number of attempts to make performing a resolution for a single name. Note that
     /// any response from a DNS server counts as "success". Only timeout or network errors
     /// will trigger retries.
-    pub attempts: u8,
+    pub attempts: u64,
 
     /// If true, `nameservers` will be round-robin load balanced for each resolution. If false
     /// the nameservers are tried in-order for each resolution.
