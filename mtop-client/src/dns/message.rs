@@ -403,7 +403,6 @@ pub enum ResponseCode {
     NxRrSet = 8,
     NotAuth = 9,
     NotZone = 10,
-    BadVersion = 16,
 }
 
 impl fmt::Display for ResponseCode {
@@ -428,7 +427,6 @@ impl TryFrom<u16> for ResponseCode {
             8 => Ok(ResponseCode::NxRrSet),
             9 => Ok(ResponseCode::NotAuth),
             10 => Ok(ResponseCode::NotZone),
-            16 => Ok(ResponseCode::BadVersion),
             _ => Err(MtopError::runtime(format!(
                 "invalid or unsupported response code {}",
                 value
