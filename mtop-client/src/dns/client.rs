@@ -277,9 +277,10 @@ impl TcpConnection {
             Ok(res)
         } else {
             Err(MtopError::runtime(format!(
-                "unexpected DNS MessageId; expected {}, got {}",
+                "unexpected TCP response; expected {}, got {}, {:?}",
                 msg.id(),
-                res.id()
+                res.id(),
+                res.flags(),
             )))
         }
     }
@@ -341,6 +342,13 @@ impl UdpConnection {
             let res = Message::read_network_bytes(cur)?;
             if res.id() == msg.id() {
                 return Ok(res);
+            } else {
+                tracing::debug!(
+                    message = "discarding unexpected UDP response",
+                    expected_id = %msg.id(),
+                    actual_id = %res.id(),
+                    flags = ?res.flags(),
+                )
             }
         }
     }
