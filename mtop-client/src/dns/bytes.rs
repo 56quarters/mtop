@@ -16,7 +16,7 @@ where
 {
     let mut buf = [0; 2];
     reader.read_exact(&mut buf)?;
-    Ok(u16::from_be_bytes(buf[..2].try_into().unwrap()))
+    Ok(u16::from_be_bytes(buf))
 }
 
 pub(crate) fn read_be_u32<R>(reader: &mut R) -> Result<u32, MtopError>
@@ -25,7 +25,7 @@ where
 {
     let mut buf = [0; 4];
     reader.read_exact(&mut buf)?;
-    Ok(u32::from_be_bytes(buf[..4].try_into().unwrap()))
+    Ok(u32::from_be_bytes(buf))
 }
 
 pub(crate) fn write_be_u8<W>(writer: &mut W, b: u8) -> Result<(), MtopError>

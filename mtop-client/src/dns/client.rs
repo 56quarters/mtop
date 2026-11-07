@@ -340,16 +340,17 @@ impl UdpConnection {
             let n = self.read.read(&mut self.buffer).await?;
             let cur = Cursor::new(&self.buffer[0..n]);
             let res = Message::read_network_bytes(cur)?;
+
             if res.id() == msg.id() {
                 return Ok(res);
-            } else {
-                tracing::debug!(
-                    message = "discarding unexpected UDP response",
-                    expected_id = %msg.id(),
-                    actual_id = %res.id(),
-                    flags = ?res.flags(),
-                )
             }
+
+            tracing::debug!(
+                message = "discarding unexpected UDP response",
+                expected_id = %msg.id(),
+                actual_id = %res.id(),
+                flags = ?res.flags(),
+            );
         }
     }
 }
