@@ -733,31 +733,36 @@ impl Memcached {
         self.send(Command::CrawlerMetadump).await?;
 
         let mut out = Vec::new();
-        self.buf_line.clear();
-        self.buf_pairs.clear();
+        let mut ok = false;
 
         loop {
+            self.buf_line.clear();
             if self.read.read_line(&mut self.buf_line).await? == 0 {
                 return Err(MtopError::runtime("unexpected EOF while reading results"));
             }
 
             let line = self.buf_line.trim_end();
+            // Memcached versions >= 1.6.43 emit an "OK" before the results so check
+            // for that here before attempting to parse keys or checking for an error.
+            if !ok && line == "OK" {
+                ok = true;
+                continue;
+            }
+
             if line == "END" {
                 break;
             }
 
-            // Check for an error first because the `metadump` command doesn't
-            // have any sort of prefix for each result line like `STAT` or `VALUE`
+            // Check for an error before parsing a result because the `metadump` command
+            // doesn't have any sort of prefix for each result line like `STAT` or `VALUE`
             // so it's hard to know if it's valid without looking for an error.
-            if let Some(err) = Self::parse_error(line) {
+            if !ok && let Some(err) = Self::parse_error(line) {
                 return Err(MtopError::from(err));
             }
 
+            self.buf_pairs.clear();
             let item = Self::parse_crawler_meta(line, Meta::KEYS, &mut self.buf_pairs)?;
             out.push(item);
-
-            self.buf_line.clear();
-            self.buf_pairs.clear();
         }
 
         Ok(out)
@@ -1991,20 +1996,46 @@ mod test {
     #[tokio::test]
     async fn test_memcached_metas_success() {
         let (_rx, mut client) = client!(
-            "key=memcached%2Fmurmur3_hash.c exp=1687216956 la=1687216656 cas=259502 fetch=yes cls=17 size=2912\r\n",
-            "key=memcached%2Fmd5.h exp=1687216956 la=1687216656 cas=259731 fetch=yes cls=17 size=3593\r\n",
+            "key=key%2Fsomething-1 exp=1687216956 la=1687216656 cas=259502 fetch=yes cls=17 size=2912\r\n",
+            "key=key%2Fsomething-2 exp=1687216956 la=1687216656 cas=259731 fetch=yes cls=17 size=3593\r\n",
             "END\r\n",
         );
         let res = client.metas().await.unwrap();
 
         let expected = vec![
             Meta {
-                key: "memcached/murmur3_hash.c".to_string(),
+                key: "key/something-1".to_string(),
                 expires: 1_687_216_956,
                 size: 2912,
             },
             Meta {
-                key: "memcached/md5.h".to_string(),
+                key: "key/something-2".to_string(),
+                expires: 1_687_216_956,
+                size: 3593,
+            },
+        ];
+
+        assert_eq!(expected, res);
+    }
+
+    #[tokio::test]
+    async fn test_memcached_metas_success_with_ok() {
+        let (_rx, mut client) = client!(
+            "OK\r\n",
+            "key=key%2Fsomething-1 exp=1687216956 la=1687216656 cas=259502 fetch=yes cls=17 size=2912\r\n",
+            "key=key%2Fsomething-2 exp=1687216956 la=1687216656 cas=259731 fetch=yes cls=17 size=3593\r\n",
+            "END\r\n",
+        );
+        let res = client.metas().await.unwrap();
+
+        let expected = vec![
+            Meta {
+                key: "key/something-1".to_string(),
+                expires: 1_687_216_956,
+                size: 2912,
+            },
+            Meta {
+                key: "key/something-2".to_string(),
                 expires: 1_687_216_956,
                 size: 3593,
             },
