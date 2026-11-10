@@ -16,7 +16,14 @@ struct MetasResponse {
 
 #[derive(Clone, Debug, arbitrary::Arbitrary)]
 struct MetaLine {
-    pairs: Vec<(String, String)>,
+    key: String,
+    exp: u64,
+    la: u64,
+    cas: u64,
+    fetch: bool,
+    cls: usize,
+    size: usize,
+    flags: u64,
 }
 
 impl From<MetasResponse> for Vec<u8> {
@@ -27,17 +34,19 @@ impl From<MetasResponse> for Vec<u8> {
         }
 
         for line in value.lines {
-            for pair in line.pairs {
-                write!(
-                    &mut out,
-                    "{}={} ",
-                    mtop_client::url_encode(&pair.0),
-                    mtop_client::url_encode(&pair.1)
-                )
-                .unwrap();
-            }
-
-            out.extend_from_slice(b"\r\n");
+            write!(
+                &mut out,
+                "key={} exp={} la={} cas={} fetch={} cls={} size={} flags={}\r\n",
+                mtop_client::url_encode(&line.key),
+                line.exp,
+                line.la,
+                line.cas,
+                if line.fetch { "yes" } else { "no" },
+                line.cls,
+                line.size,
+                line.flags,
+            )
+            .unwrap();
         }
 
         out.extend_from_slice(b"END\r\n");
