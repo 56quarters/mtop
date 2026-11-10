@@ -10,6 +10,7 @@ static RT: OnceLock<Runtime> = OnceLock::new();
 
 #[derive(Clone, Debug, arbitrary::Arbitrary)]
 struct MetasResponse {
+    ok: bool,
     lines: Vec<MetaLine>,
 }
 
@@ -21,6 +22,9 @@ struct MetaLine {
 impl From<MetasResponse> for Vec<u8> {
     fn from(value: MetasResponse) -> Self {
         let mut out = Vec::new();
+        if value.ok {
+            out.extend_from_slice(b"OK\r\n");
+        }
 
         for line in value.lines {
             for pair in line.pairs {
